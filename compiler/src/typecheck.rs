@@ -59,14 +59,7 @@ pub struct Typechecker<'a> {
 }
 
 impl<'a> Typechecker<'a> {
-    pub fn new(
-        tree: &'a Tree,
-        // source: &'a String,
-        // tokens: &'a Vec<Token>,
-        // nodes: &'a Vec<Node>,
-        // indices: &'a Vec<u32>,
-        definitions: &'a HashMap<u32, Lookup>,
-    ) -> Self {
+    pub fn new(tree: &'a Tree, definitions: &'a HashMap<u32, Lookup>) -> Self {
         let types = vec![
             Type::Void,
             Type::Boolean,
@@ -106,14 +99,11 @@ impl<'a> Typechecker<'a> {
         let node = self.tree.node(index);
         match node.tag {
             Tag::FunctionDecl => {
-                let fn_type = self.infer_node(node.lhs); // prototype
-                self.set_node_type(index, fn_type);
-                self.infer_node(node.rhs);
+                // prototype
+                self.infer_node(node.lhs);
             }
             Tag::Struct => {
                 self.infer_node(index);
-                // self.types.push(Type::Struct { fields: Vec::new() });
-                // self.node_types[index as usize] = self.types.len() - 1;
             }
             _ => {}
         };
@@ -156,7 +146,7 @@ impl<'a> Typechecker<'a> {
             | Tag::BitwiseAnd
             | Tag::BitwiseOr
             | Tag::BitwiseXor => self.infer_binary_node(node.lhs, node.rhs),
-            Tag::Block | Tag::Expressions | Tag::IfElse | Tag::Parameters => {
+            Tag::Block | Tag::Expressions | Tag::IfElse | Tag::Module | Tag::Parameters => {
                 self.infer_range(&node)
             }
             Tag::Call => {
