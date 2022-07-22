@@ -794,18 +794,16 @@ impl<'a> Generator<'a> {
         dbg!(builder.block_params(entry_block).len());
 
         // Define parameters as local variables.
-        // for i in builder.block_params(entry_block) {
-        // }
-
+        let mut scalar_count = 0;
         for i in parameters.lhs..parameters.rhs {
-            let offset = (i - parameters.lhs) as usize;
             let ni = self.input.node_index(i);
             let var = self.state.create_struct_var(self.input, ni);
             dbg!(&var);
-            for (j, &variable) in var.variables().iter().enumerate() {
+            for &variable in &var.variables() {
                 builder.declare_var(variable, int);
-                let val = builder.block_params(entry_block)[j];
+                let val = builder.block_params(entry_block)[scalar_count];
                 builder.def_var(variable, val);
+                scalar_count += 1;
             }
         }
 
