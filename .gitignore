@@ -1,6 +1,8 @@
-target/
 .vscode/
 Cargo.lock
+target/
+
+/notes.md
 /*.exe
 /*.lib
 /*.obj
