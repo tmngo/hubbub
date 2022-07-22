@@ -1,0 +1,15 @@
+[package]
+name = "hubbub"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+cc = "1.0"
+cranelift = "0.84.0"
+cranelift-jit = "0.84.0"
+cranelift-module = "0.84.0"
+cranelift-object = "0.84.0"
+target-lexicon = "0.12.4"
+# inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "master", features = ["llvm13-0"] }
