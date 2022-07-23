@@ -319,7 +319,9 @@ impl Parser {
 
     /**************************************************************************/
     // Declarations
-    fn parse_modules(&mut self) -> Range<u32> {
+
+    /// program = module*
+    fn parse_modules(&mut self) -> Range<NodeId> {
         let stack_top = self.stack.len();
         while self.index < self.tree.tokens.len() - 1 {
             let module = self.parse_module();
@@ -335,21 +337,16 @@ impl Parser {
         range
     }
 
-    /// program = root-decl*
-    fn parse_module(&mut self) -> u32 {
+    /// module = root-decl*
+    fn parse_module(&mut self) -> NodeId {
         self.match_token(TokenTag::Newline);
         let range = self.parse_until(TokenTag::Eof, Self::parse_root_declaration);
         self.expect_token(TokenTag::Eof);
-        // let root = &mut self.tree.nodes[0];
-        // root.lhs = range.start;
-        // root.rhs = range.end;
-        println!("RANGE: {}--{}", range.start, range.end);
-        // range
         self.add_node(Tag::Module, 0, range.start, range.end)
     }
 
     /// root-decl = fn-decl | var-decl | struct-decl | module-decl
-    fn parse_root_declaration(&mut self) -> u32 {
+    fn parse_root_declaration(&mut self) -> NodeId {
         self.match_token(TokenTag::Newline);
         self.assert_token(TokenTag::Identifier);
         // self.assert_tokens(&[TokenTag::Colon, TokenTag::ColonColon], 1);
@@ -379,7 +376,7 @@ impl Parser {
     }
 
     /// module-import = identifier '::' 'module' string-literal
-    fn parse_module_import(&mut self) -> u32 {
+    fn parse_module_import(&mut self) -> NodeId {
         let alias_token = self.expect_token(TokenTag::Identifier);
         self.expect_token(TokenTag::ColonColon);
         let module_token = self.expect_token(TokenTag::Module);
@@ -388,7 +385,9 @@ impl Parser {
         let rhs = self.add_leaf(Tag::StringLiteral, name_token);
 
         let current_source = self.tree.token_source(name_token);
-        let module_name = self.tree.tokens[name_token as usize]
+        let module_name = self
+            .tree
+            .token(name_token)
             .to_str(current_source)
             .trim_matches('"')
             .to_string();
@@ -424,7 +423,7 @@ impl Parser {
     }
 
     /// function-decl = ideentifier '::' '(' ')'
-    fn parse_decl_function(&mut self) -> u32 {
+    fn parse_decl_function(&mut self) -> NodeId {
         self.expect_token(TokenTag::Identifier); // identifier
         let token_index = self.expect_token(TokenTag::ColonColon); // '::'
         let prototype = self.parse_prototype();
@@ -434,7 +433,7 @@ impl Parser {
     }
 
     /// prototype =
-    fn parse_prototype(&mut self) -> u32 {
+    fn parse_prototype(&mut self) -> NodeId {
         let parameters = self.parse_parameters();
         let returns = if self.match_token(TokenTag::Arrow) {
             self.parse_type_list()
@@ -445,7 +444,7 @@ impl Parser {
     }
 
     /// parameters =
-    fn parse_parameters(&mut self) -> u32 {
+    fn parse_parameters(&mut self) -> NodeId {
         let token = self.expect_token(TokenTag::ParenL);
         let range = self.parse_until(TokenTag::ParenR, Self::parse_parameter);
         self.expect_token(TokenTag::ParenR);
@@ -453,7 +452,7 @@ impl Parser {
     }
 
     // parameter
-    fn parse_parameter(&mut self) -> u32 {
+    fn parse_parameter(&mut self) -> NodeId {
         let identifier = self.expect_token(TokenTag::Identifier);
         self.expect_token(TokenTag::Colon);
         let type_expr = self.parse_expr_base();
@@ -461,10 +460,10 @@ impl Parser {
         self.add_node(Tag::Field, identifier, type_expr, 0)
     }
 
-    ///
-    fn parse_type_list(&mut self) -> u32 {
+    /// type-list = expr-base | '(' (expr-base ',')* ')'
+    fn parse_type_list(&mut self) -> NodeId {
         if self.match_token(TokenTag::ParenL) {
-            let range = self.parse_until(TokenTag::ParenR, |s: &mut Self| -> u32 {
+            let range = self.parse_until(TokenTag::ParenR, |s: &mut Self| -> NodeId {
                 let type_expr = s.parse_expr_base();
                 s.match_token(TokenTag::Comma);
                 type_expr
@@ -479,13 +478,12 @@ impl Parser {
     // token: ':'
     // lhs: type_expr
     // rhs: init_expr
-    fn parse_decl_variable(&mut self) -> u32 {
+    fn parse_decl_variable(&mut self) -> NodeId {
         self.expect_token(TokenTag::Identifier);
         let token = self.shift_token(); // : or ::
-        println!("var-decl {:?}", self.tree.tokens[token as usize].tag);
         let mut type_expr = 0;
         let mut init_expr = 0;
-        match self.tree.tokens[token as usize].tag {
+        match self.tree.token(token).tag {
             TokenTag::Colon => {
                 type_expr = self.parse_expr_base();
                 if self.match_token(TokenTag::Equal) {
@@ -502,7 +500,7 @@ impl Parser {
     }
 
     /// struct-decl = identifier :: struct field* end
-    fn parse_decl_struct(&mut self) -> u32 {
+    fn parse_decl_struct(&mut self) -> NodeId {
         self.expect_token(TokenTag::Identifier);
         self.expect_token(TokenTag::ColonColon);
         let token = self.expect_token(TokenTag::Struct);
@@ -513,7 +511,7 @@ impl Parser {
     }
 
     // field = identifier ':' type ';'
-    fn parse_field(&mut self) -> u32 {
+    fn parse_field(&mut self) -> NodeId {
         let identifier = self.expect_token(TokenTag::Identifier);
         self.expect_token(TokenTag::Colon);
         let type_expr = self.parse_expr_base();
@@ -558,7 +556,6 @@ impl Parser {
 
     // stmt-assign =
     fn parse_stmt_assign(&mut self) -> NodeId {
-        println!("parse_stmt_assign");
         let lhs = self.parse_expr();
         if lhs == 0 {
             return 0;
@@ -633,12 +630,9 @@ impl Parser {
 
             // Parse body
             let stack_top = self.stack.len();
-            // println!("parsing statements");
-
             while self.token_isnt(TokenTag::Else) && self.token_isnt(TokenTag::End) {
                 let stmt = self.parse_stmt();
                 self.stack.push(stmt);
-                // println!("{:?}", self.stack.len() - stack_top);
             }
             let range = self.add_indices(stack_top);
             let block = self.add_node(Tag::Block, else_if_token, range.start, range.end);
@@ -658,7 +652,6 @@ impl Parser {
 
     /// stmt-while =
     fn parse_stmt_while(&mut self) -> NodeId {
-        println!("parse_stmt_while");
         let token = self.shift_token();
         let condition = self.parse_expr();
         self.match_token(TokenTag::Newline);
@@ -677,9 +670,8 @@ impl Parser {
 
     // Expressions
 
-    // expr =
+    /// expr = expr-precedence
     pub fn parse_expr(&mut self) -> NodeId {
-        println!("parse_expr");
         self.parse_expr_precedence(0)
     }
 
@@ -731,7 +723,6 @@ impl Parser {
             lhs = self.add_node(op.tag, op_token_index, lhs, rhs);
 
             if let Associativity::None = op.associativity {
-                println!("non-assoc");
                 invalid = op.precedence;
             }
         }
@@ -740,7 +731,6 @@ impl Parser {
 
     /// expr-prefix = prefix-op* expr-operand
     fn parse_expr_prefix(&mut self) -> NodeId {
-        // println!("prefix");
         let tag;
         match self.current_token_tag() {
             TokenTag::Bang => tag = Tag::Not,
@@ -756,13 +746,11 @@ impl Parser {
         }
         let op_token = self.shift_token();
         let expr = self.parse_expr_prefix();
-        // let expr = self.parse_expr_precedence(8);
         self.add_node(tag, op_token, expr, 0)
     }
 
     /// expr-operand = expr-base ( '(' expressions ')' )?
     fn parse_expr_postfix(&mut self) -> NodeId {
-        // println!("operand");
         let mut lhs = self.parse_expr_base();
         loop {
             match self.current_token_tag() {
@@ -803,7 +791,7 @@ impl Parser {
     /// expr-base = IDENTIFIER | expr-group | LITERAL | type-base
     fn parse_expr_base(&mut self) -> NodeId {
         let token = self.shift_token();
-        match self.tree.tokens[token as usize].tag {
+        match self.tree.token(token).tag {
             TokenTag::Identifier => {
                 // IDENTIFIER
                 let identifier = self.add_leaf(Tag::Identifier, token);
@@ -817,8 +805,7 @@ impl Parser {
                     }
                     let range = self.add_indices(stack_top);
 
-                    // let expr_list = self.add_node(Tag::Expressions, 0, range.start, range.end);
-                    self.expect_token(TokenTag::BraceR); // '}'
+                    self.expect_token(TokenTag::BraceR);
                     return self.add_node(Tag::Type, token, range.start, range.end);
                 }
                 identifier
@@ -836,7 +823,6 @@ impl Parser {
                 let expr = self.parse_expr();
                 self.expect_token(TokenTag::ParenR);
                 expr
-                // self.add_node(Tag::Grouping, token, expr, 0)
             }
             TokenTag::IntegerLiteral => self.add_leaf(Tag::IntegerLiteral, token),
             TokenTag::StringLiteral => self.add_leaf(Tag::StringLiteral, token),
@@ -853,7 +839,7 @@ impl Parser {
             lhs,
             rhs,
         });
-        (self.tree.nodes.len() - 1) as u32
+        (self.tree.nodes.len() - 1) as NodeId
     }
 
     fn add_leaf(&mut self, tag: Tag, token: TokenId) -> NodeId {
@@ -861,9 +847,9 @@ impl Parser {
     }
 
     /// Returns a half-open range of node indices.
-    fn parse_until<F>(&mut self, tag: TokenTag, parse_fn: F) -> Range<u32>
+    fn parse_until<F>(&mut self, tag: TokenTag, parse_fn: F) -> Range<NodeId>
     where
-        F: Fn(&mut Self) -> u32,
+        F: Fn(&mut Self) -> NodeId,
     {
         let stack_top = self.stack.len();
         while self.token_isnt(tag) {
@@ -989,17 +975,17 @@ impl Parser {
         );
     }
 
-    fn expect_token(&mut self, tag: TokenTag) -> u32 {
+    fn expect_token(&mut self, tag: TokenTag) -> TokenId {
         self.assert_token(tag);
         self.shift_token()
     }
 
-    fn expect_tokens(&mut self, tags: &[TokenTag]) -> u32 {
+    fn expect_tokens(&mut self, tags: &[TokenTag]) -> TokenId {
         self.assert_tokens(tags, 0);
         self.shift_token()
     }
 
-    fn expect_token_and_newline(&mut self, tag: TokenTag) -> u32 {
+    fn expect_token_and_newline(&mut self, tag: TokenTag) -> TokenId {
         let token = self.expect_token(tag);
         self.match_token(TokenTag::Newline);
         token
@@ -1033,6 +1019,10 @@ pub struct Tree {
 impl Tree {
     pub fn node(&self, id: NodeId) -> &Node {
         &self.nodes[id as usize]
+    }
+
+    pub fn token(&self, id: TokenId) -> &Token {
+        &self.tokens[id as usize]
     }
 
     pub fn node_index(&self, index: u32) -> NodeId {
@@ -1148,7 +1138,6 @@ impl Tree {
 }
 
 impl fmt::Display for Tree {
-    // This trait requires `fmt` with this exact signature.
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let root = self.node(0);
         if root.lhs == 0 && root.rhs == 0 {
