@@ -26,30 +26,24 @@ pub enum Val {
 
 impl Val {
     pub fn values(self) -> Vec<Value> {
-        let mut values = Vec::new();
-        self.push_contents(&mut values);
-        values
-    }
-
-    fn push_contents(self, values: &mut Vec<Value>) {
-        match self {
-            Val::Scalar(value) => {
-                values.push(value);
-            }
-            Val::Aggregate(vals) => {
-                for val in vals {
-                    val.push_contents(values);
-                }
+        let mut values = Vec::<Value>::new();
+        let mut stack = vec![&self];
+        loop {
+            match stack.pop() {
+                Some(val) => match val {
+                    Val::Scalar(value) => values.push(*value),
+                    Val::Aggregate(vals) => stack.extend(vals),
+                },
+                None => return values,
             }
         }
     }
 
     pub fn value(self) -> Value {
         if let Val::Scalar(value) = self {
-            value
-        } else {
-            panic!("Value::Struct found in eval")
+            return value;
         }
+        panic!("expected scalar value, got aggregate")
     }
 }
 
@@ -62,29 +56,23 @@ pub enum Var {
 impl Var {
     pub fn variables(self) -> Vec<Variable> {
         let mut variables = Vec::new();
-        self.push_contents(&mut variables);
-        variables
-    }
-
-    fn push_contents(self, variables: &mut Vec<Variable>) {
-        match self {
-            Var::Scalar(variable) => {
-                variables.push(variable);
-            }
-            Var::Aggregate(vars) => {
-                for var in vars {
-                    var.push_contents(variables);
-                }
+        let mut stack = vec![&self];
+        loop {
+            match stack.pop() {
+                Some(val) => match val {
+                    Var::Scalar(variable) => variables.push(*variable),
+                    Var::Aggregate(vars) => stack.extend(vars),
+                },
+                None => return variables,
             }
         }
     }
 
     pub fn variable(&self) -> Variable {
         if let Var::Scalar(value) = self {
-            *value
-        } else {
-            panic!("Variable::Struct found in eval")
+            return *value;
         }
+        panic!("expected scalar variable, got aggregate")
     }
 }
 
@@ -92,10 +80,9 @@ impl Var {
 fn test_val_values() {
     let v0 = Val::Scalar(Value::from_u32(0));
     let v1 = Val::Scalar(Value::from_u32(1));
-    let val = Val::Aggregate(vec![v0, v1]);
+    let val = Val::Aggregate(vec![v0.clone(), v1.clone()]);
     assert_eq!(val.values().len(), 2);
-    let v0 = Val::Scalar(Value::from_u32(0));
-    let v1 = Val::Scalar(Value::from_u32(1));
+
     let v2 = Val::Scalar(Value::from_u32(2));
     let v3 = Val::Scalar(Value::from_u32(3));
     let val = Val::Aggregate(vec![
@@ -514,7 +501,7 @@ impl State {
             }
             Tag::Identifier => {
                 let var = self.lookup_var(input, index);
-                let val = Self::var_to_val(builder, var);
+                let val = Self::var_to_val(builder, &var);
                 dbg!(&val);
                 val
                 // Val::Scalar(builder.use_var(var.variable()))
@@ -523,9 +510,9 @@ impl State {
         }
     }
 
-    fn var_to_val(builder: &mut FunctionBuilder, var: Var) -> Val {
+    fn var_to_val(builder: &mut FunctionBuilder, var: &Var) -> Val {
         match var {
-            Var::Scalar(variable) => Val::Scalar(builder.use_var(variable)),
+            Var::Scalar(variable) => Val::Scalar(builder.use_var(*variable)),
             Var::Aggregate(vars) => {
                 let mut vals = Vec::new();
                 for var in vars {
@@ -714,20 +701,25 @@ impl<'a> Generator<'a> {
     }
 
     fn push_params(input: &Input, node_id: NodeId, params: &mut Vec<AbiParam>, t: Type) {
-        let field_node = input.node(node_id);
-        if let Lookup::Defined(decl_id) = input.definitions.get(&field_node.lhs).unwrap() {
-            let decl_node = input.node(*decl_id);
-            if decl_node.tag == Tag::Struct {
-                // Defined struct
-                for i in decl_node.lhs..decl_node.rhs {
-                    let field_id = input.node_index(i);
-                    Self::push_params(input, field_id, params, t);
+        let mut stack = vec![node_id];
+        loop {
+            if let Some(node_id) = stack.pop() {
+                let field_node = input.node(node_id);
+                if let Lookup::Defined(def_id) = input.definitions.get(&field_node.lhs).unwrap() {
+                    let def_node = input.node(*def_id);
+                    if def_node.tag == Tag::Struct {
+                        for i in def_node.lhs..def_node.rhs {
+                            let field_id = input.node_index(i);
+                            stack.push(field_id);
+                        }
+                        continue;
+                    }
                 }
+                params.push(AbiParam::new(t))
+            } else {
                 return;
             }
         }
-        // Defined or built-in primitive
-        params.push(AbiParam::new(t));
     }
 
     ///
