@@ -1,6 +1,7 @@
 use crate::parse::{Node, NodeId, Tag, Tree};
 use crate::typecheck::TypeIndex;
 use crate::utils::assert_size;
+use colored::Colorize;
 use std::collections::HashMap;
 // use std::collections::HashMap::OccupiedError;
 use std::fmt;
@@ -176,7 +177,12 @@ impl<'a> Analyzer<'a> {
                             .symbols
                             .try_insert(field_name, i - node.lhs)
                             .expect(&format!("Field \"{}\" is already defined.", field_name));
-                        println!("Defined field \"{}\" [{}].", field_name, i - node.lhs);
+                        println!(
+                            "Defined field \"{}\" [{}+{}].",
+                            field_name,
+                            node.lhs,
+                            i - node.lhs
+                        );
                     }
                     self.struct_scopes.insert(index, scope);
                     println!("{:?}", self.struct_scopes);
@@ -225,9 +231,10 @@ impl<'a> Analyzer<'a> {
             Tag::Access => {
                 // lhs: container
                 // rhs: member identifier
-                // Resolve struct
+                // Assumes lhs is a declaration.
                 self.resolve_node(node.lhs);
-                let struct_def = self.get_definition_id(node.lhs);
+                // This should always return a struct definition.
+                let struct_def = self.get_container_definition(node.lhs);
                 // Resolve type
                 dbg!(struct_def);
                 if struct_def != 0 {
@@ -235,15 +242,21 @@ impl<'a> Analyzer<'a> {
                     println!("{:?}", identifier.tag);
                     let field_name = self.tree.node_lexeme(node.rhs);
                     println!("{}", field_name);
+                    let struct_def_node = self.tree.node(struct_def);
                     let field_index = self
                         .struct_scopes
                         .get(&struct_def)
                         .unwrap()
                         .get(&field_name)
                         .unwrap();
+                    // Map access node to field_id.
+                    self.definitions.insert(
+                        id,
+                        Definition::User(self.tree.node_index(struct_def_node.lhs + *field_index)),
+                    );
+                    // Map member identifier to field_index.
                     self.definitions
-                        .insert(node.rhs, Lookup::Defined(*field_index));
-                    println!("{} {}", field_name, field_index);
+                        .insert(node.rhs, Definition::User(*field_index));
                 } else {
                     panic!("failed to look up lhs");
                 }
@@ -300,36 +313,40 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    fn get_definition_id(&self, id: NodeId) -> NodeId {
-        let lookup = self.definitions.get(&id).expect(&format!(
-            "failed to find definition for \"{}\".",
-            self.tree.node_lexeme(id)
-        ));
-        let mut definition_id = 0;
-        if let Lookup::Defined(decl_id) = lookup {
-            dbg!(decl_id);
-            // Tag::VariableDecl
-            let def_node = self.tree.node(*decl_id);
-            dbg!(def_node.tag);
-            dbg!(self.tree.node_lexeme_offset(def_node, -1));
-            let type_lookup = self.definitions.get(&def_node.lhs).expect(&format!(
-                "failed to find definition for \"{}\".",
-                self.tree.node_lexeme(def_node.lhs)
-            ));
-            if let Lookup::Defined(def_index) = type_lookup {
-                definition_id = *def_index
+    fn get_container_definition(&self, id: NodeId) -> NodeId {
+        match self.tree.node(id).tag {
+            Tag::Access | Tag::Identifier => {
+                // identifier -> variable decl / access -> field
+                let lookup = self.definitions.get(&id).expect(&format!(
+                    "failed to find definition for identifier \"{:?}\".",
+                    self.tree.node_lexeme(id)
+                ));
+                if let Definition::User(decl_id) = lookup {
+                    let def_node = self.tree.node(*decl_id);
+                    // variable decl -> struct decl / field -> struct decl
+                    let type_lookup = self.definitions.get(&def_node.lhs).expect(&format!(
+                        "failed to find struct definition for variable \"{}\".",
+                        self.tree.node_lexeme(def_node.lhs)
+                    ));
+                    if let Definition::User(def_index) = type_lookup {
+                        return *def_index;
+                    }
+                }
+                unreachable!("invalid container");
+            }
+            _ => {
+                unreachable!("invalid container")
             }
         }
-        definition_id
     }
 
-    fn define_symbol(&mut self, name: &'a str, node: u32) {
+    fn define_symbol(&mut self, name: &'a str, id: u32) {
         let top = self.scopes.len() - 1;
         self.scopes[top]
             .symbols
-            .try_insert(name, node)
+            .try_insert(name, id)
             .expect(&format!(" - Name \"{}\" is already defined.", name));
-        println!(" - Defined name \"{}\".", name)
+        println!(" - Defined name \"{}\".", name.red())
     }
 
     fn lookup(&self, name: &str) -> Definition {

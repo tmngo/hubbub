@@ -341,7 +341,7 @@ end",
     );
   }
   #[test]
-  fn analyze() {
+  fn analyze_simple() {
     test_analyze(
       "\
     i: Int = 9
@@ -364,6 +364,32 @@ end",
     end
         ",
       17,
+    );
+  }
+
+  #[test]
+  fn analyze_struct() {
+    test_analyze(
+      "\
+Point :: struct
+  x: Int
+  y: Int
+end
+
+Segment :: struct
+    a: Point
+    b: Point
+end
+
+main :: () -> Int
+    segment: Segment
+    segment.a.x = 3
+    point: Point
+    point.y = 4
+    return segment.a.x + point.y
+end
+        ",
+      23,
     );
   }
 }
