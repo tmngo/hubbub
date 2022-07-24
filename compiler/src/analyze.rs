@@ -117,6 +117,7 @@ impl<'a> Analyzer<'a> {
                 ("Float", TypeIndex::Float as u32),
                 ("F64", TypeIndex::Float as u32),
                 ("String", TypeIndex::String as u32),
+                ("Pointer", TypeIndex::Pointer as u32),
             ],
             0,
         );
@@ -314,6 +315,25 @@ impl<'a> Analyzer<'a> {
                 }
             }
             Tag::Import => {}
+            Tag::Type => {
+                let name = self.tree.node_lexeme(id);
+                let definition = self.lookup(name);
+                println!(" - Looking up `{}` -> {:?}", name, definition);
+                match definition {
+                    Definition::User(_) => {
+                        self.definitions.insert(id, definition);
+                    }
+                    Definition::BuiltIn(_) => {
+                        self.definitions.insert(id, definition);
+                    }
+                    Definition::Foreign(_) => {}
+                    _ => {
+                        println!("cannot find value `{}` in this scope", name);
+                        panic!()
+                    }
+                }
+                self.resolve_range(node)?;
+            }
             Tag::VariableDecl => {
                 let name = self.tree.node_lexeme_offset(node, -1);
                 self.define_symbol(name, id)?;

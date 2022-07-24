@@ -51,6 +51,10 @@ pub enum TypeIndex {
     Float,
     String,
     Type,
+    Array,
+    Function,
+    Pointer,
+    Struct,
 }
 
 pub struct Typechecker<'a> {
@@ -58,6 +62,7 @@ pub struct Typechecker<'a> {
     definitions: &'a HashMap<u32, Definition>,
     pub types: Vec<Type>,
     pub node_types: Vec<usize>,
+    pointer_types: HashMap<TypeId, TypeId>,
 }
 
 impl<'a> Typechecker<'a> {
@@ -75,6 +80,7 @@ impl<'a> Typechecker<'a> {
             definitions,
             types,
             node_types: vec![0; tree.nodes.len()],
+            pointer_types: HashMap::new(),
         }
     }
 
@@ -142,6 +148,10 @@ impl<'a> Typechecker<'a> {
                 } else {
                     return Err(eyre!("cannot access non-struct"));
                 }
+            }
+            Tag::Address => {
+                let value_type = self.infer_node(node.lhs)?;
+                self.add_pointer_type(value_type)
             }
             Tag::Add
             | Tag::Div
@@ -243,6 +253,39 @@ impl<'a> Typechecker<'a> {
                 }
                 self.add_type(Type::Struct { fields })
             }
+            Tag::Type => {
+                let decl = self.definitions.get(&node_id);
+                let base_type = if let Some(lookup) = decl {
+                    match lookup {
+                        Definition::User(decl_index) => {
+                            println!("decl_index: {}", decl_index);
+                            self.infer_node(*decl_index)?
+                        }
+                        Definition::BuiltIn(type_index) => {
+                            println!("type_index: {}", type_index);
+                            *type_index as TypeId
+                        }
+                        _ => 0,
+                    }
+                } else {
+                    return Err(eyre!("Undefined type"));
+                };
+                match base_type {
+                    8 => {
+                        // Expect one type parameter
+                        if node.rhs - node.lhs != 1 {
+                            return Err(eyre!(
+                                "Expected 1 type parameter, got {}.",
+                                node.rhs - node.lhs
+                            ));
+                        }
+                        let ni = self.tree.node_index(node.lhs);
+                        let value_type = self.infer_node(ni)?;
+                        self.add_pointer_type(value_type)
+                    }
+                    _ => return Err(eyre!("Undefined type")),
+                }
+            }
             Tag::VariableDecl => {
                 // lhs: type-expr
                 // rhs: init-expr
@@ -296,6 +339,13 @@ impl<'a> Typechecker<'a> {
         self.types.len() - 1
     }
 
+    fn add_pointer_type(&mut self, value_type: TypeId) -> TypeId {
+        match self.pointer_types.try_insert(value_type, self.types.len()) {
+            Ok(_) => self.add_type(Type::Pointer { typ: value_type }),
+            Err(err) => *err.entry.get(),
+        }
+    }
+
     ///
     fn set_node_type(&mut self, index: u32, type_index: TypeId) {
         self.node_types[index as usize] = type_index;
@@ -303,8 +353,8 @@ impl<'a> Typechecker<'a> {
 
     ///
     pub fn print(&self) {
-        for t in &self.types {
-            println!("{:?}", t);
+        for i in 0..self.types.len() {
+            println!("Type [{}]: {:?}", { i }, self.types[i]);
         }
         for i in 1..self.tree.nodes.len() {
             println!(

@@ -1,5 +1,6 @@
 use crate::parse::NodeId;
 use core::mem;
+use cranelift::prelude::MemFlags;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -196,25 +197,16 @@ impl State {
                 // rhs: expr
                 println!("Compiling assign statment.");
                 let val = self.compile_expr(input, b, node.rhs, ty).value();
-                let lhs = input.node(node.lhs);
-                match lhs.tag {
-                    // a = b
-                    Tag::Identifier => {
-                        // Local variable
-                        // let var = self.lookup_var(input, node.lhs);
-                        // var.set_value(builder, val);
-                        // Stack variable
-                        let stack_var = self.lookup_stack_var(input, node.lhs);
-                        stack_var.set_value(b, val);
-                    }
+                let lvalue = input.node(node.lhs);
+                match lvalue.tag {
                     // a.x = b
                     Tag::Access => {
-                        let mut identifier_id = lhs.lhs;
+                        let mut identifier_id = lvalue.lhs;
                         while input.node(identifier_id).tag == Tag::Access {
                             identifier_id = input.node(identifier_id).lhs;
                         }
                         let field_index =
-                            if let Definition::User(fi) = input.get_definition(lhs.rhs) {
+                            if let Definition::User(fi) = input.get_definition(lvalue.rhs) {
                                 *fi
                             } else {
                                 0
@@ -226,7 +218,23 @@ impl State {
                         let stack_var = self.lookup_stack_var(input, identifier_id);
                         stack_var.set_field(b, val, field_index);
                     }
-                    _ => unreachable!(),
+                    // @a = b
+                    Tag::Dereference => {
+                        dbg!(lvalue.lhs);
+                        let stack_var = self.lookup_stack_var(input, lvalue.lhs);
+                        let ptr = stack_var.to_val(b, ty).value();
+                        b.ins().store(MemFlags::new(), val, ptr, 0);
+                    }
+                    // a = b
+                    Tag::Identifier => {
+                        // Local variable
+                        // let var = self.lookup_var(input, node.lhs);
+                        // var.set_value(builder, val);
+                        // Stack variable
+                        let stack_var = self.lookup_stack_var(input, node.lhs);
+                        stack_var.set_value(b, val);
+                    }
+                    _ => unreachable!("Invalid lvalue for assignment"),
                 };
             }
             Tag::If => {
@@ -418,6 +426,17 @@ impl State {
                     }
                     Val::Aggregate(vals)
                 }
+            }
+            Tag::Address => {
+                let var = self.lookup_stack_var(input, node.lhs);
+                let val = b.ins().stack_addr(ty, var.slot, 0);
+                Val::Scalar(val)
+            }
+            Tag::Dereference => {
+                let var = self.lookup_stack_var(input, node.lhs);
+                let val = var.to_val(b, ty).value();
+                let val = b.ins().load(ty, MemFlags::new(), val, 0);
+                Val::Scalar(val)
             }
             Tag::Add => {
                 let (lhs, rhs) = self.compile_children(input, b, node, ty);
