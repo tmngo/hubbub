@@ -1,4 +1,4 @@
-use crate::analyze::Lookup;
+use crate::analyze::Definition;
 use crate::parse::{Node, Tag, Tree};
 use std::collections::HashMap;
 
@@ -53,13 +53,13 @@ pub enum TypeIndex {
 
 pub struct Typechecker<'a> {
     tree: &'a Tree,
-    definitions: &'a HashMap<u32, Lookup>,
+    definitions: &'a HashMap<u32, Definition>,
     pub types: Vec<Type>,
     pub node_types: Vec<usize>,
 }
 
 impl<'a> Typechecker<'a> {
-    pub fn new(tree: &'a Tree, definitions: &'a HashMap<u32, Lookup>) -> Self {
+    pub fn new(tree: &'a Tree, definitions: &'a HashMap<u32, Definition>) -> Self {
         let types = vec![
             Type::Void,
             Type::Boolean,
@@ -130,7 +130,7 @@ impl<'a> Typechecker<'a> {
         let result = match node.tag {
             Tag::Access => {
                 let ltype = self.infer_node(node.lhs);
-                if let (Type::Struct { fields }, Lookup::Defined(field_index)) = (
+                if let (Type::Struct { fields }, Definition::User(field_index)) = (
                     &self.types[ltype as usize],
                     self.definitions.get(&node.rhs).unwrap(),
                 ) {
@@ -188,11 +188,11 @@ impl<'a> Typechecker<'a> {
                 println!("{:?}", decl);
                 if let Some(lookup) = decl {
                     match lookup {
-                        Lookup::Defined(decl_index) => {
+                        Definition::User(decl_index) => {
                             println!("decl_index: {}", decl_index);
                             self.infer_node(*decl_index)
                         }
-                        Lookup::BuiltIn(type_index) => {
+                        Definition::BuiltIn(type_index) => {
                             println!("type_index: {}", type_index);
                             *type_index as TypeId
                         }

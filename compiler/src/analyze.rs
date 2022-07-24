@@ -11,7 +11,7 @@ use std::fmt;
  */
 pub struct Analyzer<'a> {
     tree: &'a Tree,
-    pub definitions: HashMap<NodeId, Lookup>,
+    pub definitions: HashMap<NodeId, Definition>,
     struct_scopes: HashMap<u32, Scope<'a>>,
     scopes: Vec<Scope<'a>>,
     builtins: Scope<'a>,
@@ -20,16 +20,16 @@ pub struct Analyzer<'a> {
 }
 
 #[derive(Debug)]
-pub enum Lookup {
+pub enum Definition {
     BuiltIn(u32),
-    Defined(NodeId),
+    User(NodeId),
     Foreign(u32),
     // Overload(u32),
     NotFound,
 }
 
 // Assert that Tag size <= 1 byte
-pub const _ASSERT_LOOKUP_SIZE: () = assert_size::<Lookup>(8);
+pub const _ASSERT_LOOKUP_SIZE: () = assert_size::<Definition>(8);
 
 // #[derive(PartialEq)]
 // enum State {
@@ -273,13 +273,13 @@ impl<'a> Analyzer<'a> {
                 let definition = self.lookup(name);
                 println!(" - Looking up `{}` -> {:?}", name, definition);
                 match definition {
-                    Lookup::Defined(_) => {
+                    Definition::User(_) => {
                         self.definitions.insert(id, definition);
                     }
-                    Lookup::BuiltIn(_) => {
+                    Definition::BuiltIn(_) => {
                         self.definitions.insert(id, definition);
                     }
-                    Lookup::Foreign(_) => {}
+                    Definition::Foreign(_) => {}
                     _ => {
                         println!("cannot find value `{}` in this scope", name);
                         panic!()
@@ -332,25 +332,25 @@ impl<'a> Analyzer<'a> {
         println!(" - Defined name \"{}\".", name)
     }
 
-    fn lookup(&self, name: &str) -> Lookup {
+    fn lookup(&self, name: &str) -> Definition {
         if self.scopes.len() == 0 {
-            return Lookup::NotFound;
+            return Definition::NotFound;
         }
         let mut scope_index = self.scopes.len() - 1;
         loop {
             // Check if the name is defined in the current scope.
             if let Some(&index) = self.scopes[scope_index].get(name) {
-                return Lookup::Defined(index);
+                return Definition::User(index);
             }
             // If the name isn't in the global scope, it's undefined.
             if scope_index == 0 {
                 if let Some(&index) = self.builtins.get(name) {
-                    return Lookup::BuiltIn(index);
+                    return Definition::BuiltIn(index);
                 }
                 if let Some(&index) = self.foreign.get(name) {
-                    return Lookup::Foreign(index);
+                    return Definition::Foreign(index);
                 }
-                return Lookup::NotFound;
+                return Definition::NotFound;
             }
             // Look in the parent scope.
             scope_index = self.scopes[scope_index].parent();
