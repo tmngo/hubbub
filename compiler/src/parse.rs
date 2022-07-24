@@ -89,6 +89,7 @@ pub const _ASSERT_TAG_SIZE: () = assert_size::<Tag>(1);
 pub enum Tag {
     Access,         // lhs, rhs
     Add,            // lhs, rhs
+    Address,        // expr
     LogicalAnd,     // lhs, rhs
     LogicalOr,      // lhs, rhs
     Assign,         // lhs, rhs
@@ -104,6 +105,7 @@ pub enum Tag {
     Continue,       //
     Equality,       // lhs, rhs
     Expressions,    // start..end [Expr]
+    Dereference,    // expr
     Factorial,      // expr
     Field,          // type_expr
     FunctionDecl,   // prototype, block
@@ -733,6 +735,8 @@ impl Parser {
     fn parse_expr_prefix(&mut self) -> NodeId {
         let tag;
         match self.current_token_tag() {
+            TokenTag::Ampersand => tag = Tag::Address,
+            TokenTag::At => tag = Tag::Dereference,
             TokenTag::Bang => tag = Tag::Not,
             TokenTag::Minus => tag = Tag::Negation,
             TokenTag::Tilde => tag = Tag::BitwiseNot,
