@@ -4,10 +4,11 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use crate::analyze::Lookup;
+use crate::analyze::Definition;
 use crate::parse::{Node, Tag, Tree};
 use crate::typecheck::Type as Typ;
 use cranelift::codegen;
+use cranelift::codegen::ir::StackSlot;
 use cranelift::prelude::isa;
 use cranelift::prelude::settings;
 use cranelift::prelude::{
@@ -73,6 +74,59 @@ impl Var {
             return *value;
         }
         panic!("expected scalar variable, got aggregate")
+    }
+
+    fn to_val(&self, builder: &mut FunctionBuilder) -> Val {
+        match self {
+            Var::Scalar(variable) => Val::Scalar(builder.use_var(*variable)),
+            Var::Aggregate(vars) => {
+                let mut vals = Vec::new();
+                for var in vars {
+                    vals.push(var.to_val(builder));
+                }
+                Val::Aggregate(vals)
+            }
+        }
+    }
+
+    fn set_value(&self, b: &mut FunctionBuilder, val: Value) {
+        b.def_var(self.variable(), val);
+    }
+
+    fn set_field(&self, b: &mut FunctionBuilder, val: Value, field_index: u32) {
+        let variables = self.clone().variables();
+        b.def_var(variables[field_index as usize], val);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct StackVar {
+    slot: StackSlot,
+    offsets: Vec<i32>,
+}
+
+impl StackVar {
+    fn set_value(&self, b: &mut FunctionBuilder, val: Value) {
+        b.ins().stack_store(val, self.slot, 0);
+    }
+
+    fn set_field(&self, b: &mut FunctionBuilder, val: Value, field_index: u32) {
+        b.ins()
+            .stack_store(val, self.slot, self.offsets[field_index as usize]);
+    }
+
+    fn to_val(&self, builder: &mut FunctionBuilder, ty: Type) -> Val {
+        if self.offsets.len() <= 1 {
+            Val::Scalar(builder.ins().stack_load(ty, self.slot, 0))
+        } else {
+            let mut vals = Vec::new();
+            for offset in &self.offsets {
+                vals.push(Val::Scalar(
+                    builder.ins().stack_load(ty, self.slot, *offset),
+                ))
+            }
+            Val::Aggregate(vals)
+        }
     }
 }
 
@@ -146,28 +200,31 @@ impl State {
                 match lhs.tag {
                     // a = b
                     Tag::Identifier => {
-                        let var = self.lookup_var(input, node.lhs);
-                        builder.def_var(var.variable(), val);
+                        // Local variable
+                        // let var = self.lookup_var(input, node.lhs);
+                        // var.set_value(builder, val);
+                        // Stack variable
+                        let stack_var = self.lookup_stack_var(input, node.lhs);
+                        stack_var.set_value(b, val);
                     }
                     // a.x = b
                     Tag::Access => {
-                        if let Lookup::Defined(decl_id) = input.definitions.get(&lhs.lhs).unwrap() {
-                            let slot = *self.stack_slots.get(&decl_id).unwrap();
-                            let field_index = if let Lookup::Defined(fi) =
-                                input.definitions.get(&lhs.rhs).unwrap()
-                            {
-                                println!("field_index: {}", fi);
+                        let mut identifier_id = lhs.lhs;
+                        while input.node(identifier_id).tag == Tag::Access {
+                            identifier_id = input.node(identifier_id).lhs;
+                        }
+                        let field_index =
+                            if let Definition::User(fi) = input.get_definition(lhs.rhs) {
                                 *fi
                             } else {
                                 0
                             };
-                            let offset = (field_index * ty.bytes()) as i32;
-                            // builder.ins().stack_store(val, slot, offset);
-                            let variables = self.lookup_var(input, lhs.lhs).variables();
-                            builder.def_var(variables[field_index as usize], val);
-                        }
-                        // let def = self.definitions
-                        //     builder.ins().store(MemFlags::new(), val)
+                        // Local variable
+                        // let var = self.lookup_var(input, lhs.lhs);
+                        // var.set_field(builder, val, field_index);
+                        // Stack variable
+                        let stack_var = self.lookup_stack_var(input, identifier_id);
+                        stack_var.set_field(b, val, field_index);
                     }
                     _ => unreachable!(),
                 };
@@ -242,47 +299,29 @@ impl State {
                 // lhs: type
                 // rhs: expr
                 println!("Compiling variable declaration statement.");
-                if node.lhs != 0 && node.rhs == 0 {
-                    if let Lookup::Defined(def_index) = input.definitions.get(&node.lhs).unwrap() {
-                        // Tag::Struct or Tag::VariableDecl
-                        let def_node = input.node(*def_index);
-                        if def_node.tag == Tag::Struct {
-                            let struct_size = Self::get_struct_size(input, def_node);
-                            // println!("{:?} {:?}", def_index, def_node.rhs - def_node.lhs);
-                            let slot = builder.create_stack_slot(StackSlotData::new(
-                                StackSlotKind::ExplicitSlot,
-                                struct_size,
-                            ));
-                            // Map VariableDecl id to slot
-                            self.stack_slots.insert(index, slot);
-                            println!("{}", struct_size);
-                        }
-                    } else {
-                        panic!("Undefined type")
-                    }
-                }
-                // let var = self.create_var(index).variable();
-                // builder.declare_var(var, ty);
-                // let val = if node.rhs != 0 {
-                //     self.compile_expr(input, module, builder, node.rhs, ty)
-                //         .value()
-                // } else {
-                //     builder.ins().iconst(ty, 0)
-                // };
-                // builder.def_var(var, val);
+                dbg!(input.node_type(node_id));
 
-                let var = self.create_struct_var(input, index);
-                dbg!(&var);
-                for variable in var.variables() {
-                    builder.declare_var(variable, ty);
-                    let val = if node.rhs != 0 {
-                        self.compile_expr(input, module, builder, node.rhs, ty)
-                            .value()
-                    } else {
-                        builder.ins().iconst(ty, 0)
-                    };
-                    builder.def_var(variable, val);
+                // Local variables
+                // let var = self.create_struct_var(input, index);
+                // for variable in var.variables() {
+                //     builder.declare_var(variable, ty);
+                //     let val = if node.rhs != 0 {
+                //         self.compile_expr(input, builder, node.rhs, ty)
+                //             .value()
+                //     } else {
+                //         builder.ins().iconst(ty, 0)
+                //     };
+                //     builder.def_var(variable, val);
+                // }
+
+                // Stack variables
+                let var = self.create_stack_var(input, b, node_id);
+                if node.rhs != 0 {
+                    // Assume the init_expr is a scalar
+                    let value = self.compile_expr(input, b, node.rhs, ty).value();
+                    b.ins().stack_store(value, var.slot, 0);
                 }
+                self.stack_vars.insert(node_id, var);
             }
             Tag::Return => {
                 println!("Return");
@@ -320,23 +359,6 @@ impl State {
         }
     }
 
-    fn get_struct_size(input: &Input, node: &Node) -> u32 {
-        let mut struct_size = 0;
-        for i in node.lhs..node.rhs {
-            let ni = input.node_index(i);
-            // Tag::Field
-            let ti = input.node_types[ni as usize];
-            println!(
-                "{}: {:?} ({} bytes)",
-                input.tree.node_lexeme(ni),
-                input.types[ti],
-                input.sizeof(ti),
-            );
-            struct_size += input.sizeof(ti);
-        }
-        struct_size
-    }
-
     ///
     pub fn compile_expr(
         &mut self,
@@ -345,37 +367,56 @@ impl State {
         node_id: NodeId,
         ty: Type,
     ) -> Val {
-        let node = input.node(index);
-        // println!("expr: {:?}", node.tag);
+        let node = input.node(node_id);
         dbg!(node.tag);
         match node.tag {
             Tag::Access => {
+                let mut identifier_id = node.lhs;
+                while input.node(identifier_id).tag == Tag::Access {
+                    identifier_id = input.node(identifier_id).lhs;
+                }
+                // Get the struct stack variable.
+                let field_index = if let Definition::User(fi) = input.get_definition(node.rhs) {
+                    *fi
+                } else {
+                    0
+                };
+
+                // Local variables
+                // let var = self.lookup_var(input, node.lhs);
+                // let variables = var.variables();
+                // let value = builder.use_var(variables[field_index as usize]);
+
+                // Stack variables
+
                 println!(
                     "Compiling access expr: {}.{}.",
-                    input.tree.node_lexeme(node.lhs),
+                    input.tree.node_lexeme(identifier_id),
                     input.tree.node_lexeme(node.rhs)
                 );
-                // Get the struct stack variable.
-                let struct_type = input.node_types[node.lhs as usize];
-                if let Lookup::Defined(decl_id) = input.definitions.get(&node.lhs).unwrap() {
-                    // let slot = *self.stack_slots.get(&decl_id).unwrap();
-                    let field_index =
-                        if let Lookup::Defined(fi) = input.definitions.get(&node.rhs).unwrap() {
-                            *fi
-                        } else {
-                            0
-                        };
-                    let offset = (field_index * ty.bytes()) as i32;
-                    dbg!(decl_id);
-                    let var = self.lookup_var(input, node.lhs);
-                    dbg!(&var);
-                    let struct_variables = var.variables();
-                    let value = builder.use_var(struct_variables[field_index as usize]);
-                    dbg!(&struct_variables, &field_index, &value);
+                dbg!(input.node_type(node_id));
+                let offsets = self.node_type_to_offsets(input, node_id);
+                dbg!(&offsets);
+                if offsets.len() <= 1 {
+                    let stack_var = self.lookup_stack_var(input, identifier_id);
+                    let value = b.ins().stack_load(
+                        ty,
+                        stack_var.slot,
+                        stack_var.offsets[field_index as usize],
+                    );
                     Val::Scalar(value)
-                    // Val::Scalar(builder.ins().stack_load(ty, slot, offset))
                 } else {
-                    Val::Scalar(builder.ins().iconst(ty, 0))
+                    let mut vals = Vec::new();
+                    for offset in &offsets {
+                        let stack_var = self.lookup_stack_var(input, identifier_id);
+                        let value = b.ins().stack_load(
+                            ty,
+                            stack_var.slot,
+                            stack_var.offsets[field_index as usize] + offset,
+                        );
+                        vals.push(Val::Scalar(value));
+                    }
+                    Val::Aggregate(vals)
                 }
             }
             Tag::Add => {
@@ -437,11 +478,15 @@ impl State {
                 Val::Scalar(b.inst_results(call)[0])
             }
             Tag::Identifier => {
-                let var = self.lookup_var(input, index);
-                let val = Self::var_to_val(builder, &var);
-                dbg!(&val);
+                // Local variable
+                // let var = self.lookup_var(input, index);
+                // let val = var.to_val(b);
+
+                // Stack variable
+                let var = self.lookup_stack_var(input, node_id);
+                let val = var.to_val(b, ty);
+
                 val
-                // Val::Scalar(builder.use_var(var.variable()))
             }
             _ => Val::Scalar(b.ins().iconst(ty, 0)),
         }
@@ -462,9 +507,27 @@ impl State {
     /// Maps node_id -> Var.
     fn lookup_var(&self, input: &Input, node_id: u32) -> Var {
         println!("lookup_var: \"{}\"", node_id);
-        if let Lookup::Defined(decl_id) = input.definitions.get(&node_id).unwrap() {
+        if let Definition::User(decl_id) = input.get_definition(node_id) {
             println!("decl_id: \"{}\"", decl_id);
-            let var = self.variables.get(&decl_id).unwrap().clone();
+            let var = self
+                .variables
+                .get(&decl_id)
+                .expect("failed to get variable")
+                .clone();
+            var
+        } else {
+            panic!();
+        }
+    }
+
+    /// Maps node_id -> StackVar.
+    fn lookup_stack_var(&self, input: &Input, node_id: u32) -> StackVar {
+        if let Definition::User(decl_id) = input.get_definition(node_id) {
+            let var = self
+                .stack_vars
+                .get(&decl_id)
+                .expect("failed to get variable")
+                .clone();
             var
         } else {
             panic!();
@@ -479,19 +542,36 @@ impl State {
         var
     }
 
-    ///
+    /// Creates a Var for the given node's type and inserts it into the variable map.
     fn create_struct_var(&mut self, input: &Input, node_id: u32) -> Var {
-        // let v = Variable::with_u32(self.var_index);
-        // let t = input.node_type(node_id);
-        println!("create_struct_var: \"{}\"", node_id);
         let var = self.node_type_to_var(input, node_id);
         self.variables.insert(node_id, var.clone());
         var
     }
 
+    fn create_stack_var(
+        &mut self,
+        input: &Input,
+        b: &mut FunctionBuilder,
+        node_id: u32,
+    ) -> StackVar {
+        let size = input.sizeof(input.type_id(node_id));
+        dbg!(size);
+        let slot = b.create_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, size));
+        let offsets = self.node_type_to_offsets(input, node_id);
+        StackVar { slot, offsets }
+    }
+
     fn node_type_to_var(&mut self, input: &Input, node_id: NodeId) -> Var {
         let type_id = input.node_types[node_id as usize];
         self.type_to_var(input, type_id)
+    }
+
+    fn node_type_to_offsets(&mut self, input: &Input, node_id: NodeId) -> Vec<i32> {
+        let type_id = input.node_types[node_id as usize];
+        let mut offsets = Vec::new();
+        self.type_to_offsets(input, type_id, &mut offsets);
+        offsets
     }
 
     fn type_to_var(&mut self, input: &Input, type_id: usize) -> Var {
@@ -514,6 +594,26 @@ impl State {
         }
     }
 
+    fn type_to_offsets(&mut self, input: &Input, type_id: usize, offsets: &mut Vec<i32>) {
+        let t = &input.types[type_id];
+        // dbg!(t);
+        match t {
+            Typ::Struct { fields } => {
+                for type_id in fields {
+                    self.type_to_offsets(input, *type_id, offsets);
+                }
+            }
+            _ => {
+                let offset = if let Some(last) = offsets.last() {
+                    last + 8
+                } else {
+                    0
+                };
+                offsets.push(offset);
+            }
+        }
+    }
+
     fn push_variables(&mut self, input: &Input, type_id: usize, vars: &mut Vec<Var>) {
         let t = &input.types[type_id];
         match t {
@@ -532,7 +632,7 @@ impl State {
 
 pub struct Input<'a> {
     pub tree: &'a Tree,
-    pub definitions: &'a HashMap<u32, Lookup>,
+    pub definitions: &'a HashMap<u32, Definition>,
     pub types: &'a Vec<Typ>,
     pub node_types: &'a Vec<usize>,
 }
@@ -552,6 +652,10 @@ impl<'a> Input<'a> {
         self.tree.node_lexeme_offset(node, offset)
     }
 
+    fn get_definition(&self, node_id: NodeId) -> &Definition {
+        self.definitions.get(&node_id).unwrap()
+    }
+
     pub fn sizeof(&self, type_id: usize) -> u32 {
         match &self.types[type_id] {
             Typ::Void => 0,
@@ -565,6 +669,10 @@ impl<'a> Input<'a> {
             }
             _ => 8,
         }
+    }
+
+    pub fn type_id(&self, node_id: NodeId) -> usize {
+        self.node_types[node_id as usize]
     }
 
     pub fn node_type(&self, node_id: NodeId) -> &Typ {
@@ -610,7 +718,7 @@ impl<'a> Generator<'a> {
                 module,
                 var_index: 0,
                 variables: HashMap::new(),
-                stack_slots: HashMap::new(),
+                stack_vars: HashMap::new(),
             },
         }
     }
@@ -647,7 +755,7 @@ impl<'a> Generator<'a> {
         loop {
             if let Some(node_id) = stack.pop() {
                 let field_node = input.node(node_id);
-                if let Lookup::Defined(def_id) = input.definitions.get(&field_node.lhs).unwrap() {
+                if let Definition::User(def_id) = input.get_definition(field_node.lhs) {
                     let def_node = input.node(*def_id);
                     if def_node.tag == Tag::Struct {
                         for i in def_node.lhs..def_node.rhs {
@@ -705,7 +813,7 @@ impl<'a> Generator<'a> {
         dbg!("compile_function_decl");
         let int = self.state.module.target_config().pointer_type();
         let node = self.input.node(index);
-        dbg!(self.input.node_lexeme_offset(node, -1));
+        println!("{}", self.input.node_lexeme_offset(node, -1));
         assert_eq!(node.tag, Tag::FunctionDecl);
         let prototype = self.input.node(node.lhs);
         assert_eq!(prototype.tag, Tag::Prototype);
@@ -721,19 +829,31 @@ impl<'a> Generator<'a> {
 
         dbg!(b.block_params(entry_block).len());
 
-        // Define parameters as local variables.
+        // Define parameters as stack variables.
         let mut scalar_count = 0;
         for i in parameters.lhs..parameters.rhs {
             let ni = self.input.node_index(i);
-            let var = self.state.create_struct_var(self.input, ni);
-            dbg!(&var);
-            for &variable in &var.variables() {
-                builder.declare_var(variable, int);
-                let val = builder.block_params(entry_block)[scalar_count];
-                builder.def_var(variable, val);
+            let var = self.state.create_stack_var(self.input, &mut b, ni);
+            for &offset in &var.offsets {
+                let value = b.block_params(entry_block)[scalar_count];
+                b.ins().stack_store(value, var.slot, offset);
                 scalar_count += 1;
             }
+            self.state.stack_vars.insert(ni, var);
         }
+
+        // Define parameters as local variables.
+        // let mut scalar_count = 0;
+        // for i in parameters.lhs..parameters.rhs {
+        //     let ni = self.input.node_index(i);
+        //     let var = self.state.create_struct_var(self.input, ni);
+        //     for &variable in &var.variables() {
+        //         builder.declare_var(variable, int);
+        //         let val = builder.block_params(entry_block)[scalar_count];
+        //         builder.def_var(variable, val);
+        //         scalar_count += 1;
+        //     }
+        // }
 
         let body = self.input.node(node.rhs);
         for i in body.lhs..body.rhs {
