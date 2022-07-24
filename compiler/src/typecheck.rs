@@ -1,5 +1,6 @@
 use crate::analyze::Definition;
 use crate::parse::{Node, Tag, Tree};
+use color_eyre::eyre::{eyre, Result, WrapErr};
 use std::collections::HashMap;
 
 /**
@@ -77,7 +78,7 @@ impl<'a> Typechecker<'a> {
     }
 
     ///
-    pub fn check(&mut self) {
+    pub fn check(&mut self) -> Result<()> {
         let root = &self.tree.node(0);
         // Resolve root declarations.
         for i in root.lhs..root.rhs {
@@ -85,58 +86,60 @@ impl<'a> Typechecker<'a> {
             let module = self.tree.node(module_id);
             for i in module.lhs..module.rhs {
                 let decl_id = self.tree.node_index(i);
-                self.infer_declaration_type(decl_id);
+                self.infer_declaration_type(decl_id)?;
             }
         }
         // self.print();
-        self.infer_range(root);
+        self.infer_range(root)?;
+        Ok(())
     }
 
-    fn infer_declaration_type(&mut self, index: u32) {
+    fn infer_declaration_type(&mut self, index: u32) -> Result<()> {
         if index == 0 || self.node_types[index as usize] != 0 {
-            return;
+            return Ok(());
         }
         let node = self.tree.node(index);
         match node.tag {
             Tag::FunctionDecl => {
                 // prototype
-                self.infer_node(node.lhs);
+                self.infer_node(node.lhs)?;
             }
             Tag::Struct => {
-                self.infer_node(index);
+                self.infer_node(index)?;
             }
             _ => {}
         };
+        Ok(())
     }
 
     ///
-    fn infer_range(&mut self, node: &Node) -> TypeId {
+    fn infer_range(&mut self, node: &Node) -> Result<TypeId> {
         for i in node.lhs..node.rhs {
-            self.infer_node(self.tree.indices[i as usize]);
+            self.infer_node(self.tree.indices[i as usize])?;
         }
-        0
+        Ok(0)
     }
 
     ///
-    fn infer_node(&mut self, index: u32) -> TypeId {
+    fn infer_node(&mut self, index: u32) -> Result<TypeId> {
         if index == 0 {
-            return 0;
+            return Ok(0);
         }
         if self.node_types[index as usize] != 0 {
-            return self.node_types[index as usize];
+            return Ok(self.node_types[index as usize]);
         }
         let node = self.tree.node(index);
         println!("[{}] - {:?}", index, node.tag);
         let result = match node.tag {
             Tag::Access => {
-                let ltype = self.infer_node(node.lhs);
+                let ltype = self.infer_node(node.lhs)?;
                 if let (Type::Struct { fields }, Definition::User(field_index)) = (
                     &self.types[ltype as usize],
                     self.definitions.get(&node.rhs).unwrap(),
                 ) {
                     fields[*field_index as usize]
                 } else {
-                    panic!()
+                    return Err(eyre!("cannot access non-struct"));
                 }
             }
             Tag::Add
@@ -145,13 +148,13 @@ impl<'a> Typechecker<'a> {
             | Tag::Sub
             | Tag::BitwiseAnd
             | Tag::BitwiseOr
-            | Tag::BitwiseXor => self.infer_binary_node(node.lhs, node.rhs),
+            | Tag::BitwiseXor => self.infer_binary_node(node.lhs, node.rhs)?,
             Tag::Block | Tag::Expressions | Tag::IfElse | Tag::Module | Tag::Parameters => {
-                self.infer_range(&node)
+                self.infer_range(&node)?
             }
             Tag::Call => {
-                let ltype = self.infer_node(node.lhs);
-                self.infer_node(node.rhs);
+                let ltype = self.infer_node(node.lhs)?;
+                self.infer_node(node.rhs)?;
                 if let Type::Function {
                     parameters: _,
                     returns,
@@ -168,19 +171,19 @@ impl<'a> Typechecker<'a> {
             }
             Tag::Field => {
                 println!("Field: {:?}", self.tree.node_lexeme(node.lhs));
-                self.infer_node(node.lhs)
+                self.infer_node(node.lhs)?
             }
             Tag::FunctionDecl => {
                 // Prototype
-                let fn_type = self.infer_node(node.lhs);
+                let fn_type = self.infer_node(node.lhs)?;
                 // Immediately set the declaration's type to handle recursion.
                 self.set_node_type(index, fn_type);
                 // Body
-                self.infer_node(node.rhs);
+                self.infer_node(node.rhs)?;
                 fn_type
             }
             Tag::Equality | Tag::Greater | Tag::Inequality | Tag::Less => {
-                self.infer_binary_node(node.lhs, node.rhs);
+                self.infer_binary_node(node.lhs, node.rhs)?;
                 TypeIndex::Boolean as TypeId
             }
             Tag::Identifier => {
@@ -190,7 +193,7 @@ impl<'a> Typechecker<'a> {
                     match lookup {
                         Definition::User(decl_index) => {
                             println!("decl_index: {}", decl_index);
-                            self.infer_node(*decl_index)
+                            self.infer_node(*decl_index)?
                         }
                         Definition::BuiltIn(type_index) => {
                             println!("type_index: {}", type_index);
@@ -206,8 +209,8 @@ impl<'a> Typechecker<'a> {
             Tag::Prototype => {
                 let mut parameters = Vec::new();
                 let mut returns = Vec::new();
-                self.infer_node(node.lhs); // parameters
-                let return_type = self.infer_node(node.rhs); // returns
+                self.infer_node(node.lhs)?; // parameters
+                let return_type = self.infer_node(node.rhs)?; // returns
                 let params = self.tree.node(node.lhs);
                 for i in params.lhs..params.rhs {
                     let ni = self.tree.node_index(i) as usize;
@@ -231,7 +234,7 @@ impl<'a> Typechecker<'a> {
                 println!("Struct: {:?}", self.tree.node_lexeme(index));
                 let mut fields = Vec::new();
                 for i in node.lhs..node.rhs {
-                    self.infer_node(self.tree.indices[i as usize]);
+                    self.infer_node(self.tree.indices[i as usize])?;
                 }
                 for i in node.lhs..node.rhs {
                     let ni = self.tree.node_index(i) as usize;
@@ -242,33 +245,33 @@ impl<'a> Typechecker<'a> {
             Tag::VariableDecl => {
                 // lhs: type-expr
                 // rhs: init-expr
-                let ltype = self.infer_node(node.lhs);
-                let rtype = self.infer_node(node.rhs);
+                let ltype = self.infer_node(node.lhs)?;
+                let rtype = self.infer_node(node.rhs)?;
                 dbg!(ltype, rtype);
                 if ltype != 0 && rtype == 0 {
                     ltype
                 } else if ltype == 0 && rtype != 0 {
                     rtype
                 } else if ltype != rtype {
-                    panic!("annotation type doesn't match");
+                    return Err(eyre!("annotation type doesn't match"));
                 } else {
                     ltype
                 }
             }
             _ => {
-                self.infer_node(node.lhs);
-                self.infer_node(node.rhs);
+                self.infer_node(node.lhs)?;
+                self.infer_node(node.rhs)?;
                 0
             }
         };
         self.set_node_type(index, result);
-        return self.node_types[index as usize];
+        return Ok(self.node_types[index as usize]);
     }
 
     ///
-    fn infer_binary_node(&mut self, lhs: u32, rhs: u32) -> TypeId {
-        let ltype = self.infer_node(lhs);
-        let rtype = self.infer_node(rhs);
+    fn infer_binary_node(&mut self, lhs: u32, rhs: u32) -> Result<TypeId> {
+        let ltype = self.infer_node(lhs)?;
+        let rtype = self.infer_node(rhs)?;
         if ltype != rtype {
             println!(
                 "{:?} vs {:?}",
@@ -282,9 +285,9 @@ impl<'a> Typechecker<'a> {
                 self.tree.node(rhs).tag,
                 self.types[rtype as usize]
             );
-            panic!("operand types don't match");
+            return Err(eyre!("operand types don't match"));
         }
-        ltype
+        Ok(ltype)
     }
 
     fn add_type(&mut self, typ: Type) -> TypeId {

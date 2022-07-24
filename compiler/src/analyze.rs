@@ -1,9 +1,10 @@
 use crate::parse::{Node, NodeId, Tag, Tree};
 use crate::typecheck::TypeIndex;
 use crate::utils::assert_size;
-use colored::Colorize;
+use color_eyre::eyre::{eyre, Result, WrapErr};
 use std::collections::HashMap;
 // use std::collections::HashMap::OccupiedError;
+use crate::output::Color;
 use std::fmt;
 
 /**
@@ -131,17 +132,20 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    pub fn resolve(&mut self) {
+    pub fn resolve(&mut self) -> Result<()> {
         self.enter_scope();
         let root = &self.tree.node(0);
         let first_module = self.tree.node(self.tree.node_index(root.lhs));
         println!("Collecting module decls.");
-        self.collect_module_decls(first_module);
+        self.collect_module_decls(first_module)
+            .wrap_err("Failed to collect module declarations")?;
         println!("Resolving first_module");
-        self.resolve_range(root);
+        self.resolve_range(root)
+            .wrap_err("Failed to resolve definitions")?;
+        Ok(())
     }
 
-    fn collect_module_decls(&mut self, root: &Node) {
+    fn collect_module_decls(&mut self, root: &Node) -> Result<()> {
         for i in root.lhs..root.rhs {
             let index = self.tree.node_index(i);
             let node = self.tree.node(index);
@@ -152,7 +156,7 @@ impl<'a> Analyzer<'a> {
                         "Declaration: {} - Node: {:?} - Token: {:?}",
                         index, node.tag, name
                     );
-                    self.define_symbol(name, index);
+                    self.define_symbol(name, index)?;
                 }
                 Tag::Import => {
                     let name = self.tree.node_lexeme_offset(&node, -2);
@@ -160,7 +164,7 @@ impl<'a> Analyzer<'a> {
                         "Import: {} - Node: {:?} - Token: {:?}",
                         index, node.tag, name
                     );
-                    self.define_symbol(name, index);
+                    self.define_symbol(name, index)?;
                 }
                 Tag::Struct => {
                     let name = self.tree.node_lexeme_offset(&node, -2);
@@ -168,15 +172,14 @@ impl<'a> Analyzer<'a> {
                         "Declaration: {} - Node: {:?} - Token: {:?}",
                         index, node.tag, name
                     );
-                    self.define_symbol(name, index);
+                    self.define_symbol(name, index)?;
                     let mut scope = Scope::new(0);
                     for i in node.lhs..node.rhs {
                         let ni = self.tree.node_index(i);
                         let field_name = self.tree.node_lexeme(ni);
-                        scope
-                            .symbols
-                            .try_insert(field_name, i - node.lhs)
-                            .expect(&format!("Field \"{}\" is already defined.", field_name));
+                        if let Err(_) = scope.symbols.try_insert(field_name, i - node.lhs) {
+                            return Err(eyre!(" - Field \"{}\" is already defined.", name));
+                        }
                         println!(
                             "Defined field \"{}\" [{}+{}].",
                             field_name,
@@ -190,6 +193,7 @@ impl<'a> Analyzer<'a> {
                 _ => {}
             };
         }
+        Ok(())
     }
 
     // fn resolve_symbol(&self, mut sym: Symbol) {
@@ -207,16 +211,17 @@ impl<'a> Analyzer<'a> {
     //     sym.state = State::Resolved;
     // }
 
-    fn resolve_range(&mut self, node: &Node) {
+    fn resolve_range(&mut self, node: &Node) -> Result<()> {
         for i in node.lhs..node.rhs {
             let ni = self.tree.node_index(i);
-            self.resolve_node(ni);
+            self.resolve_node(ni)?;
         }
+        Ok(())
     }
 
-    fn resolve_node(&mut self, id: NodeId) {
+    fn resolve_node(&mut self, id: NodeId) -> Result<()> {
         if id == 0 {
-            return;
+            return Ok(());
         }
         let node = &self.tree.node(id);
         println!(
@@ -232,23 +237,32 @@ impl<'a> Analyzer<'a> {
                 // lhs: container
                 // rhs: member identifier
                 // Assumes lhs is a declaration.
-                self.resolve_node(node.lhs);
+                self.resolve_node(node.lhs)?;
                 // This should always return a struct definition.
                 let struct_def = self.get_container_definition(node.lhs);
                 // Resolve type
                 dbg!(struct_def);
                 if struct_def != 0 {
-                    let identifier = self.tree.node(node.rhs);
-                    println!("{:?}", identifier.tag);
                     let field_name = self.tree.node_lexeme(node.rhs);
                     println!("{}", field_name);
                     let struct_def_node = self.tree.node(struct_def);
-                    let field_index = self
+
+                    let field_index = match self
                         .struct_scopes
                         .get(&struct_def)
                         .unwrap()
                         .get(&field_name)
-                        .unwrap();
+                    {
+                        Some(value) => value,
+                        _ => {
+                            return Err(eyre!(
+                                "struct \"{}\" does not have member \"{}\".",
+                                self.tree.node_lexeme_offset(struct_def_node, -2),
+                                field_name
+                            ));
+                        }
+                    };
+
                     // Map access node to field_id.
                     self.definitions.insert(
                         id,
@@ -258,28 +272,28 @@ impl<'a> Analyzer<'a> {
                     self.definitions
                         .insert(node.rhs, Definition::User(*field_index));
                 } else {
-                    panic!("failed to look up lhs");
+                    return Err(eyre!("failed to look up lhs"));
                 }
             }
             Tag::Block | Tag::Module => {
                 self.enter_scope();
-                self.resolve_range(node);
+                self.resolve_range(node)?;
                 self.exit_scope();
             }
             Tag::Expressions | Tag::IfElse | Tag::Parameters | Tag::Struct => {
-                self.resolve_range(node);
+                self.resolve_range(node)?;
             }
             Tag::FunctionDecl => {
                 self.enter_scope();
-                self.resolve_node(node.lhs); // Prototype
+                self.resolve_node(node.lhs)?; // Prototype
                 let body = &self.tree.node(node.rhs);
-                self.resolve_range(body);
+                self.resolve_range(body)?;
                 self.exit_scope();
             }
             Tag::Field => {
                 let name = self.tree.node_lexeme(id);
-                self.define_symbol(name, id);
-                self.resolve_node(node.lhs);
+                self.define_symbol(name, id)?;
+                self.resolve_node(node.lhs)?;
             }
             Tag::Identifier => {
                 let name = self.tree.node_lexeme(id);
@@ -302,15 +316,16 @@ impl<'a> Analyzer<'a> {
             Tag::Import => {}
             Tag::VariableDecl => {
                 let name = self.tree.node_lexeme_offset(node, -1);
-                self.define_symbol(name, id);
-                self.resolve_node(node.lhs);
-                self.resolve_node(node.rhs);
+                self.define_symbol(name, id)?;
+                self.resolve_node(node.lhs)?;
+                self.resolve_node(node.rhs)?;
             }
             _ => {
-                self.resolve_node(node.lhs);
-                self.resolve_node(node.rhs);
+                self.resolve_node(node.lhs)?;
+                self.resolve_node(node.rhs)?;
             }
         }
+        Ok(())
     }
 
     fn get_container_definition(&self, id: NodeId) -> NodeId {
@@ -340,13 +355,13 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    fn define_symbol(&mut self, name: &'a str, id: u32) {
+    fn define_symbol(&mut self, name: &'a str, id: u32) -> Result<()> {
         let top = self.scopes.len() - 1;
-        self.scopes[top]
-            .symbols
-            .try_insert(name, id)
-            .expect(&format!(" - Name \"{}\" is already defined.", name));
-        println!(" - Defined name \"{}\".", name.red())
+        if let Err(_) = self.scopes[top].symbols.try_insert(name, id) {
+            return Err(eyre!(" - Name \"{}\" is already defined.", name));
+        }
+        println!(" - Defined name \"{}\".", name.red());
+        Ok(())
     }
 
     fn lookup(&self, name: &str) -> Definition {

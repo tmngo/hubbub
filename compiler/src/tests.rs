@@ -21,9 +21,15 @@ mod tests {
     let mut parser = Parser::new(&source, tokens);
 
     match test {
-      Test::File => parser.parse(),
-      Test::Expr => parser.parse_expr(),
-      Test::Stmt => parser.parse_stmt(),
+      Test::File => {
+        parser.parse().ok();
+      }
+      Test::Expr => {
+        parser.parse_expr().ok();
+      }
+      Test::Stmt => {
+        parser.parse_stmt().ok();
+      }
     };
 
     let tree = parser.tree();
