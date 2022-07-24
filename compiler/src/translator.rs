@@ -19,7 +19,7 @@ impl<'a> Generator<'a> {
         self.define_add_fn();
         let main_id = self.define_main_fn();
 
-        self.module.finalize(main_id, filename);
+        self.state.module.finalize(main_id, filename);
     }
 
     //
@@ -28,7 +28,7 @@ impl<'a> Generator<'a> {
     //
 
     fn define_add_fn(&mut self) -> FuncId {
-        let int = self.module.target_config().pointer_type();
+        let int = self.state.module.target_config().pointer_type();
         let params = vec!["a", "b"];
         let ret = "result";
 
@@ -69,11 +69,15 @@ impl<'a> Generator<'a> {
 
         builder.finalize();
         let id = self
+            .state
             .module
             .declare_function("add", Linkage::Export, &self.ctx.func.signature)
             .unwrap();
-        self.module.define_function(id, &mut self.ctx).unwrap();
-        self.module.clear_context(&mut self.ctx);
+        self.state
+            .module
+            .define_function(id, &mut self.ctx)
+            .unwrap();
+        self.state.module.clear_context(&mut self.ctx);
 
         return id;
     }
@@ -88,7 +92,7 @@ impl<'a> Generator<'a> {
         // let mut params = vec!["a", "b"];
         let ret = "result";
 
-        let int = self.module.target_config().pointer_type();
+        let int = self.state.module.target_config().pointer_type();
 
         // Create the builder to build a function.
         // let signature = Signature::new(isa::CallConv::Fast);
@@ -119,7 +123,7 @@ impl<'a> Generator<'a> {
             builder,
             variables,
             var_index: 0,
-            module: &mut self.module,
+            module: &mut self.state.module,
         };
 
         for (i, param) in params.iter().enumerate() {
@@ -163,15 +167,19 @@ impl<'a> Generator<'a> {
         // Finalize
 
         let id = self
+            .state
             .module
             .declare_function("main", Linkage::Export, &self.ctx.func.signature)
             .unwrap();
 
-        self.module.define_function(id, &mut self.ctx).unwrap();
+        self.state
+            .module
+            .define_function(id, &mut self.ctx)
+            .unwrap();
 
         //
 
-        self.module.clear_context(&mut self.ctx);
+        self.state.module.clear_context(&mut self.ctx);
 
         return id;
     }

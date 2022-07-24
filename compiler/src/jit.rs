@@ -117,21 +117,13 @@ impl CraneliftModule for ObjectModule {
     }
 }
 
-pub struct Generator<'a> {
-    pub builder_ctx: FunctionBuilderContext,
-    pub ctx: codegen::Context,
-    data_ctx: DataContext,
-    pub module: Box<dyn CraneliftModule>,
-    input: &'a Input<'a>,
-    state: State,
-}
-
 pub struct State {
     // scope: usize,
     // latest_scope: usize,
     var_index: u32,
     variables: HashMap<u32, Var>,
-    stack_slots: HashMap<u32, codegen::ir::StackSlot>,
+    pub module: Box<dyn CraneliftModule>,
+    stack_vars: HashMap<u32, StackVar>,
 }
 
 impl State {
@@ -139,20 +131,17 @@ impl State {
     pub fn compile_stmt(
         &mut self,
         input: &Input,
-        module: &mut Box<dyn CraneliftModule>,
-        builder: &mut FunctionBuilder,
-        index: u32,
+        b: &mut FunctionBuilder,
+        node_id: NodeId,
         ty: Type,
     ) {
-        let node = input.node(index);
+        let node = input.node(node_id);
         match node.tag {
             Tag::Assign => {
                 // lhs: expr
                 // rhs: expr
                 println!("Compiling assign statment.");
-                let val = self
-                    .compile_expr(input, module, builder, node.rhs, ty)
-                    .value();
+                let val = self.compile_expr(input, b, node.rhs, ty).value();
                 let lhs = input.node(node.lhs);
                 match lhs.tag {
                     // a = b
@@ -184,27 +173,25 @@ impl State {
                 };
             }
             Tag::If => {
-                let condition_expr = self
-                    .compile_expr(input, module, builder, node.lhs, ty)
-                    .value();
-                let then_block = builder.create_block();
-                let merge_block = builder.create_block();
+                let condition_expr = self.compile_expr(input, b, node.lhs, ty).value();
+                let then_block = b.create_block();
+                let merge_block = b.create_block();
                 let body = input.node(node.rhs);
-                builder.ins().brz(condition_expr, merge_block, &[]);
-                builder.ins().jump(then_block, &[]);
-                builder.seal_block(then_block);
+                b.ins().brz(condition_expr, merge_block, &[]);
+                b.ins().jump(then_block, &[]);
+                b.seal_block(then_block);
                 // then block
-                builder.switch_to_block(then_block);
+                b.switch_to_block(then_block);
                 for i in body.lhs..body.rhs {
                     let index = input.tree.node_index(i);
-                    self.compile_stmt(input, module, builder, index, ty);
+                    self.compile_stmt(input, b, index, ty);
                 }
-                if !builder.is_filled() {
-                    builder.ins().jump(merge_block, &[]);
+                if !b.is_filled() {
+                    b.ins().jump(merge_block, &[]);
                 }
-                builder.seal_block(merge_block);
+                b.seal_block(merge_block);
                 // merge block
-                builder.switch_to_block(merge_block);
+                b.switch_to_block(merge_block);
             }
             Tag::IfElse => {
                 let mut if_nodes = Vec::new();
@@ -213,45 +200,43 @@ impl State {
                     let index = input.node_index(i);
                     let if_node = input.node(index);
                     if_nodes.push(if_node);
-                    then_blocks.push(builder.create_block());
+                    then_blocks.push(b.create_block());
                 }
                 let if_count = if if_nodes.last().unwrap().lhs == 0 {
                     if_nodes.len() - 1
                 } else {
                     if_nodes.len()
                 };
-                let merge_block = builder.create_block();
+                let merge_block = b.create_block();
                 for i in 0..if_count {
-                    let condition_expr = self
-                        .compile_expr(input, module, builder, if_nodes[i].lhs, ty)
-                        .value();
-                    builder.ins().brnz(condition_expr, then_blocks[i], &[]);
-                    builder.seal_block(then_blocks[i]);
+                    let condition_expr = self.compile_expr(input, b, if_nodes[i].lhs, ty).value();
+                    b.ins().brnz(condition_expr, then_blocks[i], &[]);
+                    b.seal_block(then_blocks[i]);
                     if i < if_count - 1 {
-                        let block = builder.create_block();
-                        builder.ins().jump(block, &[]);
-                        builder.seal_block(block);
-                        builder.switch_to_block(block);
+                        let block = b.create_block();
+                        b.ins().jump(block, &[]);
+                        b.seal_block(block);
+                        b.switch_to_block(block);
                     }
                     if i == if_nodes.len() - 1 {
-                        builder.ins().jump(merge_block, &[]);
+                        b.ins().jump(merge_block, &[]);
                     }
                 }
                 for i in if_count..if_nodes.len() {
-                    builder.ins().jump(then_blocks[i], &[]);
-                    builder.seal_block(then_blocks[i]);
+                    b.ins().jump(then_blocks[i], &[]);
+                    b.seal_block(then_blocks[i]);
                 }
                 for (i, if_node) in if_nodes.iter().enumerate() {
-                    builder.switch_to_block(then_blocks[i]);
+                    b.switch_to_block(then_blocks[i]);
                     let body = input.node(if_node.rhs);
                     for j in body.lhs..body.rhs {
                         let index = input.node_index(j);
-                        self.compile_stmt(input, module, builder, index, ty);
+                        self.compile_stmt(input, b, index, ty);
                     }
-                    builder.ins().jump(merge_block, &[]);
+                    b.ins().jump(merge_block, &[]);
                 }
-                builder.seal_block(merge_block);
-                builder.switch_to_block(merge_block);
+                b.seal_block(merge_block);
+                b.switch_to_block(merge_block);
             }
             Tag::VariableDecl => {
                 // lhs: type
@@ -301,42 +286,36 @@ impl State {
             }
             Tag::Return => {
                 println!("Return");
-                let val = self
-                    .compile_expr(input, module, builder, node.lhs, ty)
-                    .value();
-                builder.ins().return_(&[val]);
+                let val = self.compile_expr(input, b, node.lhs, ty).value();
+                b.ins().return_(&[val]);
             }
             Tag::While => {
-                let condition = self
-                    .compile_expr(input, module, builder, node.lhs, ty)
-                    .value();
-                let while_block = builder.create_block();
-                let merge_block = builder.create_block();
+                let condition = self.compile_expr(input, b, node.lhs, ty).value();
+                let while_block = b.create_block();
+                let merge_block = b.create_block();
                 // check condition
                 // true? jump to loop body
-                builder.ins().brnz(condition, while_block, &[]);
+                b.ins().brnz(condition, while_block, &[]);
                 // false? jump to after loop
-                builder.ins().jump(merge_block, &[]);
+                b.ins().jump(merge_block, &[]);
                 // block_while:
-                builder.switch_to_block(while_block);
+                b.switch_to_block(while_block);
                 let body = input.node(node.rhs);
                 for i in body.lhs..body.rhs {
-                    let index = input.node_index(i);
-                    self.compile_stmt(input, module, builder, index, ty);
+                    let ni = input.node_index(i);
+                    self.compile_stmt(input, b, ni, ty);
                 }
-                let condition = self
-                    .compile_expr(input, module, builder, node.lhs, ty)
-                    .value();
+                let condition = self.compile_expr(input, b, node.lhs, ty).value();
                 // brnz block_while
-                builder.ins().brnz(condition, while_block, &[]);
-                builder.seal_block(while_block);
-                builder.ins().jump(merge_block, &[]);
-                builder.seal_block(merge_block);
+                b.ins().brnz(condition, while_block, &[]);
+                b.seal_block(while_block);
+                b.ins().jump(merge_block, &[]);
+                b.seal_block(merge_block);
                 // block_merge:
-                builder.switch_to_block(merge_block);
+                b.switch_to_block(merge_block);
             }
             _ => {
-                self.compile_expr(input, module, builder, index, ty);
+                self.compile_expr(input, b, node_id, ty);
             }
         }
     }
@@ -362,9 +341,8 @@ impl State {
     pub fn compile_expr(
         &mut self,
         input: &Input,
-        module: &mut Box<dyn CraneliftModule>,
-        builder: &mut FunctionBuilder,
-        index: NodeId,
+        b: &mut FunctionBuilder,
+        node_id: NodeId,
         ty: Type,
     ) -> Val {
         let node = input.node(index);
@@ -400,104 +378,63 @@ impl State {
                     Val::Scalar(builder.ins().iconst(ty, 0))
                 }
             }
-            // Tag::Identifier => {
-            //     let var = self.lookup_var(input, index);
-            //     Val::Scalar(builder.use_var(var))
-            // }
             Tag::Add => {
-                let lhs = self
-                    .compile_expr(input, module, builder, node.lhs, ty)
-                    .value();
-                let rhs = self
-                    .compile_expr(input, module, builder, node.rhs, ty)
-                    .value();
-                dbg!(&lhs, &rhs);
-                Val::Scalar(builder.ins().iadd(lhs, rhs))
+                let (lhs, rhs) = self.compile_children(input, b, node, ty);
+                Val::Scalar(b.ins().iadd(lhs, rhs))
             }
             Tag::Sub => {
-                let lhs = self
-                    .compile_expr(input, module, builder, node.lhs, ty)
-                    .value();
-                let rhs = self
-                    .compile_expr(input, module, builder, node.rhs, ty)
-                    .value();
-                Val::Scalar(builder.ins().isub(lhs, rhs))
+                let (lhs, rhs) = self.compile_children(input, b, node, ty);
+                Val::Scalar(b.ins().isub(lhs, rhs))
             }
             Tag::Div => {
-                let lhs = self
-                    .compile_expr(input, module, builder, node.lhs, ty)
-                    .value();
-                let rhs = self
-                    .compile_expr(input, module, builder, node.rhs, ty)
-                    .value();
-                Val::Scalar(builder.ins().sdiv(lhs, rhs))
+                let (lhs, rhs) = self.compile_children(input, b, node, ty);
+                Val::Scalar(b.ins().sdiv(lhs, rhs))
             }
             Tag::Mul => {
-                let lhs = self
-                    .compile_expr(input, module, builder, node.lhs, ty)
-                    .value();
-                let rhs = self
-                    .compile_expr(input, module, builder, node.rhs, ty)
-                    .value();
-                Val::Scalar(builder.ins().imul(lhs, rhs))
+                let (lhs, rhs) = self.compile_children(input, b, node, ty);
+                Val::Scalar(b.ins().imul(lhs, rhs))
             }
             Tag::Greater => {
-                let lhs = self
-                    .compile_expr(input, module, builder, node.lhs, ty)
-                    .value();
-                let rhs = self
-                    .compile_expr(input, module, builder, node.rhs, ty)
-                    .value();
-                Val::Scalar(builder.ins().icmp(IntCC::SignedGreaterThan, lhs, rhs))
+                let (lhs, rhs) = self.compile_children(input, b, node, ty);
+                Val::Scalar(b.ins().icmp(IntCC::SignedGreaterThan, lhs, rhs))
             }
             Tag::Less => {
-                let lhs = self
-                    .compile_expr(input, module, builder, node.lhs, ty)
-                    .value();
-                let rhs = self
-                    .compile_expr(input, module, builder, node.rhs, ty)
-                    .value();
-                Val::Scalar(builder.ins().icmp(IntCC::SignedLessThan, lhs, rhs))
+                let (lhs, rhs) = self.compile_children(input, b, node, ty);
+                Val::Scalar(b.ins().icmp(IntCC::SignedLessThan, lhs, rhs))
             }
-            Tag::Grouping => self.compile_expr(input, module, builder, node.lhs, ty),
+            Tag::Grouping => self.compile_expr(input, b, node.lhs, ty),
             Tag::IntegerLiteral => {
                 let token_str = input.node_lexeme_offset(node, 0);
                 let value = token_str.parse::<i64>().unwrap();
-                Val::Scalar(builder.ins().iconst(ty, value))
+                Val::Scalar(b.ins().iconst(ty, value))
             }
             Tag::Call => {
-                let mut sig = module.make_signature();
-
+                let mut sig = self.module.make_signature();
                 let function = input.node(node.lhs);
                 let name = input.node_lexeme_offset(function, 0);
-                println!("{}", name);
+
+                // Arguments
                 let arguments = input.node(node.rhs);
                 let mut args = Vec::new();
-                for _ in arguments.lhs..arguments.rhs {
-                    println!("argument");
-                    // sig.params.push(AbiParam::new(ty));
-                }
                 for i in arguments.lhs..arguments.rhs {
                     let index = input.node_index(i);
-                    let mut values = self
-                        .compile_expr(input, module, builder, index, ty)
-                        .values();
+                    let mut values = self.compile_expr(input, b, index, ty).values();
                     for _ in &values {
                         sig.params.push(AbiParam::new(ty));
                     }
                     args.append(&mut values);
                 }
+
                 // Assume one return value.
                 sig.returns.push(AbiParam::new(ty));
-                println!("{}", sig);
-                let callee = module
+
+                let callee = self
+                    .module
                     .declare_function(name, Linkage::Import, &sig)
                     .unwrap();
-                let local_callee = module.declare_func_in_func(callee, builder.func);
-
-                let call = builder.ins().call(local_callee, &args);
-                Val::Scalar(builder.inst_results(call)[0])
-                // let mut sig = return builder.ins().iconst(ty, 20);
+                let local_callee = self.module.declare_func_in_func(callee, b.func);
+                let call = b.ins().call(local_callee, &args);
+                Val::Scalar(b.inst_results(call)[0])
             }
             Tag::Identifier => {
                 let var = self.lookup_var(input, index);
@@ -506,21 +443,20 @@ impl State {
                 val
                 // Val::Scalar(builder.use_var(var.variable()))
             }
-            _ => Val::Scalar(builder.ins().iconst(ty, 0)),
+            _ => Val::Scalar(b.ins().iconst(ty, 0)),
         }
     }
 
-    fn var_to_val(builder: &mut FunctionBuilder, var: &Var) -> Val {
-        match var {
-            Var::Scalar(variable) => Val::Scalar(builder.use_var(*variable)),
-            Var::Aggregate(vars) => {
-                let mut vals = Vec::new();
-                for var in vars {
-                    vals.push(Self::var_to_val(builder, var));
-                }
-                Val::Aggregate(vals)
-            }
-        }
+    fn compile_children(
+        &mut self,
+        input: &Input,
+        b: &mut FunctionBuilder,
+        node: &Node,
+        ty: Type,
+    ) -> (Value, Value) {
+        let lhs = self.compile_expr(input, b, node.lhs, ty).value();
+        let rhs = self.compile_expr(input, b, node.rhs, ty).value();
+        (lhs, rhs)
     }
 
     /// Maps node_id -> Var.
@@ -636,6 +572,14 @@ impl<'a> Input<'a> {
     }
 }
 
+pub struct Generator<'a> {
+    pub builder_ctx: FunctionBuilderContext,
+    pub ctx: codegen::Context,
+    data_ctx: DataContext,
+    input: &'a Input<'a>,
+    pub state: State,
+}
+
 impl<'a> Generator<'a> {
     pub fn new(input: &'a Input<'a>, output_name: String, use_jit: bool) -> Self {
         // let module = CraneliftModule::new(output_name, use_jit);
@@ -661,9 +605,9 @@ impl<'a> Generator<'a> {
             builder_ctx: FunctionBuilderContext::new(),
             ctx: module.make_context(),
             data_ctx: DataContext::new(),
-            module,
             input,
             state: State {
+                module,
                 var_index: 0,
                 variables: HashMap::new(),
                 stack_slots: HashMap::new(),
@@ -672,14 +616,13 @@ impl<'a> Generator<'a> {
     }
 
     ///
-    pub fn init_builder<'b>(
-        func: &'b mut codegen::ir::Function,
-        builder_ctx: &'b mut FunctionBuilderContext,
-        input: &'b Input,
+    pub fn init_signature<'b>(
+        func: &mut codegen::ir::Function,
+        input: &Input,
         parameters: &Node,
         returns: &Node,
         t: Type,
-    ) -> FunctionBuilder<'b> {
+    ) {
         for i in parameters.lhs..parameters.rhs {
             // Tag::Field
             let ni = input.node_index(i);
@@ -697,7 +640,6 @@ impl<'a> Generator<'a> {
             }
             _ => {}
         }
-        FunctionBuilder::new(func, builder_ctx)
     }
 
     fn push_params(input: &Input, node_id: NodeId, params: &mut Vec<AbiParam>, t: Type) {
@@ -753,7 +695,7 @@ impl<'a> Generator<'a> {
             }
         }
         if let Some(id) = main_id {
-            self.module.finalize(id, filename);
+            self.state.module.finalize(id, filename);
         }
         println!("Finalized {:?}", func_ids);
     }
@@ -761,7 +703,7 @@ impl<'a> Generator<'a> {
     ///
     pub fn compile_function_decl(&mut self, index: u32) -> FuncId {
         dbg!("compile_function_decl");
-        let int = self.module.target_config().pointer_type();
+        let int = self.state.module.target_config().pointer_type();
         let node = self.input.node(index);
         dbg!(self.input.node_lexeme_offset(node, -1));
         assert_eq!(node.tag, Tag::FunctionDecl);
@@ -770,20 +712,14 @@ impl<'a> Generator<'a> {
         let parameters = self.input.node(prototype.lhs);
         assert_eq!(parameters.tag, Tag::Parameters);
         let returns = self.input.node(prototype.rhs);
-        let mut builder = Self::init_builder(
-            &mut self.ctx.func,
-            &mut self.builder_ctx,
-            self.input,
-            parameters,
-            returns,
-            int,
-        );
-        let entry_block = builder.create_block();
-        builder.append_block_params_for_function_params(entry_block);
-        builder.switch_to_block(entry_block);
-        builder.seal_block(entry_block);
+        Self::init_signature(&mut self.ctx.func, self.input, parameters, returns, int);
+        let mut b = FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_ctx);
+        let entry_block = b.create_block();
+        b.append_block_params_for_function_params(entry_block);
+        b.switch_to_block(entry_block);
+        b.seal_block(entry_block);
 
-        dbg!(builder.block_params(entry_block).len());
+        dbg!(b.block_params(entry_block).len());
 
         // Define parameters as local variables.
         let mut scalar_count = 0;
@@ -802,19 +738,22 @@ impl<'a> Generator<'a> {
         let body = self.input.node(node.rhs);
         for i in body.lhs..body.rhs {
             let index = self.input.node_index(i);
-            self.state
-                .compile_stmt(&self.input, &mut self.module, &mut builder, index, int);
+            self.state.compile_stmt(&self.input, &mut b, index, int);
         }
 
-        builder.finalize();
+        b.finalize();
         let name = self.input.tree.node_lexeme_offset(node, -1);
-        println!("{} {}", name, builder.func.display());
+        println!("{} {}", name, b.func.display());
         let id = self
+            .state
             .module
             .declare_function(name, Linkage::Export, &self.ctx.func.signature)
             .unwrap();
-        self.module.define_function(id, &mut self.ctx).unwrap();
-        self.module.clear_context(&mut self.ctx);
+        self.state
+            .module
+            .define_function(id, &mut self.ctx)
+            .unwrap();
+        self.state.module.clear_context(&mut self.ctx);
         id
     }
 }
