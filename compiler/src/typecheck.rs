@@ -1,4 +1,5 @@
 use crate::analyze::Definition;
+use crate::parse::NodeId;
 use crate::parse::{Node, Tag, Tree};
 use color_eyre::eyre::{eyre, Result, WrapErr};
 use std::collections::HashMap;
@@ -121,15 +122,15 @@ impl<'a> Typechecker<'a> {
     }
 
     ///
-    fn infer_node(&mut self, index: u32) -> Result<TypeId> {
-        if index == 0 {
+    fn infer_node(&mut self, node_id: NodeId) -> Result<TypeId> {
+        if node_id == 0 {
             return Ok(0);
         }
-        if self.node_types[index as usize] != 0 {
-            return Ok(self.node_types[index as usize]);
+        if self.node_types[node_id as usize] != 0 {
+            return Ok(self.node_types[node_id as usize]);
         }
-        let node = self.tree.node(index);
-        println!("[{}] - {:?}", index, node.tag);
+        let node = self.tree.node(node_id);
+        println!("[{}] - {:?}", node_id, node.tag);
         let result = match node.tag {
             Tag::Access => {
                 let ltype = self.infer_node(node.lhs)?;
@@ -177,7 +178,7 @@ impl<'a> Typechecker<'a> {
                 // Prototype
                 let fn_type = self.infer_node(node.lhs)?;
                 // Immediately set the declaration's type to handle recursion.
-                self.set_node_type(index, fn_type);
+                self.set_node_type(node_id, fn_type);
                 // Body
                 self.infer_node(node.rhs)?;
                 fn_type
@@ -187,7 +188,7 @@ impl<'a> Typechecker<'a> {
                 TypeIndex::Boolean as TypeId
             }
             Tag::Identifier => {
-                let decl = self.definitions.get(&index);
+                let decl = self.definitions.get(&node_id);
                 println!("{:?}", decl);
                 if let Some(lookup) = decl {
                     match lookup {
@@ -231,7 +232,7 @@ impl<'a> Typechecker<'a> {
                 })
             }
             Tag::Struct => {
-                println!("Struct: {:?}", self.tree.node_lexeme(index));
+                println!("Struct: {:?}", self.tree.node_lexeme(node_id));
                 let mut fields = Vec::new();
                 for i in node.lhs..node.rhs {
                     self.infer_node(self.tree.indices[i as usize])?;
@@ -264,8 +265,8 @@ impl<'a> Typechecker<'a> {
                 0
             }
         };
-        self.set_node_type(index, result);
-        return Ok(self.node_types[index as usize]);
+        self.set_node_type(node_id, result);
+        return Ok(self.node_types[node_id as usize]);
     }
 
     ///
