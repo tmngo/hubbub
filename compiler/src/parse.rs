@@ -292,6 +292,18 @@ fn token_to_operator(tag: TokenTag) -> Operator {
     }
 }
 
+/// The body should return a NodeId.
+macro_rules! parse_until {
+    ($self:expr, $cond:expr, $body:block) => {{
+        let stack_top = $self.stack.len();
+        while $cond {
+            let node: NodeId = $body;
+            $self.stack.push(node);
+        }
+        $self.add_indices(stack_top)
+    }};
+}
+
 impl Parser {
     pub fn new(source: &str, tokens: Vec<Token>) -> Self {
         Self {
@@ -326,12 +338,9 @@ impl Parser {
 
     /// program = module*
     fn parse_modules(&mut self) -> Result<Range<NodeId>> {
-        let stack_top = self.stack.len();
-        while self.index < self.tree.tokens.len() - 1 {
-            let module = self.parse_module()?;
-            self.stack.push(module);
-        }
-        let range = self.add_indices(stack_top);
+        let range = parse_until!(self, self.index < self.tree.tokens.len() - 1, {
+            self.parse_module()?
+        });
         self.tree.nodes[0] = Node {
             tag: Tag::Root,
             token: 0,
@@ -344,9 +353,9 @@ impl Parser {
     /// module = root-decl*
     fn parse_module(&mut self) -> Result<NodeId> {
         self.match_token(TokenTag::Newline);
-        let range = self
-            .parse_until(TokenTag::Eof, Self::parse_root_declaration)
-            .wrap_err("Error parsing module declarations")?;
+        let range = parse_until!(self, self.token_isnt(TokenTag::Eof), {
+            self.parse_root_declaration()?
+        });
         self.expect_token(TokenTag::Eof)?;
         self.add_node(Tag::Module, 0, range.start, range.end)
     }
@@ -438,9 +447,13 @@ impl Parser {
     fn parse_decl_function(&mut self) -> Result<NodeId> {
         self.expect_token(TokenTag::Identifier)?; // identifier
         let token_index = self.expect_token(TokenTag::ColonColon)?; // '::'
-        let prototype = self.parse_prototype()?;
+        let prototype = self
+            .parse_prototype()
+            .wrap_err("Error parsing function prototype")?;
         self.expect_token(TokenTag::Newline)?;
-        let body = self.parse_stmt_body(0)?;
+        let body = self
+            .parse_stmt_body(0)
+            .wrap_err("Error parsing function body")?;
         self.add_node(Tag::FunctionDecl, token_index, prototype, body)
     }
 
@@ -458,11 +471,11 @@ impl Parser {
     /// parameters =
     fn parse_parameters(&mut self) -> Result<NodeId> {
         let token = self.expect_token(TokenTag::ParenL)?;
-        let range = self.parse_until(TokenTag::ParenR, |s: &mut Self| -> Result<NodeId> {
-            let field = s.parse_field()?;
-            s.match_token(TokenTag::Comma);
-            Ok(field)
-        })?;
+        let range = parse_until!(self, self.token_isnt(TokenTag::ParenR), {
+            let field = self.parse_field()?;
+            self.match_token(TokenTag::Comma);
+            field
+        });
         self.expect_token(TokenTag::ParenR)?;
         self.add_node(Tag::Parameters, token, range.start, range.end)
     }
@@ -470,11 +483,11 @@ impl Parser {
     /// type-list = expr-base | '(' (expr-base ',')* ')'
     fn parse_type_list(&mut self) -> Result<NodeId> {
         if self.match_token(TokenTag::ParenL) {
-            let range = self.parse_until(TokenTag::ParenR, |s: &mut Self| -> Result<NodeId> {
-                let type_expr = s.parse_expr_base();
-                s.match_token(TokenTag::Comma);
+            let range = parse_until!(self, self.token_isnt(TokenTag::ParenR), {
+                let type_expr = self.parse_expr_base()?;
+                self.match_token(TokenTag::Comma);
                 type_expr
-            })?;
+            });
             self.expect_token(TokenTag::ParenR)?;
             self.add_node(Tag::Expressions, 0, range.start, range.end)
         } else {
@@ -512,11 +525,11 @@ impl Parser {
         self.expect_token(TokenTag::ColonColon)?;
         let token = self.expect_token(TokenTag::Struct)?;
         self.match_token(TokenTag::Newline);
-        let range = self.parse_until(TokenTag::End, |s: &mut Self| -> Result<NodeId> {
-            let field = s.parse_field()?;
-            s.expect_tokens(&[TokenTag::Newline, TokenTag::Semicolon])?;
-            Ok(field)
-        })?;
+        let range = parse_until!(self, self.token_isnt(TokenTag::End), {
+            let field = self.parse_field()?;
+            self.expect_tokens(&[TokenTag::Newline, TokenTag::Semicolon])?;
+            field
+        });
         self.expect_token_and_newline(TokenTag::End)?;
         self.add_node(Tag::Struct, token, range.start, range.end)
     }
@@ -603,26 +616,16 @@ impl Parser {
 
     /// body = stmt* 'end'
     fn parse_stmt_body(&mut self, token: TokenId) -> Result<NodeId> {
-        let stack_top = self.stack.len();
-        while self.token_isnt(TokenTag::End) {
-            let stmt = self.parse_stmt()?;
-            self.stack.push(stmt);
-        }
+        let range = parse_until!(self, self.token_isnt(TokenTag::End), { self.parse_stmt()? });
         self.expect_token_and_newline(TokenTag::End)?; // 'end'
-        if self.stack.len() == stack_top {
-            self.add_leaf(Tag::BlockDirect, token)
-        } else {
-            let range = self.add_indices(stack_top);
             self.add_node(Tag::Block, token, range.start, range.end)
         }
-    }
 
     /// stmt-if
     fn parse_stmt_if(&mut self) -> Result<NodeId> {
         let if_token = self.current_token();
-        let outer_stack_top = self.stack.len();
 
-        while self.token_isnt(TokenTag::End) {
+        let range = parse_until!(self, self.token_isnt(TokenTag::End), {
             // Parse condition
             let mut else_if_token = self.shift_token(); // 'else' | 'if'
 
@@ -640,21 +643,18 @@ impl Parser {
             self.match_token(TokenTag::Newline);
 
             // Parse body
-            let stack_top = self.stack.len();
-            while self.token_isnt(TokenTag::Else) && self.token_isnt(TokenTag::End) {
-                let stmt = self.parse_stmt()?;
-                self.stack.push(stmt);
-            }
-            let range = self.add_indices(stack_top);
+            let range = parse_until!(
+                self,
+                self.token_isnt(TokenTag::Else) && !self.token_is(TokenTag::End),
+                { self.parse_stmt()? }
+            );
             let block = self.add_node(Tag::Block, else_if_token, range.start, range.end)?;
 
-            let if_stmt = self.add_node(Tag::If, else_if_token, condition, block)?;
-            self.stack.push(if_stmt);
-        }
+            self.add_node(Tag::If, else_if_token, condition, block)?
+        });
 
         self.expect_token_and_newline(TokenTag::End)?;
 
-        let range = self.add_indices(outer_stack_top);
         if range.end - range.start == 1 {
             return Ok(self.tree.node_index(range.start));
         }
@@ -666,13 +666,8 @@ impl Parser {
         let token = self.shift_token();
         let condition = self.parse_expr()?;
         self.match_token(TokenTag::Newline);
-        let stack_top = self.stack.len();
-        while self.token_isnt(TokenTag::End) {
-            let stmt = self.parse_stmt()?;
-            self.stack.push(stmt);
-        }
+        let range = parse_until!(self, self.token_isnt(TokenTag::End), { self.parse_stmt()? });
         self.expect_token_and_newline(TokenTag::End)?;
-        let range = self.add_indices(stack_top);
         let body = self.add_node(Tag::Block, 0, range.start, range.end)?;
         self.add_node(Tag::While, token, condition, body)
     }
@@ -788,12 +783,11 @@ impl Parser {
                 }
                 TokenTag::ParenL => {
                     let token = self.shift_token();
-                    let range =
-                        self.parse_until(TokenTag::ParenR, |s: &mut Self| -> Result<NodeId> {
-                            let expr = s.parse_expr()?;
-                            s.match_token(TokenTag::Comma);
-                            Ok(expr)
-                        })?;
+                    let range = parse_until!(self, self.token_isnt(TokenTag::ParenR), {
+                        let expr = self.parse_expr()?;
+                        self.match_token(TokenTag::Comma);
+                        expr
+                    });
                     self.expect_token(TokenTag::ParenR)?;
                     let expr_list = self.add_node(Tag::Expressions, 0, range.start, range.end)?;
                     return self.add_node(Tag::Call, token, lhs, expr_list);
@@ -811,13 +805,11 @@ impl Parser {
                 let identifier = self.add_leaf(Tag::Identifier, token);
                 if self.match_token(TokenTag::BraceL) {
                     // IDENTIFIER '{' expr-list '}'
-                    let stack_top = self.stack.len();
-                    while self.token_isnt(TokenTag::BraceR) {
+                    let range = parse_until!(self, self.token_isnt(TokenTag::BraceR), {
                         let expr = self.parse_expr()?;
                         self.match_token(TokenTag::Comma);
-                        self.stack.push(expr);
-                    }
-                    let range = self.add_indices(stack_top);
+                        expr
+                    });
 
                     self.expect_token(TokenTag::BraceR)?;
                     return self.add_node(Tag::Type, token, range.start, range.end);
@@ -860,30 +852,17 @@ impl Parser {
         self.add_node(tag, token, 0, 0)
     }
 
-    /// Returns a half-open range of node indices.
-    fn parse_until<F>(&mut self, tag: TokenTag, parse_fn: F) -> Result<Range<NodeId>>
-    where
-        F: Fn(&mut Self) -> Result<NodeId>,
-    {
-        let stack_top = self.stack.len();
-        while self.token_isnt(tag) {
-            let node = parse_fn(self)?;
-            self.stack.push(node);
-        }
-        Ok(self.add_indices(stack_top))
-    }
-
-    // fn parse_span_while<C, F>(&mut self, cond: C, tag: TokenTag, parse_fn: F) -> Range<u32>
+    // fn parse_while<C, F>(&mut self, cond: C, parse_fn: F) -> Result<Range<u32>>
     // where
-    //     C: Fn(&mut Self) -> bool,
-    //     F: Fn(&mut Self) -> u32,
+    //     C: Fn(&Self) -> bool,
+    //     F: Fn(&mut Self) -> Result<NodeId>,
     // {
     //     let stack_top = self.stack.len();
     //     while cond(self) {
-    //         let node = parse_fn(self);
+    //         let node = parse_fn(self)?;
     //         self.stack.push(node);
     //     }
-    //     self.add_indices(stack_top)
+    //     Ok(self.add_indices(stack_top))
     // }
 
     fn add_indices(&mut self, stack_top: usize) -> Range<u32> {
