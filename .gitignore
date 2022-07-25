@@ -2,7 +2,7 @@
 Cargo.lock
 target/
 
-/notes.md
-/*.exe
-/*.lib
-/*.obj
+/notes/
+*.exe
+*.lib
+*.obj
