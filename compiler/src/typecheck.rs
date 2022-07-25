@@ -181,8 +181,8 @@ impl<'a> Typechecker<'a> {
                 }
             }
             Tag::Field => {
-                println!("Field: {:?}", self.tree.node_lexeme(node.lhs));
-                self.infer_node(node.lhs)?
+                println!("Field: {:?}", self.tree.node_lexeme(node.rhs));
+                self.infer_node(node.rhs)?
             }
             Tag::FunctionDecl => {
                 // Prototype
@@ -245,7 +245,7 @@ impl<'a> Typechecker<'a> {
                 println!("Struct: {:?}", self.tree.node_lexeme(node_id));
                 let mut fields = Vec::new();
                 for i in node.lhs..node.rhs {
-                    self.infer_node(self.tree.indices[i as usize])?;
+                    self.infer_node(self.tree.node_index(i))?;
                 }
                 for i in node.lhs..node.rhs {
                     let ni = self.tree.node_index(i) as usize;

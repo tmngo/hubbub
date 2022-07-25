@@ -177,7 +177,8 @@ impl<'a> Analyzer<'a> {
                     let mut scope = Scope::new(0);
                     for i in node.lhs..node.rhs {
                         let ni = self.tree.node_index(i);
-                        let field_name = self.tree.node_lexeme(ni);
+                        let identifier_id = self.tree.node(ni).lhs;
+                        let field_name = self.tree.node_lexeme(identifier_id);
                         if let Err(_) = scope.symbols.try_insert(field_name, i - node.lhs) {
                             return Err(eyre!(" - Field \"{}\" is already defined.", name));
                         }
@@ -213,6 +214,13 @@ impl<'a> Analyzer<'a> {
     // }
 
     fn resolve_range(&mut self, node: &Node) -> Result<()> {
+        println!(
+            "Range: {:?} / {:?} ({}, {})",
+            node.tag,
+            self.tree.node_token(node).tag,
+            node.lhs,
+            node.rhs
+        );
         for i in node.lhs..node.rhs {
             let ni = self.tree.node_index(i);
             self.resolve_node(ni)?;
@@ -292,9 +300,10 @@ impl<'a> Analyzer<'a> {
                 self.exit_scope();
             }
             Tag::Field => {
-                let name = self.tree.node_lexeme(id);
+                let name = self.tree.node_lexeme(node.lhs);
                 self.define_symbol(name, id)?;
-                self.resolve_node(node.lhs)?;
+                // Resolve type_expr
+                self.resolve_node(node.rhs)?;
             }
             Tag::Identifier => {
                 let name = self.tree.node_lexeme(id);
@@ -352,14 +361,18 @@ impl<'a> Analyzer<'a> {
         match self.tree.node(id).tag {
             Tag::Access | Tag::Identifier => {
                 // identifier -> variable decl / access -> field
-                let lookup = self.definitions.get(&id).expect(&format!(
+                let var_def = self.definitions.get(&id).expect(&format!(
                     "failed to find definition for identifier \"{:?}\".",
                     self.tree.node_lexeme(id)
                 ));
-                if let Definition::User(decl_id) = lookup {
-                    let def_node = self.tree.node(*decl_id);
+                if let Definition::User(type_def) = var_def {
+                    let def_node = self.tree.node(*type_def);
                     // variable decl -> struct decl / field -> struct decl
-                    let type_lookup = self.definitions.get(&def_node.lhs).expect(&format!(
+                    let type_node_id = match def_node.tag {
+                        Tag::Field => def_node.rhs,
+                        _ => def_node.lhs,
+                    };
+                    let type_lookup = self.definitions.get(&type_node_id).expect(&format!(
                         "failed to find struct definition for variable \"{}\".",
                         self.tree.node_lexeme(def_node.lhs)
                     ));

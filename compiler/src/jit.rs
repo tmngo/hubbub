@@ -774,7 +774,8 @@ impl<'a> Generator<'a> {
         loop {
             if let Some(node_id) = stack.pop() {
                 let field_node = input.node(node_id);
-                if let Definition::User(def_id) = input.get_definition(field_node.lhs) {
+                let type_node_id = field_node.rhs;
+                if let Definition::User(def_id) = input.get_definition(type_node_id) {
                     let def_node = input.node(*def_id);
                     if def_node.tag == Tag::Struct {
                         for i in def_node.lhs..def_node.rhs {

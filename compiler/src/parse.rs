@@ -458,18 +458,13 @@ impl Parser {
     /// parameters =
     fn parse_parameters(&mut self) -> Result<NodeId> {
         let token = self.expect_token(TokenTag::ParenL)?;
-        let range = self.parse_until(TokenTag::ParenR, Self::parse_parameter)?;
+        let range = self.parse_until(TokenTag::ParenR, |s: &mut Self| -> Result<NodeId> {
+            let field = s.parse_field()?;
+            s.match_token(TokenTag::Comma);
+            Ok(field)
+        })?;
         self.expect_token(TokenTag::ParenR)?;
         self.add_node(Tag::Parameters, token, range.start, range.end)
-    }
-
-    // parameter
-    fn parse_parameter(&mut self) -> Result<NodeId> {
-        let identifier = self.expect_token(TokenTag::Identifier)?;
-        self.expect_token(TokenTag::Colon)?;
-        let type_expr = self.parse_expr_base()?;
-        self.match_token(TokenTag::Comma);
-        self.add_node(Tag::Field, identifier, type_expr, 0)
     }
 
     /// type-list = expr-base | '(' (expr-base ',')* ')'
@@ -517,18 +512,22 @@ impl Parser {
         self.expect_token(TokenTag::ColonColon)?;
         let token = self.expect_token(TokenTag::Struct)?;
         self.match_token(TokenTag::Newline);
-        let range = self.parse_until(TokenTag::End, Self::parse_field)?;
+        let range = self.parse_until(TokenTag::End, |s: &mut Self| -> Result<NodeId> {
+            let field = s.parse_field()?;
+            s.expect_tokens(&[TokenTag::Newline, TokenTag::Semicolon])?;
+            Ok(field)
+        })?;
         self.expect_token_and_newline(TokenTag::End)?;
         self.add_node(Tag::Struct, token, range.start, range.end)
     }
 
     // field = identifier ':' type ';'
     fn parse_field(&mut self) -> Result<NodeId> {
-        let identifier = self.expect_token(TokenTag::Identifier)?;
-        self.expect_token(TokenTag::Colon)?;
+        let identifier_token = self.expect_token(TokenTag::Identifier)?;
+        let identifier = self.add_leaf(Tag::Identifier, identifier_token)?;
+        let colon = self.expect_token(TokenTag::Colon)?;
         let type_expr = self.parse_expr_base()?;
-        self.expect_tokens(&[TokenTag::Newline, TokenTag::Semicolon])?;
-        self.add_node(Tag::Field, identifier, type_expr, 0)
+        self.add_node(Tag::Field, colon, identifier, type_expr)
     }
 
     /**************************************************************************/
@@ -984,7 +983,7 @@ impl Parser {
             }
         }
         Err(eyre!(
-            "Error: expected tokens {:?}, got {:?}. Token index: {:?}.",
+            "Expected one of {:?}, got {:?}. Token index: {:?}.",
             tags,
             self.current_token_tag(),
             self.index
@@ -1137,9 +1136,6 @@ impl Tree {
                 write!(f, "({:?}", tag);
                 if node.lhs != 0 {
                     write!(f, " ");
-                    if tag == Tag::Field {
-                        write!(f, "{} ", self.node_lexeme(id));
-                    }
                     self.print_node(f, node.lhs, indentation);
                 }
                 if node.rhs != 0 && tag != Tag::Grouping {
