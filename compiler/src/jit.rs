@@ -148,11 +148,11 @@ fn test_val_values() {
 }
 
 pub trait CraneliftModule: Module {
-    fn finalize(self: Box<Self>, id: FuncId, output_file: &Path);
+    fn finalize(self: Box<Self>, id: FuncId, output_file: &Path) -> i64;
 }
 
 impl CraneliftModule for JITModule {
-    fn finalize(mut self: Box<Self>, id: FuncId, _output_file: &Path) {
+    fn finalize(mut self: Box<Self>, id: FuncId, _output_file: &Path) -> i64 {
         self.finalize_definitions();
         let main = self.get_finalized_function(id);
         // let main: fn(i64, i64) -> i64 = unsafe { mem::transmute(main) };
@@ -161,14 +161,16 @@ impl CraneliftModule for JITModule {
         let result = main();
         // let result = code_fn(input, input);
         println!("JIT result: {}", result);
+        result
     }
 }
 
 impl CraneliftModule for ObjectModule {
-    fn finalize(self: Box<Self>, _id: FuncId, output_file: &Path) {
+    fn finalize(self: Box<Self>, _id: FuncId, output_file: &Path) -> i64 {
         let product = self.finish();
         let bytes = product.emit().unwrap();
         fs::write(output_file, bytes).unwrap();
+        0
     }
 }
 
@@ -719,7 +721,10 @@ impl<'a> Generator<'a> {
             .unwrap();
 
         let module: Box<dyn CraneliftModule> = if use_jit {
-            let jit_builder = JITBuilder::new(cranelift_module::default_libcall_names()).unwrap();
+            let mut jit_builder =
+                JITBuilder::new(cranelift_module::default_libcall_names()).unwrap();
+            let print_int_addr = print_internal as *const u8;
+            jit_builder.symbol("print_int", print_int_addr);
             Box::new(JITModule::new(jit_builder))
         } else {
             let object_builder =
@@ -793,7 +798,7 @@ impl<'a> Generator<'a> {
     }
 
     ///
-    pub fn compile_nodes(mut self, filename: &Path) {
+    pub fn compile_nodes(mut self, filename: &Path) -> Option<i64> {
         let root = &self.input.tree.nodes[0];
         // println!("{:?}", root.tag);
         let mut func_ids = Vec::new();
@@ -823,9 +828,10 @@ impl<'a> Generator<'a> {
             }
         }
         if let Some(id) = main_id {
-            self.state.module.finalize(id, filename);
+            return Some(self.state.module.finalize(id, filename));
         }
         println!("Finalized {:?}", func_ids);
+        None
     }
 
     ///
@@ -896,4 +902,9 @@ impl<'a> Generator<'a> {
         self.state.module.clear_context(&mut self.ctx);
         id
     }
+}
+
+extern "C" fn print_internal(value: isize) -> isize {
+    println!("{}", value);
+    0
 }

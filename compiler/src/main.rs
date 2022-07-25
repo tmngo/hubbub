@@ -1,4 +1,5 @@
 #![feature(map_try_insert)]
+#![feature(option_result_contains)]
 
 use color_eyre::eyre::{eyre, Result, WrapErr};
 use std::path::Path;
@@ -21,7 +22,7 @@ fn main() -> Result<()> {
         .display_env_section(false)
         // .theme(color_eyre::config::Theme::new())
         // .display_location_section(false)
-        .capture_span_trace_by_default(true)
+        // .capture_span_trace_by_default(true)
         .install()?;
     let args: Vec<String> = std::env::args().collect();
     if args.len() == 1 {
@@ -79,8 +80,9 @@ fn main() -> Result<()> {
     };
 
     println!("--- BEGIN GENERATE");
-    let jit_generator = jit::Generator::new(&input, "jit_file".to_string(), true);
-    jit_generator.compile(Path::new("jit_file"));
+    // let jit_generator = jit::Generator::new(&input, "jit_file".to_string(), true);
+    // jit_generator.compile(Path::new("jit_file"));
+    // jit_generator.compile_nodes(Path::new(&obj_filename));
     let object_generator = jit::Generator::new(&input, "object_file".to_string(), false);
     // object_generator.compile(Path::new("object_file"));
     // object_generator.compile_nodes(nodes, indices, Path::new("main.o"));
