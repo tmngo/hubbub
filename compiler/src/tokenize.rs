@@ -208,7 +208,13 @@ impl<'a> Tokenizer<'a> {
                         ' ' | '\r' => {
                             self.index += 1;
                         }
-                        '\n' => self.start(Tag::Newline),
+                        '\n' => {
+                            if last != Tag::Newline {
+                                self.start(Tag::Newline);
+                            } else {
+                                self.index += 1;
+                            }
+                        }
                         // Identifier
                         'a'..='z' | 'A'..='Z' | '_' => self.start(Tag::Identifier),
                         // Unambiguous single-character tokens
