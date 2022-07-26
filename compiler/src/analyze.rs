@@ -289,7 +289,7 @@ impl<'a> Analyzer<'a> {
                 self.resolve_range(node)?;
                 self.exit_scope();
             }
-            Tag::Expressions | Tag::IfElse | Tag::Parameters | Tag::Struct => {
+            Tag::Expressions | Tag::IfElse | Tag::Return | Tag::Struct => {
                 self.resolve_range(node)?;
             }
             Tag::FunctionDecl => {

@@ -1,6 +1,6 @@
-mutate :: (ptr: Pointer{Int}, x: Int) -> Int
+mutate :: (ptr: Pointer{Int}, x: Int)
     @ptr = x
-    return 0
+    return
 end
 
 main :: () -> Int

@@ -7,7 +7,7 @@ use std::path::Path;
 
 use crate::analyze::Definition;
 use crate::parse::{Node, Tag, Tree};
-use crate::typecheck::Type as Typ;
+use crate::typecheck::{Type as Typ, TypeId, TypeIndex};
 use cranelift::codegen;
 use cranelift::codegen::ir::StackSlot;
 use cranelift::prelude::isa;
@@ -334,9 +334,13 @@ impl State {
                 self.stack_vars.insert(node_id, var);
             }
             Tag::Return => {
-                println!("Return");
-                let val = self.compile_expr(input, b, node.lhs, ty).value();
-                b.ins().return_(&[val]);
+                let mut return_values = Vec::new();
+                for i in node.lhs..node.rhs {
+                    let ni = input.node_index(i);
+                    let val = self.compile_expr(input, b, ni, ty).value();
+                    return_values.push(val);
+                }
+                b.ins().return_(&return_values[..]);
             }
             Tag::While => {
                 let condition = self.compile_expr(input, b, node.lhs, ty).value();
@@ -488,7 +492,10 @@ impl State {
                 }
 
                 // Assume one return value.
+                let return_type = input.type_id(node_id);
+                if return_type != TypeIndex::Void as TypeId {
                 sig.returns.push(AbiParam::new(ty));
+                }
 
                 let callee = self
                     .module
@@ -496,7 +503,11 @@ impl State {
                     .unwrap();
                 let local_callee = self.module.declare_func_in_func(callee, b.func);
                 let call = b.ins().call(local_callee, &args);
+                if return_type != TypeIndex::Void as TypeId {
                 Val::Scalar(b.inst_results(call)[0])
+                } else {
+                    Val::Scalar(b.ins().iconst(ty, 0))
+                }
             }
             Tag::Identifier => {
                 // Local variable

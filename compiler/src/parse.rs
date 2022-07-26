@@ -562,8 +562,16 @@ impl Parser {
             TokenTag::If => self.parse_stmt_if(),
             TokenTag::Return => {
                 let token = self.shift_token();
+                let range = parse_until!(
+                    self,
+                    self.token_isnt(TokenTag::Newline) && !self.token_is(TokenTag::Semicolon),
+                    {
                 let expr = self.parse_expr()?;
-                let node = self.add_node(Tag::Return, token, expr, 0);
+                        self.match_token(TokenTag::Comma);
+                        expr
+                    }
+                );
+                let node = self.add_node(Tag::Return, token, range.start, range.end);
                 self.expect_tokens(&[TokenTag::Newline, TokenTag::Semicolon])?;
                 node
             }
@@ -1102,7 +1110,7 @@ impl Tree {
                 write!(f, ")");
             }
             // Multiple children, single line.
-            Tag::Type => {
+            Tag::Type | Tag::Return => {
                 write!(f, "({:?}", tag);
                 for i in node.lhs..node.rhs {
                     write!(f, " ");

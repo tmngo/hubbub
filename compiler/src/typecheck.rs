@@ -42,7 +42,7 @@ pub enum Type {
 
 impl Type {}
 
-type TypeId = usize;
+pub type TypeId = usize;
 
 pub enum TypeIndex {
     Void,
@@ -160,9 +160,12 @@ impl<'a> Typechecker<'a> {
             | Tag::BitwiseAnd
             | Tag::BitwiseOr
             | Tag::BitwiseXor => self.infer_binary_node(node.lhs, node.rhs)?,
-            Tag::Block | Tag::Expressions | Tag::IfElse | Tag::Module | Tag::Parameters => {
-                self.infer_range(&node)?
-            }
+            Tag::Block
+            | Tag::Expressions
+            | Tag::IfElse
+            | Tag::Module
+            | Tag::Parameters
+            | Tag::Return => self.infer_range(&node)?,
             Tag::Call => {
                 let ltype = self.infer_node(node.lhs)?;
                 self.infer_node(node.rhs)?;
