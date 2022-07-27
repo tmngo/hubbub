@@ -80,13 +80,9 @@ fn main() -> Result<()> {
     };
 
     println!("--- BEGIN GENERATE");
-    // let jit_generator = jit::Generator::new(&input, "jit_file".to_string(), true);
-    // jit_generator.compile(Path::new("jit_file"));
-    // jit_generator.compile_nodes(Path::new(&obj_filename));
-    let object_generator = jit::Generator::new(&input, "object_file".to_string(), false);
-    // object_generator.compile(Path::new("object_file"));
-    // object_generator.compile_nodes(nodes, indices, Path::new("main.o"));
-    object_generator.compile_nodes(Path::new(&obj_filename));
+    let use_jit = args.len() == 3 && args[2] == "-j";
+    let generator = jit::Generator::new(&input, "object_file".to_string(), use_jit);
+    generator.compile_nodes(Path::new(&obj_filename));
     println!("--- END GENERATE\n");
 
     link::link(&obj_filename, &exe_filename);

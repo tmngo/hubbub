@@ -155,12 +155,10 @@ impl CraneliftModule for JITModule {
     fn finalize(mut self: Box<Self>, id: FuncId, _output_file: &Path) -> i64 {
         self.finalize_definitions();
         let main = self.get_finalized_function(id);
-        // let main: fn(i64, i64) -> i64 = unsafe { mem::transmute(main) };
-        // let result = main(3, 4);
         let main: fn() -> i64 = unsafe { mem::transmute(main) };
+        println!("--- JIT output:");
         let result = main();
-        // let result = code_fn(input, input);
-        println!("JIT result: {}", result);
+        println!("--- JIT result: {}", result);
         result
     }
 }
