@@ -1,17 +1,29 @@
 mutate :: (ptr: Pointer{Int}, x: Int)
-    @ptr = x
+    ptr@ = x
     return
 end
 
+Wrapper :: struct
+    ptr: Pointer{Int}
+end
+
 main :: () -> Int
-    x := 6
-    p := &x
-    print_int(x)
-    print_int(p)
-    print_int(@p)
-    @p = 3
-    print_int(x)
-    mutate(p, 5)
-    print_int(x)
+    value := 10
+    p := &value
+    
+    w: Wrapper
+    w.ptr = p
+
+    print_int(value)
+
+    p@ = 30
+    print_int(p@)
+
+    p@ = 40
+    print_int(w.ptr@)
+
+    mutate(p, 50)
+    print_int(value)
+
     return 0
 end

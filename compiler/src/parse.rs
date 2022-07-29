@@ -748,7 +748,6 @@ impl Parser {
         let tag;
         match self.current_token_tag() {
             TokenTag::Ampersand => tag = Tag::Address,
-            TokenTag::At => tag = Tag::Dereference,
             TokenTag::Bang => tag = Tag::Not,
             TokenTag::Minus => tag = Tag::Negation,
             TokenTag::Tilde => tag = Tag::BitwiseNot,
@@ -770,6 +769,11 @@ impl Parser {
         let mut lhs = self.parse_expr_base()?;
         loop {
             match self.current_token_tag() {
+                TokenTag::At => {
+                    let token = self.shift_token();
+                    lhs = self.add_node(Tag::Dereference, token, lhs, 0)?;
+                    continue;
+                }
                 TokenTag::Bang => {
                     let token = self.shift_token();
                     lhs = self.add_node(Tag::Factorial, token, lhs, 0)?;
