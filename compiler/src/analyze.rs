@@ -175,6 +175,7 @@ impl<'a> Analyzer<'a> {
                     );
                     self.define_symbol(name, index)?;
                     let mut scope = Scope::new(0);
+                    // Collect field names
                     for i in node.lhs..node.rhs {
                         let ni = self.tree.node_index(i);
                         let identifier_id = self.tree.node(ni).lhs;
@@ -234,9 +235,10 @@ impl<'a> Analyzer<'a> {
         }
         let node = &self.tree.node(id);
         println!(
-            "Node [{}]: {:?} / {:?} ({}, {})",
+            "Node [{}]: {:?} {:?} / {:?} ({}, {})",
             id,
             node.tag,
+            self.tree.node_lexeme(id),
             self.tree.node_token(node).tag,
             node.lhs,
             node.rhs
@@ -299,9 +301,17 @@ impl<'a> Analyzer<'a> {
                 self.resolve_range(body)?;
                 self.exit_scope();
             }
+            Tag::Parameters => {
+                for i in node.lhs..node.rhs {
+                    let field_id = self.tree.node_index(i);
+                    let field = self.tree.node(field_id);
+                    let name = self.tree.node_lexeme(field.lhs);
+                    self.define_symbol(name, field_id)?;
+                    // Resolve type_expr
+                    self.resolve_node(field_id)?;
+                }
+            }
             Tag::Field => {
-                let name = self.tree.node_lexeme(node.lhs);
-                self.define_symbol(name, id)?;
                 // Resolve type_expr
                 self.resolve_node(node.rhs)?;
             }
@@ -344,7 +354,7 @@ impl<'a> Analyzer<'a> {
                 self.resolve_range(node)?;
             }
             Tag::VariableDecl => {
-                let name = self.tree.node_lexeme_offset(node, -1);
+                let name = self.tree.node_lexeme(node.token);
                 self.define_symbol(name, id)?;
                 self.resolve_node(node.lhs)?;
                 self.resolve_node(node.rhs)?;
@@ -357,6 +367,7 @@ impl<'a> Analyzer<'a> {
         Ok(())
     }
 
+    /// Access: the lhs can be either another access or an identifier.
     fn get_container_definition(&self, id: NodeId) -> NodeId {
         match self.tree.node(id).tag {
             Tag::Access | Tag::Identifier => {
