@@ -85,6 +85,8 @@ fn main() -> Result<()> {
     generator.compile_nodes(Path::new(&obj_filename));
     println!("--- END GENERATE\n");
 
-    link::link(&obj_filename, &exe_filename);
+    if !use_jit {
+        link::link(&obj_filename, &exe_filename);
+    }
     Ok(())
 }

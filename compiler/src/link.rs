@@ -21,7 +21,6 @@ pub fn link(object_filename: &str, output_filename: &str) {
         .host(host)
         .target(host)
         .opt_level(0)
-        .static_crt(true)
         .get_compiler();
 
     let mut command = tool.to_command();
