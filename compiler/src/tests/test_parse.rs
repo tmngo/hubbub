@@ -135,7 +135,8 @@ end // End of line comment.
             Test::Expr,
             "x.y.arr[0]",
             "(Subscript (Access (Access x y) arr) 0)",
-        )
+        );
+        test_parse(Test::Expr, "&p.x", "(Address (Access p x))");
     }
 
     #[test]
