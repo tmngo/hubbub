@@ -183,6 +183,14 @@ impl<'a> Typechecker<'a> {
                     0
                 }
             }
+            Tag::Dereference => {
+                let pointer_type = self.infer_node(node.lhs)?;
+                if let Type::Pointer { typ } = self.types[pointer_type] {
+                    typ
+                } else {
+                    0
+                }
+            }
             Tag::Field => {
                 println!("Field: {:?}", self.tree.node_lexeme(node.rhs));
                 self.infer_node(node.rhs)?
