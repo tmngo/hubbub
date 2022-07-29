@@ -495,11 +495,39 @@ impl Parser {
         }
     }
 
+    /// type-list = expr-base | '(' (expr-base ',')* ')'
+    fn parse_identifier_list(&mut self) -> Result<NodeId> {
+        if self.next_token_tag(1) == TokenTag::Comma
+            && self.next_token_tag(2) == TokenTag::Identifier
+        {
+            let range = parse_until!(
+                self,
+                self.token_isnt(TokenTag::Colon) && !self.token_is(TokenTag::ColonEqual),
+                {
+                    let identifier_token = self.expect_token(TokenTag::Identifier)?;
+                    self.match_token(TokenTag::Comma);
+                    self.add_leaf(Tag::Identifier, identifier_token)?
+                }
+            );
+            let first_identifer = self.tree.node(self.tree.node_index(range.start));
+            self.add_node(
+                Tag::Expressions,
+                first_identifer.token,
+                range.start,
+                range.end,
+            )
+        } else {
+            let identifier_token = self.expect_token(TokenTag::Identifier)?;
+            self.match_token(TokenTag::Comma);
+            self.add_leaf(Tag::Identifier, identifier_token)
+        }
+    }
+
     // token: ':'
     // lhs: type_expr
     // rhs: init_expr
     fn parse_decl_variable(&mut self) -> Result<NodeId> {
-        self.expect_token(TokenTag::Identifier)?;
+        let identifier_list = self.parse_identifier_list()?;
         let token = self.shift_token(); // : or ::
         let mut type_expr = 0;
         let mut init_expr = 0;
@@ -516,7 +544,7 @@ impl Parser {
             _ => init_expr = self.parse_expr()?,
         }
         self.expect_tokens(&[TokenTag::Newline, TokenTag::Semicolon])?;
-        self.add_node(Tag::VariableDecl, token, type_expr, init_expr)
+        self.add_node(Tag::VariableDecl, identifier_list, type_expr, init_expr)
     }
 
     /// struct-decl = identifier :: struct field* end
@@ -566,7 +594,7 @@ impl Parser {
                     self,
                     self.token_isnt(TokenTag::Newline) && !self.token_is(TokenTag::Semicolon),
                     {
-                let expr = self.parse_expr()?;
+                        let expr = self.parse_expr()?;
                         self.match_token(TokenTag::Comma);
                         expr
                     }
@@ -626,8 +654,8 @@ impl Parser {
     fn parse_stmt_body(&mut self, token: TokenId) -> Result<NodeId> {
         let range = parse_until!(self, self.token_isnt(TokenTag::End), { self.parse_stmt()? });
         self.expect_token_and_newline(TokenTag::End)?; // 'end'
-            self.add_node(Tag::Block, token, range.start, range.end)
-        }
+        self.add_node(Tag::Block, token, range.start, range.end)
+    }
 
     /// stmt-if
     fn parse_stmt_if(&mut self) -> Result<NodeId> {
