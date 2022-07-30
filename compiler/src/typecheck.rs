@@ -74,6 +74,10 @@ impl<'a> Typechecker<'a> {
             Type::Float,
             Type::String,
             Type::Type,
+            Type::Function {
+                parameters: vec![TypeIndex::Integer as usize],
+                returns: vec![TypeIndex::Integer as usize],
+            },
         ];
         Self {
             tree,
@@ -188,7 +192,7 @@ impl<'a> Typechecker<'a> {
                 if let Type::Pointer { typ } = self.types[pointer_type] {
                     typ
                 } else {
-                    0
+                    unreachable!("failed to dereference pointer")
                 }
             }
             Tag::Field => {

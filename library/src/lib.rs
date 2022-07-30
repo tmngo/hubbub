@@ -1,4 +1,4 @@
-use std::alloc::Layout;
+use std::alloc;
 
 #[no_mangle]
 fn print_int(i: isize) {
@@ -7,15 +7,46 @@ fn print_int(i: isize) {
 
 #[no_mangle]
 fn alloc(n: isize) -> *mut i8 {
-    let layout = Layout::from_size_align(n as usize, 1).unwrap();
-    unsafe { std::alloc::alloc(layout) as *mut i8 }
+    let layout = alloc::Layout::from_size_align(n as usize, 1).unwrap();
+    unsafe { alloc::alloc(layout) as *mut i8 }
 }
 
 #[no_mangle]
 fn dealloc(ptr: *mut i8, n: isize) {
-    let layout = Layout::from_size_align(n as usize, 1).unwrap();
+    let layout = alloc::Layout::from_size_align(n as usize, 1).unwrap();
     unsafe {
         std::alloc::dealloc(ptr as *mut u8, layout);
+    }
+}
+
+const ALIGN: usize = 8;
+const EXTRA_SIZE: usize = std::mem::size_of::<usize>();
+
+#[no_mangle]
+fn alloc_implicit(count: i64, bytes: i64) -> *mut u8 {
+    // The logical size of the allocation.
+    let payload_size: usize = (count * bytes).try_into().unwrap();
+
+    // Allocate one extra word to store the size.
+    let layout = alloc::Layout::from_size_align(payload_size + EXTRA_SIZE, ALIGN).unwrap();
+
+    unsafe {
+        let ptr = alloc::alloc(layout);
+        *(ptr as *mut usize) = payload_size;
+        ptr.add(EXTRA_SIZE) // Pointer to the payload.
+    }
+}
+
+#[no_mangle]
+fn dealloc_implicit(ptr: *mut u8) {
+    // `ptr` points at the payload, which is immediately preceded by the size (which does not
+    // include the size of the size itself).
+    unsafe {
+        let base_ptr = ptr.sub(EXTRA_SIZE);
+        let payload_size = *(base_ptr as *mut usize);
+
+        let layout = alloc::Layout::from_size_align(payload_size + EXTRA_SIZE, ALIGN).unwrap();
+        alloc::dealloc(base_ptr, layout);
     }
 }
 

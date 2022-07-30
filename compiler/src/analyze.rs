@@ -118,10 +118,19 @@ impl<'a> Analyzer<'a> {
                 ("F64", TypeIndex::Float as u32),
                 ("String", TypeIndex::String as u32),
                 ("Pointer", TypeIndex::Pointer as u32),
+                ("alloc", 6),
             ],
             0,
         );
-        let foreign = Scope::from([("putchar", 1), ("print_int", 2)], 0);
+        let foreign = Scope::from(
+            [
+                ("putchar", 1),
+                ("print_int", 2),
+                ("alloc", 3),
+                ("dealloc", 4),
+            ],
+            0,
+        );
         Self {
             tree,
             definitions: HashMap::new(),
