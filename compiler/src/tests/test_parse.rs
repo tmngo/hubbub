@@ -50,13 +50,13 @@ mod tests {
 
         // Parse
         let mut parser = Parser::new(&source, tokens);
-        parser.parse();
+        parser.parse().ok();
         let tree = parser.tree();
         println!("{}", tree);
 
         // Analyze
         let mut analyzer = Analyzer::new(&tree);
-        analyzer.resolve();
+        analyzer.resolve().ok();
         assert_eq!(def_count, analyzer.definitions.len());
         println!("{}", analyzer);
     }

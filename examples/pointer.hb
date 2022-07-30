@@ -8,21 +8,19 @@ Wrapper :: struct
 end
 
 main :: () -> Int
-    value := 10
-    p := &value
-    
-    w: Wrapper
-    w.ptr = p
-
+    value := 15
     print_int(value)
 
+    p := &value
     p@ = 30
     print_int(p@)
 
-    p@ = 40
+    w: Wrapper
+    w.ptr = p
+    w.ptr@ = 45
     print_int(w.ptr@)
 
-    mutate(p, 50)
+    mutate(p, 60)
     print_int(value)
 
     return 0
