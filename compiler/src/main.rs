@@ -5,15 +5,15 @@ use color_eyre::eyre::{eyre, Result, WrapErr};
 use std::path::Path;
 
 pub mod analyze;
+mod builtin;
+mod translate;
 #[macro_use]
 mod error;
-mod jit;
 mod link;
 mod output;
 mod parse;
 mod tests;
 mod tokenize;
-mod translator;
 mod typecheck;
 mod utils;
 
@@ -72,16 +72,12 @@ fn main() -> Result<()> {
     let node_types = typechecker.node_types;
     println!("--- END TYPECHECK\n");
 
-    let input = jit::Input {
-        tree: &tree,
-        definitions: &definitions,
-        types: &types,
-        node_types: &node_types,
-    };
+    let input = translate::input::Input::new(&tree, &definitions, &types, &node_types);
 
     println!("--- BEGIN GENERATE");
     let use_jit = args.len() == 3 && args[2] == "-j";
-    let generator = jit::Generator::new(&input, "object_file".to_string(), use_jit);
+    let generator =
+        translate::cranelift::Generator::new(&input, "object_file".to_string(), use_jit);
     generator.compile_nodes(Path::new(&obj_filename));
     println!("--- END GENERATE\n");
 

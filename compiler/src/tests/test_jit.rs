@@ -1,10 +1,11 @@
 #[cfg(test)]
 mod tests {
     use crate::analyze::Analyzer;
-    use crate::jit::{Generator, Input};
     use crate::parse::Parser;
     use crate::tests::input::*;
     use crate::tokenize::Tokenizer;
+    use crate::translate::cranelift::Generator;
+    use crate::translate::input::Input;
     use crate::typecheck::Typechecker;
     use std::path::Path;
 
