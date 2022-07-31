@@ -3,6 +3,7 @@
 
 use color_eyre::eyre::{eyre, Result, WrapErr};
 use std::path::Path;
+use std::time::Instant;
 
 pub mod analyze;
 mod builtin;
@@ -38,8 +39,10 @@ fn main() -> Result<()> {
     println!("{:?} ({})", source.as_bytes(), source.len());
 
     println!("--- BEGIN TOKENIZE");
+    let start = Instant::now();
     let mut tokenizer = tokenize::Tokenizer::new(&source);
     let tokens = tokenizer.tokenize();
+    let t_tokenize = start.elapsed();
     println!("--- END TOKENIZE\n");
 
     if args.len() == 3 && args[2] == "-t" {
@@ -47,9 +50,11 @@ fn main() -> Result<()> {
     }
 
     println!("--- BEGIN PARSE");
+    let start = Instant::now();
     let mut parser = parse::Parser::new(&source, tokens);
     parser.parse().wrap_err("Parsing error")?;
     let tree = parser.tree();
+    let t_parse = start.elapsed();
     println!("{}", tree);
     println!("--- END PARSE\n");
 
@@ -58,15 +63,19 @@ fn main() -> Result<()> {
     }
 
     println!("--- BEGIN ANALYZE");
+    let start = Instant::now();
     let mut analyzer = analyze::Analyzer::new(&tree);
     analyzer.resolve().wrap_err("Name resolution error")?;
+    let t_analyze = start.elapsed();
     println!("{}", analyzer);
     let definitions = analyzer.definitions;
     println!("--- END ANALYZE\n");
 
     println!("--- BEGIN TYPECHECK");
+    let start = Instant::now();
     let mut typechecker = typecheck::Typechecker::new(&tree, &definitions);
     typechecker.check().wrap_err("Type error")?;
+    let t_typecheck = start.elapsed();
     typechecker.print();
     let types = typechecker.types;
     let node_types = typechecker.node_types;
@@ -75,14 +84,27 @@ fn main() -> Result<()> {
     let input = translate::input::Input::new(&tree, &definitions, &types, &node_types);
 
     println!("--- BEGIN GENERATE");
+    let start = Instant::now();
     let use_jit = args.len() == 3 && args[2] == "-j";
     let generator =
         translate::cranelift::Generator::new(&input, "object_file".to_string(), use_jit);
     generator.compile_nodes(Path::new(&obj_filename));
+    let t_generate = start.elapsed();
     println!("--- END GENERATE\n");
 
     if !use_jit {
+        println!("--- BEGIN LINK [host: {}]", target_lexicon::Triple::host());
         link::link(&obj_filename, &exe_filename);
+        println!("--- END LINK\n");
     }
+
+    println!("Tokenize {:>9.1?} ms", t_tokenize.as_secs_f64() * 1000.0);
+    println!("Parse    {:>9.1?} ms", t_parse.as_secs_f64() * 1000.0);
+    println!("Analyze  {:>9.1?} ms", t_analyze.as_secs_f64() * 1000.0);
+    println!("Typecheck{:>9.1?} ms", t_typecheck.as_secs_f64() * 1000.0);
+    println!("Generate {:>9.1?} ms", t_generate.as_secs_f64() * 1000.0);
+    let t_total = t_tokenize + t_parse + t_analyze + t_typecheck + t_generate;
+    println!("Total    {:>9.1?} ms", t_total.as_secs_f64() * 1000.0);
+
     Ok(())
 }

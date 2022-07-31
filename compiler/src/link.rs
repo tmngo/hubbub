@@ -15,7 +15,6 @@ use target_lexicon::Triple;
  */
 
 pub fn link(object_filename: &str, output_filename: &str) {
-    println!("--- BEGIN LINK [host: {}]", Triple::host());
     let host = &format!("{}", Triple::host());
     let tool = cc::Build::new()
         .host(host)
@@ -61,14 +60,11 @@ pub fn link(object_filename: &str, output_filename: &str) {
     println!("Status:  {}", output.status);
     io::stdout().write_all(&output.stdout).unwrap();
     io::stderr().write_all(&output.stderr).unwrap();
-    println!("--- END LINK\n");
     assert!(output.status.success());
 }
 
 // #[cfg(not(windows))]
 pub fn link_gcc(object_filename: &str, output_filename: &str) {
-    println!("--- BEGIN LINK [host: {}]", Triple::host());
-
     let mut command = Command::new("gcc");
     command.args(&[
         &format!("-o{}", output_filename),
@@ -84,6 +80,5 @@ pub fn link_gcc(object_filename: &str, output_filename: &str) {
     println!("Status:  {}", output.status);
     io::stdout().write_all(&output.stdout).unwrap();
     io::stderr().write_all(&output.stderr).unwrap();
-    println!("--- END LINK\n");
     assert!(output.status.success());
 }
