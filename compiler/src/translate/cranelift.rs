@@ -130,7 +130,7 @@ impl<'a> Generator<'a> {
     ///
     pub fn compile_nodes(mut self, filename: &Path) -> Option<i64> {
         let root = &self.data.node(0);
-        let mut func_ids = Vec::new();
+        let mut fn_ids = Vec::new();
         let mut main_id = None;
 
         for i in root.lhs..root.rhs {
@@ -146,11 +146,17 @@ impl<'a> Generator<'a> {
                 let node = self.data.node(ni);
                 match node.tag {
                     Tag::FunctionDecl => {
-                        let func_name = self.data.tree.node_lexeme_offset(&node, -1);
-                        let func_id = self.compile_function_decl(ni);
-                        if func_name == "main" {
-                            func_ids.push(func_id);
-                            main_id = Some(func_id);
+                        let fn_name = self.data.tree.node_lexeme_offset(&node, -1);
+                        let fn_id = Self::compile_function_decl(
+                            &self.data,
+                            &mut self.ctx,
+                            &mut self.builder_ctx,
+                            &mut self.state,
+                            ni,
+                        );
+                        if fn_name == "main" {
+                            fn_ids.push(fn_id);
+                            main_id = Some(fn_id);
                         }
                     }
                     _ => {}
@@ -164,58 +170,48 @@ impl<'a> Generator<'a> {
     }
 
     ///
-    pub fn compile_function_decl(&mut self, index: u32) -> FuncId {
-        let node = self.data.node(index);
-        assert_eq!(node.tag, Tag::FunctionDecl);
-        let prototype = self.data.node(node.lhs);
-        assert_eq!(prototype.tag, Tag::Prototype);
-        let parameters = self.data.node(prototype.lhs);
-        assert_eq!(parameters.tag, Tag::Parameters);
-        let returns = self.data.node(prototype.rhs);
-
-        let target_config = self.state.module.target_config();
+    pub fn compile_function_decl(
+        data: &Data,
+        ctx: &mut codegen::Context,
+        builder_ctx: &mut FunctionBuilderContext,
+        state: &mut State,
+        index: u32,
+    ) -> FuncId {
+        let target_config = state.module.target_config();
         let ptr_type = target_config.pointer_type();
-        Self::init_signature(&mut self.ctx.func, parameters, returns, ptr_type);
         let mut c = FnContext {
-            b: FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_ctx),
+            b: FunctionBuilder::new(&mut ctx.func, builder_ctx),
             ptr_type,
             target_config,
         };
 
-        Self::compile_function_parameters(
-            &mut self.state,
-            &self.data,
-            &mut c,
-            ptr_type,
-            prototype.lhs,
-        );
-
-        Self::compile_function_body(&mut self.state, &self.data, &mut c, node.rhs);
+        let node = data.node(index);
+        Self::compile_function_signature(state, &data, &mut c, node.lhs);
+        Self::compile_function_body(state, &data, &mut c, node.rhs);
 
         c.b.finalize();
-        let name = self.data.node_lexeme_offset(node, -1);
-        println!("{} {}", name, c.b.func.display());
-        let id = self
-            .state
+        let fn_name = data.node_lexeme_offset(node, -1);
+        println!("{} {}", fn_name, c.b.func.display());
+        let fn_id = state
             .module
-            .declare_function(name, Linkage::Export, &self.ctx.func.signature)
+            .declare_function(fn_name, Linkage::Export, &mut c.b.func.signature)
             .unwrap();
-        self.state
-            .module
-            .define_function(id, &mut self.ctx)
-            .unwrap();
-        self.state.module.clear_context(&mut self.ctx);
-        id
+        state.module.define_function(fn_id, ctx).unwrap();
+        state.module.clear_context(ctx);
+        fn_id
     }
 
-    fn compile_function_parameters(
+    fn compile_function_signature(
         state: &mut State,
         data: &Data,
         c: &mut FnContext,
-        ptr_type: Type,
         node_id: NodeId,
     ) {
-        let parameters = data.node(node_id);
+        let prototype = data.node(node_id);
+        let parameters = data.node(prototype.lhs);
+        let returns = data.node(prototype.rhs);
+        Self::init_signature(&mut c.b.func, parameters, returns, c.ptr_type);
+
         let entry_block = c.b.create_block();
         c.b.append_block_params_for_function_params(entry_block);
         c.b.switch_to_block(entry_block);
