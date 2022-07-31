@@ -222,40 +222,14 @@ impl<'a> Generator<'a> {
         c.b.seal_block(entry_block);
 
         // Define parameters as stack variables.
-        let mut scalar_count = 0;
         for i in parameters.lhs..parameters.rhs {
             let ni = data.node_index(i);
             let stack_slot = state.create_stack_slot(&data, c, ni);
-            let type_id = data.type_id(ni);
-            let layout = &data.layouts[type_id];
-            if layout.size <= 8 {
-                let value = c.b.block_params(entry_block)[scalar_count];
-                c.b.ins().stack_store(value, stack_slot, 0);
-            } else {
-                // Aggregate types are passed as pointers.
-                // let addr = c.b.block_params(entry_block)[scalar_count];
-                // for word_index in 0..(layout.size / 8) {
-                //     let offset = word_index as i32 * 8;
-                //     let value = c.b.ins().load(int, MemFlags::new(), addr, offset);
-                //     c.b.ins().stack_store(value, var.slot, offset);
-                // }
-                let src_addr = c.b.block_params(entry_block)[scalar_count];
-                let dest_addr = c.b.ins().stack_addr(ptr_type, stack_slot, 0);
-                c.b.emit_small_memory_copy(
-                    state.module.target_config(),
-                    dest_addr,
-                    src_addr,
-                    layout.size as u64,
-                    8,
-                    8,
-                    true,
-                    MemFlags::new(),
-                );
-                // let size = c.b.ins().iconst(int, layout.size as i64);
-                // c.b.call_memcpy(state.module.target_config(), dest_addr, src_addr, size);
-            }
-            scalar_count += 1;
-            state.locations.insert(ni, Location::stack(stack_slot, 0));
+            let location = Location::stack(stack_slot, 0);
+            state.locations.insert(ni, location);
+            let layout = data.layout(ni);
+            let value = c.b.block_params(entry_block)[(i - parameters.lhs) as usize];
+            location.store(c, value, MemFlags::new(), layout);
         }
     }
 
@@ -375,12 +349,15 @@ impl State {
                 // lhs: type
                 // rhs: expr
                 let slot = self.create_stack_slot(data, c, node_id);
+                let location = Location::stack(slot, 0);
+                self.locations.insert(node_id, location);
                 if node.rhs != 0 {
-                    // Assume the init_expr is a scalar
-                    let value = self.compile_expr(data, c, node.rhs).value();
-                    c.b.ins().stack_store(value, slot, 0);
+                    let layout = data.layout(node.rhs);
+                    let value = self
+                        .compile_expr(data, c, node.rhs)
+                        .cranelift_value(c, data.layout(node.rhs));
+                    location.store(c, value, MemFlags::new(), layout);
                 }
-                self.locations.insert(node_id, Location::stack(slot, 0));
             }
             Tag::Return => {
                 let mut return_values = Vec::new();
