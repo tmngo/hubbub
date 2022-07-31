@@ -36,13 +36,13 @@ fn main() -> Result<()> {
     let obj_filename = format!("{}.obj", filename);
     let exe_filename = format!("{}.exe", filename);
     let source = std::fs::read_to_string(src_filename)?;
-    println!("{:?} ({})", source.as_bytes(), source.len());
 
     println!("--- BEGIN TOKENIZE");
     let start = Instant::now();
     let mut tokenizer = tokenize::Tokenizer::new(&source);
     let tokens = tokenizer.tokenize();
     let t_tokenize = start.elapsed();
+    tokenize::print(&source, &tokens);
     println!("--- END TOKENIZE\n");
 
     if args.len() == 3 && args[2] == "-t" {
@@ -67,7 +67,7 @@ fn main() -> Result<()> {
     let mut analyzer = analyze::Analyzer::new(&tree);
     analyzer.resolve().wrap_err("Name resolution error")?;
     let t_analyze = start.elapsed();
-    println!("{}", analyzer);
+    print!("{}", analyzer);
     let definitions = analyzer.definitions;
     println!("--- END ANALYZE\n");
 

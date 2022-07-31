@@ -151,13 +151,6 @@ impl<'a> Tokenizer<'a> {
         loop {
             let token = self.next();
             tokens.push(token);
-            println!(
-                "{:<5} {:<16} {:<9} {}",
-                tokens.len() - 1,
-                format!("{:?}", token.tag),
-                format!("{}..{}", token.start, token.end),
-                token.to_str(self.source).replace("\n", "\\n")
-            );
             if token.tag == Tag::Eof {
                 return tokens;
             }
@@ -168,13 +161,6 @@ impl<'a> Tokenizer<'a> {
         loop {
             let token = self.next();
             tokens.push(token);
-            println!(
-                "{:<5} {:<16} {:<9} {}",
-                tokens.len() - 1,
-                format!("{:?}", token.tag),
-                format!("{}..{}", token.start, token.end),
-                token.to_str(self.source).replace("\n", "\\n")
-            );
             if token.tag == Tag::Eof {
                 return;
             }
@@ -403,5 +389,17 @@ impl<'a> Tokenizer<'a> {
             Some(tag) => self.token(*tag),
             None => self.token(Tag::Identifier),
         }
+    }
+}
+
+pub fn print(source: &str, tokens: &Vec<Token>) {
+    for (i, token) in tokens.iter().enumerate() {
+        println!(
+            "{:<5} {:<16} {:<9} {}",
+            i,
+            format!("{:?}", token.tag),
+            format!("{}..{}", token.start, token.end),
+            token.to_str(source).replace("\n", "\\n")
+        );
     }
 }

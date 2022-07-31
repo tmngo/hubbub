@@ -160,7 +160,6 @@ impl<'a> Generator<'a> {
         if let Some(id) = main_id {
             return Some(self.state.module.finalize(id, filename));
         }
-        println!("Finalized {:?}", func_ids);
         None
     }
 
@@ -222,8 +221,6 @@ impl<'a> Generator<'a> {
         c.b.switch_to_block(entry_block);
         c.b.seal_block(entry_block);
 
-        dbg!(c.b.block_params(entry_block).len());
-
         // Define parameters as stack variables.
         let mut scalar_count = 0;
         for i in parameters.lhs..parameters.rhs {
@@ -231,11 +228,6 @@ impl<'a> Generator<'a> {
             let stack_slot = state.create_stack_slot(&data, c, ni);
             let type_id = data.type_id(ni);
             let layout = &data.layouts[type_id];
-            println!(
-                "{}",
-                crate::format_red!("LEXEME {:?}", data.node_lexeme_offset(&data.node(ni), -1))
-            );
-            println!("{}", crate::format_red!("LAYOUT {:?}", layout));
             if layout.size <= 8 {
                 let value = c.b.block_params(entry_block)[scalar_count];
                 c.b.ins().stack_store(value, stack_slot, 0);
@@ -290,7 +282,6 @@ impl State {
                 // lhs: expr
                 // rhs: expr
                 assert_eq!(data.type_id(node.lhs), data.type_id(node.rhs));
-                println!("Compiling assign statment.");
                 let layout = data.layout(node.rhs);
                 let left_node = data.node(node.lhs);
                 let right_value = self
@@ -383,10 +374,6 @@ impl State {
             Tag::VariableDecl => {
                 // lhs: type
                 // rhs: expr
-                println!("Compiling variable declaration statement.");
-                dbg!(data.node_type(node_id));
-
-                // Stack variables
                 let slot = self.create_stack_slot(data, c, node_id);
                 if node.rhs != 0 {
                     // Assume the init_expr is a scalar
@@ -441,7 +428,6 @@ impl State {
         let ty = c.ptr_type;
         let node = data.node(node_id);
         let layout = data.layout(node_id);
-        dbg!(node.tag);
         match node.tag {
             Tag::Access => self.locate_field(data, node_id).to_val(c, layout),
             Tag::Address => Val::Scalar(self.locate(data, node.lhs).get_addr(c)),
@@ -647,7 +633,6 @@ impl Location {
             // lvalue is a stack variable, rvalue is scalar/aggregate
             LocationBase::Stack(stack_slot) => {
                 if layout.size <= 8 {
-                    dbg!("stack_store");
                     ins.stack_store(value, stack_slot, self.offset);
                 } else {
                     let src_addr = value;

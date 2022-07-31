@@ -100,7 +100,6 @@ impl<'a> Typechecker<'a> {
                 self.infer_declaration_type(decl_id)?;
             }
         }
-        // self.print();
         self.infer_range(root)?;
         Ok(())
     }
@@ -195,10 +194,7 @@ impl<'a> Typechecker<'a> {
                     unreachable!("failed to dereference pointer")
                 }
             }
-            Tag::Field => {
-                println!("Field: {:?}", self.tree.node_lexeme(node.rhs));
-                self.infer_node(node.rhs)?
-            }
+            Tag::Field => self.infer_node(node.rhs)?,
             Tag::FunctionDecl => {
                 // Prototype
                 let fn_type = self.infer_node(node.lhs)?;
@@ -214,17 +210,10 @@ impl<'a> Typechecker<'a> {
             }
             Tag::Identifier => {
                 let decl = self.definitions.get(&node_id);
-                println!("{:?}", decl);
                 if let Some(lookup) = decl {
                     match lookup {
-                        Definition::User(decl_index) => {
-                            println!("decl_index: {}", decl_index);
-                            self.infer_node(*decl_index)?
-                        }
-                        Definition::BuiltIn(type_index) => {
-                            println!("type_index: {}", type_index);
-                            *type_index as TypeId
-                        }
+                        Definition::User(decl_index) => self.infer_node(*decl_index)?,
+                        Definition::BuiltIn(type_index) => *type_index as TypeId,
                         _ => 0,
                     }
                 } else {
@@ -257,7 +246,6 @@ impl<'a> Typechecker<'a> {
                 })
             }
             Tag::Struct => {
-                println!("Struct: {:?}", self.tree.node_lexeme(node_id));
                 let mut fields = Vec::new();
                 for i in node.lhs..node.rhs {
                     self.infer_node(self.tree.node_index(i))?;
@@ -272,14 +260,8 @@ impl<'a> Typechecker<'a> {
                 let decl = self.definitions.get(&node_id);
                 let base_type = if let Some(lookup) = decl {
                     match lookup {
-                        Definition::User(decl_index) => {
-                            println!("decl_index: {}", decl_index);
-                            self.infer_node(*decl_index)?
-                        }
-                        Definition::BuiltIn(type_index) => {
-                            println!("type_index: {}", type_index);
-                            *type_index as TypeId
-                        }
+                        Definition::User(decl_index) => self.infer_node(*decl_index)?,
+                        Definition::BuiltIn(type_index) => *type_index as TypeId,
                         _ => 0,
                     }
                 } else {
@@ -306,7 +288,6 @@ impl<'a> Typechecker<'a> {
                 // rhs: init-expr
                 let ltype = self.infer_node(node.lhs)?;
                 let rtype = self.infer_node(node.rhs)?;
-                dbg!(ltype, rtype);
                 if ltype != 0 && rtype == 0 {
                     ltype
                 } else if ltype == 0 && rtype != 0 {
@@ -332,19 +313,11 @@ impl<'a> Typechecker<'a> {
         let ltype = self.infer_node(lhs)?;
         let rtype = self.infer_node(rhs)?;
         if ltype != rtype {
-            println!(
-                "{:?} vs {:?}",
-                self.tree.node_lexeme(lhs),
-                self.tree.node_lexeme(rhs),
-            );
-            println!(
-                "{:?} ({:?}) vs {:?} ({:?})",
-                self.tree.node(lhs).tag,
-                self.types[ltype as usize],
-                self.tree.node(rhs).tag,
-                self.types[rtype as usize]
-            );
-            return Err(eyre!("operand types don't match"));
+            return Err(eyre!(
+                "mismatched types: lhs is {:?}, rhs is {:?}",
+                self.types[ltype],
+                self.types[rtype]
+            ));
         }
         Ok(ltype)
     }
