@@ -109,6 +109,7 @@ pub enum Tag {
     Expressions,    // start..end [Expr]
     Dereference,    // expr
     Factorial,      // expr
+    False,          //
     Field,          // type_expr
     FunctionDecl,   // prototype, block
     Greater,        // lhs, rhs
@@ -134,6 +135,7 @@ pub enum Tag {
     Struct,         // start..end [Field]
     Sub,            // lhs, rhs
     Subscript,      // lhs, rhs
+    True,           //
     Type,           // expr
     VariableDecl,   // type_expr, init_expr
     While,          // condition, block
@@ -875,6 +877,8 @@ impl Parser {
                 Ok(expr)
             }
             TokenTag::IntegerLiteral => self.add_leaf(Tag::IntegerLiteral, token),
+            TokenTag::True => self.add_leaf(Tag::True, token),
+            TokenTag::False => self.add_leaf(Tag::False, token),
             TokenTag::StringLiteral => self.add_leaf(Tag::StringLiteral, token),
             _ => self.add_leaf(Tag::Identifier, token),
         }

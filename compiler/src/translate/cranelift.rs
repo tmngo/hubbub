@@ -467,6 +467,8 @@ impl State {
                 let value = token_str.parse::<i64>().unwrap();
                 Val::Scalar(c.b.ins().iconst(ty, value))
             }
+            Tag::True => Val::Scalar(c.b.ins().iconst(ty, 1)),
+            Tag::False => Val::Scalar(c.b.ins().iconst(ty, 0)),
             Tag::Call => {
                 let mut sig = self.module.make_signature();
                 let function = data.node(node.lhs);

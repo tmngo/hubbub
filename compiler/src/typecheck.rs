@@ -221,6 +221,7 @@ impl<'a> Typechecker<'a> {
                 }
             }
             Tag::IntegerLiteral => TypeIndex::Integer as TypeId,
+            Tag::True | Tag::False => TypeIndex::Boolean as TypeId,
             Tag::Prototype => {
                 let mut parameters = Vec::new();
                 let mut returns = Vec::new();
