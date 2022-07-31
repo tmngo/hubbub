@@ -280,7 +280,9 @@ impl State {
                 left_location.store(c, right_value, flags, layout);
             }
             Tag::If => {
-                let condition_expr = self.compile_expr(data, c, node.lhs).value();
+                let condition_expr = self
+                    .compile_expr(data, c, node.lhs)
+                    .cranelift_value(c, data.layout(node.lhs));
                 let then_block = c.b.create_block();
                 let merge_block = c.b.create_block();
                 let body = data.node(node.rhs);
@@ -316,7 +318,9 @@ impl State {
                 };
                 let merge_block = c.b.create_block();
                 for i in 0..if_count {
-                    let condition_expr = self.compile_expr(data, c, if_nodes[i].lhs).value();
+                    let condition_expr = self
+                        .compile_expr(data, c, if_nodes[i].lhs)
+                        .cranelift_value(c, data.layout(if_nodes[i].lhs));
                     c.b.ins().brnz(condition_expr, then_blocks[i], &[]);
                     c.b.seal_block(then_blocks[i]);
                     if i < if_count - 1 {
@@ -363,13 +367,17 @@ impl State {
                 let mut return_values = Vec::new();
                 for i in node.lhs..node.rhs {
                     let ni = data.node_index(i);
-                    let val = self.compile_expr(data, c, ni).value();
+                    let val = self
+                        .compile_expr(data, c, ni)
+                        .cranelift_value(c, data.layout(ni));
                     return_values.push(val);
                 }
                 c.b.ins().return_(&return_values[..]);
             }
             Tag::While => {
-                let condition = self.compile_expr(data, c, node.lhs).value();
+                let condition = self
+                    .compile_expr(data, c, node.lhs)
+                    .cranelift_value(c, data.layout(node.lhs));
                 let while_block = c.b.create_block();
                 let merge_block = c.b.create_block();
                 // check condition
@@ -384,7 +392,9 @@ impl State {
                     let ni = data.node_index(i);
                     self.compile_stmt(data, c, ni);
                 }
-                let condition = self.compile_expr(data, c, node.lhs).value();
+                let condition = self
+                    .compile_expr(data, c, node.lhs)
+                    .cranelift_value(c, data.layout(node.lhs));
                 // brnz block_while
                 c.b.ins().brnz(condition, while_block, &[]);
                 c.b.seal_block(while_block);
@@ -486,8 +496,12 @@ impl State {
     }
 
     fn compile_children(&mut self, data: &Data, c: &mut FnContext, node: &Node) -> (Value, Value) {
-        let lhs = self.compile_expr(data, c, node.lhs).value();
-        let rhs = self.compile_expr(data, c, node.rhs).value();
+        let lhs = self
+            .compile_expr(data, c, node.lhs)
+            .cranelift_value(c, data.layout(node.lhs));
+        let rhs = self
+            .compile_expr(data, c, node.rhs)
+            .cranelift_value(c, data.layout(node.rhs));
         (lhs, rhs)
     }
 
@@ -665,12 +679,5 @@ impl Val {
                 }
             }
         }
-    }
-
-    pub fn value(self) -> Value {
-        if let Val::Scalar(value) = self {
-            return value;
-        }
-        panic!("expected scalar value, got aggregate")
     }
 }
