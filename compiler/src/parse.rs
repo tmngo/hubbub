@@ -415,7 +415,12 @@ impl Parser {
 
         if !self.is_module_tokenized(&module_name) {
             let filename = &format!("{}.hb", module_name);
-            let path = std::path::Path::new("modules").join(filename);
+            let path = std::env::current_exe()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("modules")
+                .join(filename);
             if path.exists() {
                 self.tree
                     .module_indices
@@ -424,9 +429,8 @@ impl Parser {
                 let mut tokenizer = Tokenizer::new(&source);
                 tokenizer.append_tokens(&mut self.tree.tokens);
                 self.tree.sources.push(source);
-                println!("{:?}", self.tree.module_indices);
             } else {
-                println!("Path doesn't exist.");
+                return Err(eyre!("Failed to find module \"{}\".", module_name));
             }
         }
 

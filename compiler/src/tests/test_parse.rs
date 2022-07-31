@@ -1,4 +1,3 @@
-
 use crate::analyze::Analyzer;
 use crate::parse::Parser;
 use crate::tests::input::*;
@@ -192,6 +191,13 @@ end\
         3
       )))
       (Return 0)
+    ))
+  )
+  (Module
+    (FunctionDecl (Prototype (Parameters
+      (Field a Int)
+    ) Int) (Block
+      (Return (Mul (Mul a a) a))
     ))
   )
 )\
