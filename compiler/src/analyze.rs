@@ -58,6 +58,8 @@ pub const _ASSERT_LOOKUP_SIZE: () = assert_size::<Definition>(8);
 pub struct Scope<'a> {
     symbols: HashMap<&'a str, u32>,
     parent: usize,
+    named_imports: HashMap<&'a str, usize>,
+    unnamed_imports: Vec<usize>,
 }
 
 impl<'a> Scope<'a> {
@@ -65,6 +67,8 @@ impl<'a> Scope<'a> {
         Scope {
             symbols: HashMap::new(),
             parent,
+            named_imports: HashMap::new(),
+            unnamed_imports: Vec::new(),
         }
     }
 
@@ -72,6 +76,8 @@ impl<'a> Scope<'a> {
         Self {
             symbols: HashMap::from(arr),
             parent,
+            named_imports: HashMap::new(),
+            unnamed_imports: Vec::new(),
         }
     }
 
@@ -145,11 +151,23 @@ impl<'a> Analyzer<'a> {
     pub fn resolve(&mut self) -> Result<()> {
         self.enter_scope();
         let root = &self.tree.node(0);
-        let first_module = self.tree.node(self.tree.node_index(root.lhs));
-        self.collect_module_decls(first_module)
-            .wrap_err("Failed to collect module declarations")?;
-        self.resolve_range(root)
-            .wrap_err("Failed to resolve definitions")?;
+        let mut module_scopes = Vec::new();
+        for i in root.lhs..root.rhs {
+            let ni = self.tree.node_index(i);
+            let module = self.tree.node(ni);
+            self.enter_scope();
+            module_scopes.push(self.current);
+            self.collect_module_decls(module)
+                .wrap_err("Failed to collect module declarations")?;
+            self.exit_scope();
+        }
+        for (m, i) in (root.lhs..root.rhs).enumerate() {
+            let ni = self.tree.node_index(i);
+            let module = self.tree.node(ni);
+            self.current = module_scopes[m];
+            self.resolve_range(module)
+                .wrap_err("Failed to resolve module definitions")?;
+        }
         Ok(())
     }
 
@@ -163,8 +181,12 @@ impl<'a> Analyzer<'a> {
                     self.define_symbol(name, index)?;
                 }
                 Tag::Import => {
-                    let name = self.tree.node_lexeme_offset(&node, -2);
-                    self.define_symbol(name, index)?;
+                    let module_name = self.tree.node_lexeme_offset(&node, 1).trim_matches('"');
+                    if let Some(module_index) = self.tree.get_module_index(module_name) {
+                        self.scopes[self.current]
+                            .unnamed_imports
+                            .push(module_index + 2);
+                    }
                 }
                 Tag::Struct => {
                     let name = self.tree.node_lexeme_offset(&node, -2);
@@ -297,8 +319,7 @@ impl<'a> Analyzer<'a> {
                     }
                     Definition::Foreign(_) => {}
                     _ => {
-                        println!("cannot find value `{}` in this scope", name);
-                        panic!()
+                        panic!("cannot find value `{}` in this scope", name);
                     }
                 }
             }
@@ -315,8 +336,7 @@ impl<'a> Analyzer<'a> {
                     }
                     Definition::Foreign(_) => {}
                     _ => {
-                        println!("cannot find value `{}` in this scope", name);
-                        panic!()
+                        panic!("cannot find value `{}` in this scope", name);
                     }
                 }
                 self.resolve_range(node)?;
@@ -336,35 +356,50 @@ impl<'a> Analyzer<'a> {
     }
 
     /// Access: the lhs can be either another access or an identifier.
-    fn get_container_definition(&self, id: NodeId) -> NodeId {
-        match self.tree.node(id).tag {
+    fn get_container_definition(&self, container_id: NodeId) -> NodeId {
+        match self.tree.node(container_id).tag {
             Tag::Access | Tag::Identifier => {
                 // identifier -> variable decl / access -> field
-                let var_def = self.definitions.get(&id).expect(&format!(
-                    "failed to find definition for identifier \"{:?}\".",
-                    self.tree.node_lexeme(id)
-                ));
-                if let Definition::User(type_def) = var_def {
-                    let def_node = self.tree.node(*type_def);
-                    // variable decl -> struct decl / field -> struct decl
-                    let type_node_id = match def_node.tag {
-                        Tag::Field => def_node.rhs,
-                        _ => def_node.lhs,
-                    };
-                    let type_lookup = self.definitions.get(&type_node_id).expect(&format!(
+                // If container_id is an Access,
+                let type_def = self.get_definition_id(
+                    container_id,
+                    &format!(
+                        "failed to find definition for identifier \"{:?}\".",
+                        self.tree.node_lexeme(container_id)
+                    ),
+                );
+
+                let def_node = self.tree.node(type_def);
+                // variable decl -> struct decl / field -> struct decl
+                let type_node_id = match def_node.tag {
+                    Tag::Field => def_node.rhs,
+                    _ => def_node.lhs,
+                };
+
+                let def_id = self.get_definition_id(
+                    type_node_id,
+                    &format!(
                         "failed to find struct definition for variable \"{}\".",
                         self.tree.node_lexeme(def_node.lhs)
-                    ));
-                    if let Definition::User(def_index) = type_lookup {
-                        return *def_index;
-                    }
-                }
-                unreachable!("invalid container");
+                    ),
+                );
+                return def_id;
             }
             _ => {
                 unreachable!("invalid container")
             }
         }
+    }
+
+    pub fn get_definition(&self, node_id: NodeId, msg: &str) -> &Definition {
+        self.definitions.get(&node_id).expect(msg)
+    }
+
+    pub fn get_definition_id(&self, node_id: NodeId, msg: &str) -> NodeId {
+        if let Definition::User(def_id) = self.get_definition(node_id, msg) {
+            return *def_id;
+        }
+        unreachable!("{}", msg)
     }
 
     fn define_symbol(&mut self, name: &'a str, id: u32) -> Result<()> {
@@ -379,11 +414,17 @@ impl<'a> Analyzer<'a> {
         if self.scopes.len() == 0 {
             return Definition::NotFound;
         }
-        let mut scope_index = self.scopes.len() - 1;
+        let mut scope_index = self.current;
         loop {
             // Check if the name is defined in the current scope.
             if let Some(&index) = self.scopes[scope_index].get(name) {
                 return Definition::User(index);
+            }
+            // Check if the name is defined in imported scopes.
+            for &import_scope_index in &self.scopes[scope_index].unnamed_imports {
+                if let Some(&index) = self.scopes[import_scope_index].get(name) {
+                    return Definition::User(index);
+                }
             }
             // If the name isn't in the global scope, it's undefined.
             if scope_index == 0 {

@@ -234,6 +234,13 @@ impl Iterator for NodeIterator {
 
 pub type Node = Node1;
 
+#[derive(Debug, Clone)]
+pub struct Module {
+    name: String,
+    alias: Option<String>,
+    first_token_id: u32,
+}
+
 #[derive(Copy, Clone)]
 enum Associativity {
     Left,
@@ -321,7 +328,7 @@ impl Parser {
                     rhs: 0,
                 }],
                 indices: Vec::new(),
-                module_indices: Vec::new(),
+                modules: Vec::new(),
             },
         }
     }
@@ -354,20 +361,24 @@ impl Parser {
 
     /// module = root-decl*
     fn parse_module(&mut self) -> Result<NodeId> {
+        let first_module_token = self.index as TokenId;
         self.match_token(TokenTag::Newline);
         let range = parse_until!(self, self.token_isnt(TokenTag::Eof), {
             self.parse_root_declaration()?
         });
         self.expect_token(TokenTag::Eof)?;
-        self.add_node(Tag::Module, 0, range.start, range.end)
+        self.add_node(Tag::Module, first_module_token, range.start, range.end)
     }
 
     /// root-decl = fn-decl | var-decl | struct-decl | module-decl
     fn parse_root_declaration(&mut self) -> Result<NodeId> {
         while self.match_token(TokenTag::Newline) {}
-        self.assert_token(TokenTag::Identifier)?;
+        self.assert_tokens(&[TokenTag::Identifier, TokenTag::Import], 0)?;
         // self.assert_tokens(&[TokenTag::Colon, TokenTag::ColonColon], 1);
         // Look at the token after the '::' or ':'.
+        if self.current_token_tag() == TokenTag::Import {
+            return self.parse_module_import();
+        }
         match self.next_token_tag(2) {
             TokenTag::ParenL => {
                 // identifier :: ()
@@ -389,7 +400,7 @@ impl Parser {
             }
             // TokenTag::Function => return self.parse_decl_function(),
             // identifier :: struct ...
-            TokenTag::Module => self.parse_module_import(),
+            TokenTag::Import => self.parse_module_import(),
             TokenTag::Struct => self
                 .parse_decl_struct()
                 .wrap_err("Error parsing struct definition"),
@@ -400,14 +411,19 @@ impl Parser {
 
     /// module-import = identifier '::' 'module' string-literal
     fn parse_module_import(&mut self) -> Result<NodeId> {
-        let alias_token = self.expect_token(TokenTag::Identifier)?;
-        self.expect_token(TokenTag::ColonColon)?;
-        let module_token = self.expect_token(TokenTag::Module)?;
-        let name_token = self.expect_token(TokenTag::StringLiteral)?;
-        let lhs = self.add_leaf(Tag::Identifier, alias_token)?;
-        let rhs = self.add_leaf(Tag::StringLiteral, name_token)?;
+        let (lhs, alias) = if self.current_token_tag() == TokenTag::Identifier {
+            let alias_token = self.expect_token(TokenTag::Identifier)?;
+            self.expect_token(TokenTag::ColonColon)?;
+            let lhs = self.add_leaf(Tag::Identifier, alias_token)?;
+            (lhs, Some(self.tree.node_lexeme(lhs).to_string()))
+        } else {
+            (0, None)
+        };
 
-        let current_source = self.tree.token_source(name_token);
+        let module_token = self.expect_token(TokenTag::Import)?;
+        let name_token = self.expect_token(TokenTag::StringLiteral)?;
+        let rhs = self.add_leaf(Tag::StringLiteral, name_token)?;
+        let current_source = self.tree.token_source(name_token).0;
         let module_name = self
             .tree
             .token(name_token)
@@ -415,7 +431,7 @@ impl Parser {
             .trim_matches('"')
             .to_string();
 
-        if !self.is_module_tokenized(&module_name) {
+        if let None = self.tree.get_module_index(&module_name) {
             let filename = &format!("{}.hb", module_name);
             let path = std::env::current_exe()
                 .unwrap()
@@ -424,9 +440,11 @@ impl Parser {
                 .join("modules")
                 .join(filename);
             if path.exists() {
-                self.tree
-                    .module_indices
-                    .push((module_name, self.tree.tokens.len()));
+                self.tree.modules.push(Module {
+                    name: module_name,
+                    alias,
+                    first_token_id: self.tree.tokens.len() as TokenId,
+                });
                 let source = std::fs::read_to_string(path).unwrap();
                 let mut tokenizer = Tokenizer::new(&source);
                 tokenizer.append_tokens(&mut self.tree.tokens);
@@ -435,18 +453,8 @@ impl Parser {
                 return Err(eyre!("Failed to find module \"{}\".", module_name));
             }
         }
-
         self.match_token(TokenTag::Newline);
         self.add_node(Tag::Import, module_token, lhs, rhs)
-    }
-
-    fn is_module_tokenized(&self, module_name: &str) -> bool {
-        for entry in &self.tree.module_indices {
-            if entry.0 == module_name {
-                return true;
-            }
-        }
-        false
     }
 
     /// function-decl = ideentifier '::' '(' ')'
@@ -1055,7 +1063,7 @@ pub struct Tree {
     pub tokens: Vec<Token>,
     pub nodes: Vec<Node>,
     pub indices: Vec<u32>,
-    pub module_indices: Vec<(String, usize)>,
+    pub modules: Vec<Module>,
 }
 
 impl Tree {
@@ -1079,11 +1087,31 @@ impl Tree {
         &self.tokens[node.token as usize]
     }
 
+    pub fn node_full_name(&self, id: NodeId) -> String {
+        let node = self.node(id);
+        let node_name = match node.tag {
+            Tag::FunctionDecl => self.node_lexeme_offset(node, -1),
+            _ => self.node_lexeme(id),
+        };
+        let module_token_id = self.token_source(node.token).1;
+        let module_name = self.token_module(module_token_id).0;
+        format!("{}.{}", module_name, node_name)
+    }
+
     pub fn node_lexeme(&self, id: NodeId) -> &str {
         let node = self.node(id);
         let token = self.node_token(node);
-        let source = self.token_source(node.token);
+        let source = self.token_source(node.token).0;
         token.to_str(source)
+    }
+
+    pub fn get_module_index(&self, module_name: &str) -> Option<usize> {
+        for (i, entry) in self.modules.iter().enumerate() {
+            if entry.name == module_name {
+                return Some(i);
+            }
+        }
+        None
     }
 
     pub fn node_lexeme_offset(&self, node: &Node, offset: i32) -> &str {
@@ -1091,19 +1119,40 @@ impl Tree {
             panic!("bad offset")
         }
         let token = &self.tokens[(node.token as i32 + offset) as usize];
-        let source = self.token_source(node.token);
+        let source = self.token_source(node.token).0;
         token.to_str(source)
     }
 
-    fn token_source(&self, token_id: TokenId) -> &str {
+    pub fn token_module(&self, token_id: TokenId) -> (&str, usize) {
+        if token_id == 0 {
+            return ("<global>", 0);
+        }
+        let result = self
+            .modules
+            .binary_search_by_key(&token_id, |m| m.first_token_id);
+        match result {
+            Ok(module_index) => (
+                &self.modules[module_index].name,
+                self.modules[module_index].first_token_id as usize,
+            ),
+            Err(_) => ("<error>", 0),
+        }
+    }
+
+    fn token_source(&self, token_id: TokenId) -> (&str, TokenId) {
         let mut source_index = 0;
-        for (_, index) in &self.module_indices {
-            if (token_id as usize) < *index {
-                return &self.sources[source_index];
+        let mut last_module_token_index = 0;
+        for m in &self.modules {
+            if (token_id) < m.first_token_id {
+                break;
             }
             source_index += 1;
+            last_module_token_index = m.first_token_id;
         }
-        &self.sources[source_index]
+        (
+            &self.sources[source_index],
+            last_module_token_index as TokenId,
+        )
     }
 
     /**************************************************************************/

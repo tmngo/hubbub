@@ -176,7 +176,7 @@ fn parse_module() {
   test_parse(
     Test::File,
     "\
-Math :: module \"Math\"
+Math :: #import \"Math\"
 main :: () -> Int
     x := Math.cube(3)
     return 0

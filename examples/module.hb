@@ -1,5 +1,7 @@
-Math :: module "Math"
+#import "Math"
+
 main :: () -> Int
-    x := Math.cube(3)
+    x := cube(3)
+    print_int(x)
     return 0
 end
