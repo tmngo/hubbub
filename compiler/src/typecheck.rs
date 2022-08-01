@@ -1,9 +1,9 @@
 use crate::analyze::Definition;
-use crate::parse::NodeId;
-use crate::parse::{Node, Tag, Tree};
+use crate::parse::{Node, NodeId, Tag, Tree};
 use color_eyre::eyre::{eyre, Result, WrapErr};
+use color_eyre::Section;
 use std::collections::HashMap;
-
+use thiserror::Error;
 /**
  * 1. Infer the type of each expression from the types of its components.
  * 2. Check that the types of expressions in certain contexts match what is expected.
@@ -15,6 +15,10 @@ use std::collections::HashMap;
  *     - Typecheck child statements.
  *     - Check the overall correctness.
  */
+
+#[derive(Debug, Error)]
+#[error("{0}")]
+pub struct TypeError(String);
 
 #[derive(Debug)]
 pub enum Type {
@@ -61,6 +65,7 @@ pub struct Typechecker<'a> {
     tree: &'a Tree,
     definitions: &'a HashMap<u32, Definition>,
     pub types: Vec<Type>,
+    pub error_reports: Vec<TypeError>,
     pub node_types: Vec<usize>,
     pointer_types: HashMap<TypeId, TypeId>,
 }
@@ -83,6 +88,7 @@ impl<'a> Typechecker<'a> {
             tree,
             definitions,
             types,
+            error_reports: vec![],
             node_types: vec![0; tree.nodes.len()],
             pointer_types: HashMap::new(),
         }
@@ -101,6 +107,18 @@ impl<'a> Typechecker<'a> {
             }
         }
         self.infer_range(root)?;
+        if self.error_reports.len() > 0 {
+            let err = eyre!(
+                "There were {} typechecking errors.",
+                self.error_reports.len()
+            );
+            let result = Err(err);
+            let mut type_errors = Vec::new();
+            type_errors.append(&mut self.error_reports);
+            return type_errors.into_iter().fold(result, |report, e| {
+                report.error(e).suggestion("Try doing ...")
+            });
+        }
         Ok(())
     }
 
@@ -126,6 +144,10 @@ impl<'a> Typechecker<'a> {
     fn infer_range(&mut self, node: &Node) -> Result<TypeId> {
         for i in node.lhs..node.rhs {
             self.infer_node(self.tree.indices[i as usize])?;
+            // if let Err(report) = result {
+            //     self.error_reports
+            //         .push(TypeError(report.root_cause().to_string()));
+            // }
         }
         Ok(0)
     }
@@ -163,6 +185,18 @@ impl<'a> Typechecker<'a> {
             | Tag::BitwiseAnd
             | Tag::BitwiseOr
             | Tag::BitwiseXor => self.infer_binary_node(node.lhs, node.rhs)?,
+            Tag::Assign => {
+                let ltype = self.infer_node(node.lhs)?;
+                let rtype = self.infer_node(node.rhs)?;
+                if node.rhs != 0 && ltype != rtype {
+                    return Err(eyre!(
+                        "mismatched types: expected {:?}, got {:?}",
+                        self.types[ltype],
+                        self.types[rtype]
+                    ));
+                }
+                0
+            }
             Tag::Block
             | Tag::Expressions
             | Tag::IfElse
