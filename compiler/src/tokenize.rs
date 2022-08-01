@@ -25,6 +25,7 @@ pub enum Tag {
     Dot,
     DotDot,
     DotDotDot,
+    DotStar,
     DoubleArrow,
     Else,
     End,
@@ -257,6 +258,7 @@ impl<'a> Tokenizer<'a> {
                 },
                 Tag::Dot => match c {
                     '.' => self.start(Tag::DotDot),
+                    '*' => self.start(Tag::DotStar),
                     _ => return self.token(Tag::Dot),
                 },
                 Tag::DotDot => match c {
