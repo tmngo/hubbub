@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use phf::phf_map;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Tag {
@@ -40,6 +40,7 @@ pub enum Tag {
     Hash,
     Identifier,
     If,
+    Import,
     IntegerLiteral,
     Invalid,
     Less,
@@ -86,6 +87,28 @@ pub enum Tag {
     While,
 }
 
+static KEYWORDS: phf::Map<&'static str, Tag> = phf_map! {
+    "if" => Tag::If,
+    "end" => Tag::End,
+    "else" => Tag::Else,
+    "enum" => Tag::Enum,
+    "true" => Tag::True,
+    "block" => Tag::Block,
+    "break" => Tag::Break,
+    "defer" => Tag::Defer,
+    "false" => Tag::False,
+    "using" => Tag::Using,
+    "while" => Tag::While,
+    "module" => Tag::Module,
+    "return" => Tag::Return,
+    "struct" => Tag::Struct,
+    "continue" => Tag::Continue,
+};
+
+static HASHTAGS: phf::Map<&'static str, Tag> = phf_map! {
+    "import" => Tag::Import,
+};
+
 #[derive(Copy, Clone, Debug)]
 pub struct Token {
     pub tag: Tag,
@@ -112,7 +135,6 @@ pub struct Tokenizer<'a> {
     source: &'a str,
     state: Tag,
     token: Token,
-    keywords: HashMap<&'a str, Tag>,
 }
 
 impl<'a> Tokenizer<'a> {
@@ -126,23 +148,6 @@ impl<'a> Tokenizer<'a> {
                 start: 0,
                 end: 0,
             },
-            keywords: HashMap::from([
-                ("if", Tag::If),
-                ("end", Tag::End),
-                ("else", Tag::Else),
-                ("enum", Tag::Enum),
-                ("true", Tag::True),
-                ("block", Tag::Block),
-                ("break", Tag::Break),
-                ("defer", Tag::Defer),
-                ("false", Tag::False),
-                ("using", Tag::Using),
-                ("while", Tag::While),
-                ("module", Tag::Module),
-                ("return", Tag::Return),
-                ("struct", Tag::Struct),
-                ("continue", Tag::Continue),
-            ]),
         }
     }
 
@@ -212,7 +217,6 @@ impl<'a> Tokenizer<'a> {
                         ']' => return self.finish(Tag::BracketR),
                         '^' => return self.finish(Tag::Caret),
                         ',' => return self.finish(Tag::Comma),
-                        '#' => return self.finish(Tag::Hash),
                         '(' => return self.finish(Tag::ParenL),
                         ')' => return self.finish(Tag::ParenR),
                         '~' => return self.finish(Tag::Tilde),
@@ -223,6 +227,7 @@ impl<'a> Tokenizer<'a> {
                         '.' => self.start(Tag::Dot),
                         '=' => self.start(Tag::Equal),
                         '>' => self.start(Tag::Greater),
+                        '#' => self.start(Tag::Hash),
                         '<' => self.start(Tag::Less),
                         '-' => self.start(Tag::Minus),
                         '%' => self.start(Tag::Percent),
@@ -274,6 +279,12 @@ impl<'a> Tokenizer<'a> {
                     '=' => return self.finish(Tag::GreaterEqual),
                     '>' => return self.finish(Tag::GreaterGreater),
                     _ => return self.token(Tag::Greater),
+                },
+                Tag::Hash => match c {
+                    'a'..='z' | '-' => {
+                        self.index += 1;
+                    }
+                    _ => return self.hashtag(),
                 },
                 Tag::Identifier => match c {
                     'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '-' => {
@@ -384,12 +395,16 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn keyword_or_identifier(&mut self) -> Token {
-        match self
-            .keywords
-            .get(&self.source[self.token.start as usize..self.index as usize])
-        {
+        match KEYWORDS.get(&self.source[self.token.start as usize..self.index as usize]) {
             Some(tag) => self.token(*tag),
             None => self.token(Tag::Identifier),
+        }
+    }
+
+    fn hashtag(&mut self) -> Token {
+        match HASHTAGS.get(&self.source[(self.token.start + 1) as usize..self.index as usize]) {
+            Some(tag) => self.token(*tag),
+            None => unreachable!("invalid hashtag"),
         }
     }
 }
