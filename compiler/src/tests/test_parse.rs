@@ -4,72 +4,72 @@ use crate::tests::input::*;
 use crate::tokenize::Tokenizer;
 
 pub enum Test {
-  File,
-  Expr,
-  Stmt,
+    File,
+    Expr,
+    Stmt,
 }
 
 pub fn test_parse(test: Test, src: &str, expected: &str) {
-  let source = src.to_string();
+    let source = src.to_string();
 
-  // Tokenize
-  let mut tokenizer = Tokenizer::new(&source);
-  let tokens = tokenizer.tokenize();
+    // Tokenize
+    let mut tokenizer = Tokenizer::new(&source);
+    let tokens = tokenizer.tokenize();
 
-  // Parse
-  let mut parser = Parser::new(&source, tokens);
+    // Parse
+    let mut parser = Parser::new(&source, tokens);
 
-  match test {
-    Test::File => {
-      parser.parse().ok();
-    }
-    Test::Expr => {
-      parser.parse_expr().ok();
-    }
-    Test::Stmt => {
-      parser.parse_stmt().ok();
-    }
-  };
+    match test {
+        Test::File => {
+            parser.parse().ok();
+        }
+        Test::Expr => {
+            parser.parse_expr().ok();
+        }
+        Test::Stmt => {
+            parser.parse_stmt().ok();
+        }
+    };
 
-  let tree = parser.tree();
-  println!("Nodes: {}", tree.nodes.len());
-  let result = format!("{}", tree);
-  println!("{}", result);
-  assert_eq!(&result, expected);
+    let tree = parser.tree();
+    println!("Nodes: {}", tree.nodes.len());
+    let result = format!("{}", tree);
+    println!("{}", result);
+    assert_eq!(&result, expected);
 }
 
 pub fn test_analyze(src: &str, def_count: usize) {
-  let source = src.to_string();
-  // source.push('\0');
+    let source = src.to_string();
+    // source.push('\0');
 
-  // Tokenize
-  let mut tokenizer = Tokenizer::new(&source);
-  let tokens = tokenizer.tokenize();
+    // Tokenize
+    let mut tokenizer = Tokenizer::new(&source);
+    let tokens = tokenizer.tokenize();
 
-  // Parse
-  let mut parser = Parser::new(&source, tokens);
-  parser.parse().ok();
-  let tree = parser.tree();
-  println!("{}", tree);
+    // Parse
+    let mut parser = Parser::new(&source, tokens);
+    parser.parse().ok();
+    let tree = parser.tree();
+    println!("{}", tree);
 
-  // Analyze
-  let mut analyzer = Analyzer::new(&tree);
-  analyzer.resolve().ok();
-  assert_eq!(def_count, analyzer.definitions.len());
-  println!("{}", analyzer);
+    // Analyze
+    let mut analyzer = Analyzer::new(&tree);
+    analyzer.resolve().ok();
+    assert_eq!(def_count, analyzer.definitions.len());
+    println!("{}", analyzer);
 }
 
 #[test]
 fn parse_simple() {
-  test_parse(
-    Test::File,
-    "\
+    test_parse(
+        Test::File,
+        "\
 f :: (a: Int, b: Int) -> Int
     c := 2 * (a + b)
     return c
 end
         ",
-    "\
+        "\
 (Root
   (Module
     (FunctionDecl (Prototype (Parameters
@@ -81,14 +81,14 @@ end
     ))
   )
 )",
-  );
+    );
 }
 
 #[test]
 fn parse_comments() {
-  test_parse(
-    Test::File,
-    "\
+    test_parse(
+        Test::File,
+        "\
 // Comment 1.
 main :: () -> Int 
     // Comment 2.
@@ -100,7 +100,7 @@ main :: () -> Int
 end // End of line comment.
 // Comment 6.
 ",
-    "\
+        "\
 (Root
   (Module
     (FunctionDecl (Prototype () Int) (Block
@@ -109,45 +109,45 @@ end // End of line comment.
     ))
   )
 )",
-  );
+    );
 }
 
 #[test]
 fn parse_expressions() {
-  test_parse(Test::Expr, "a + b + c", "(Add (Add a b) c)");
-  test_parse(Test::Expr, "- - -x", "(Negation (Negation (Negation x)))");
-  test_parse(Test::Expr, "a + (b * 4) + 2", "(Add (Add a (Mul b 4)) 2)");
-  test_parse(
-    Test::Expr,
-    "a > b || c < d",
-    "(LogicalOr (Greater a b) (Less c d))",
-  );
-  test_parse(Test::Expr, "a + b * (4 + 2)", "(Add a (Mul b (Add 4 2)))");
-  test_parse(Test::Expr, "- -1 * 2", "(Mul (Negation (Negation 1)) 2)");
-  test_parse(Test::Expr, "(((0)))", "0");
+    test_parse(Test::Expr, "a + b + c", "(Add (Add a b) c)");
+    test_parse(Test::Expr, "- - -x", "(Negation (Negation (Negation x)))");
+    test_parse(Test::Expr, "a + (b * 4) + 2", "(Add (Add a (Mul b 4)) 2)");
+    test_parse(
+        Test::Expr,
+        "a > b || c < d",
+        "(LogicalOr (Greater a b) (Less c d))",
+    );
+    test_parse(Test::Expr, "a + b * (4 + 2)", "(Add a (Mul b (Add 4 2)))");
+    test_parse(Test::Expr, "- -1 * 2", "(Mul (Negation (Negation 1)) 2)");
+    test_parse(Test::Expr, "(((0)))", "0");
 
-  test_parse(Test::Expr, "-9!!", "(Negation (Factorial (Factorial 9)))");
-  test_parse(Test::Expr, "(-9!)!", "(Factorial (Negation (Factorial 9)))");
-  test_parse(Test::Expr, "arr[0][1]", "(Subscript (Subscript arr 0) 1)");
-  test_parse(
-    Test::Expr,
-    "x.y.arr[0]",
-    "(Subscript (Access (Access x y) arr) 0)",
-  );
-  test_parse(Test::Expr, "&p.x", "(Address (Access p x))");
+    test_parse(Test::Expr, "-9!!", "(Negation (Factorial (Factorial 9)))");
+    test_parse(Test::Expr, "(-9!)!", "(Factorial (Negation (Factorial 9)))");
+    test_parse(Test::Expr, "arr[0][1]", "(Subscript (Subscript arr 0) 1)");
+    test_parse(
+        Test::Expr,
+        "x.y.arr[0]",
+        "(Subscript (Access (Access x y) arr) 0)",
+    );
+    test_parse(Test::Expr, "&p.x", "(Address (Access p x))");
 }
 
 #[test]
 fn parse_types() {
-  test_parse(
-    Test::File,
-    "\
+    test_parse(
+        Test::File,
+        "\
 func :: (a: Int64, b: Pointer{Int64}) -> (Int64, Array{Int64})
     c: Flo64
     d: Array{Array{Int64}}
     return 0
 end",
-    "\
+        "\
 (Root
   (Module
     (FunctionDecl (Prototype (Parameters
@@ -163,26 +163,26 @@ end",
     ))
   )
 )",
-  )
+    )
 }
 
 #[test]
 fn parse_assign() {
-  test_parse(Test::Stmt, "a := b;", "(VariableDecl b)");
+    test_parse(Test::Stmt, "a := b;", "(VariableDecl b)");
 }
 
 #[test]
 fn parse_module() {
-  test_parse(
-    Test::File,
-    "\
+    test_parse(
+        Test::File,
+        "\
 Math :: #import \"Math\"
 main :: () -> Int
     x := Math.cube(3)
     return 0
 end\
       ",
-    "\
+        "\
 (Root
   (Module
     (Import Math \"Math\")
@@ -202,14 +202,14 @@ end\
   )
 )\
       ",
-  )
+    )
 }
 
 #[test]
 fn parse_variables() {
-  test_parse(
-    Test::File,
-    "\
+    test_parse(
+        Test::File,
+        "\
 main :: ()
     a: Int8
     b := 1 + 2
@@ -217,7 +217,7 @@ main :: ()
     a = 0
     return 0
 end",
-    "\
+        "\
 (Root
   (Module
     (FunctionDecl (Prototype ()) (Block
@@ -229,14 +229,14 @@ end",
     ))
   )
 )",
-  );
+    );
 }
 
 #[test]
 fn parse_while() {
-  test_parse(
-    Test::File,
-    "\
+    test_parse(
+        Test::File,
+        "\
 main :: () -> Int64
     k := 0
     while k < 10
@@ -246,7 +246,7 @@ main :: () -> Int64
     return k
 end
     ",
-    "\
+        "\
 (Root
   (Module
     (FunctionDecl (Prototype () Int64) (Block
@@ -261,14 +261,14 @@ end
     ))
   )
 )",
-  )
+    )
 }
 
 #[test]
 fn parse_struct() {
-  test_parse(
-    Test::File,
-    "\
+    test_parse(
+        Test::File,
+        "\
 Point :: struct
     x: Int
     y: Int
@@ -279,7 +279,7 @@ Vector3 :: struct
     y: Float
     z: Float
 end",
-    "\
+        "\
 (Root
   (Module
     (Struct
@@ -293,29 +293,29 @@ end",
     )
   )
 )",
-  );
+    );
 }
 
 #[test]
 fn parse_if_stmt() {
-  test_parse(
-    Test::Stmt,
-    "\
+    test_parse(
+        Test::Stmt,
+        "\
 if x > 90
     a
 end",
-    "\
+        "\
 (If (Greater x 90) (Block
   a
 ))",
-  );
+    );
 }
 
 #[test]
 fn parse_if_else() {
-  test_parse(
-    Test::Stmt,
-    "\
+    test_parse(
+        Test::Stmt,
+        "\
 if x > 90
     if x > 95
         ap
@@ -330,7 +330,7 @@ else if x > 60
 else
     f
 end",
-    "\
+        "\
 (IfElse
   (If (Greater x 90) (Block
     (If (Greater x 95) (Block
@@ -351,12 +351,12 @@ end",
     f
   ))
 )",
-  );
+    );
 }
 #[test]
 fn analyze_simple() {
-  test_analyze(
-    "\
+    test_analyze(
+        "\
     i: Int = 9
     j: Int
     // i: Int
@@ -376,11 +376,11 @@ fn analyze_simple() {
         f(1, 2)
     end
         ",
-    17,
-  );
+        17,
+    );
 }
 
 #[test]
 fn analyze_struct() {
-  test_analyze(STRUCTS, 23);
+    test_analyze(STRUCTS, 23);
 }
