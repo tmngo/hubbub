@@ -61,17 +61,6 @@ impl<'a> Data<'a> {
         self.tree.node_lexeme_offset(node, offset)
     }
 
-    pub fn get_definition(&self, node_id: NodeId) -> &Definition {
-        self.definitions.get(&node_id).unwrap()
-    }
-
-    pub fn get_definition_id(&self, node_id: NodeId) -> NodeId {
-        if let Definition::User(def_id) = self.get_definition(node_id) {
-            return *def_id;
-        }
-        unreachable!("failed to get user definition")
-    }
-
     pub fn type_id(&self, node_id: NodeId) -> TypeId {
         self.node_types[node_id as usize]
     }

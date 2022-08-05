@@ -368,7 +368,7 @@ impl<'a> Analyzer<'a> {
             Tag::Access | Tag::Identifier => {
                 // identifier -> variable decl / access -> field
                 // If container_id is an Access,
-                let type_def = self.get_definition_id(
+                let type_def = self.definitions.get_definition_id(
                     container_id,
                     &format!(
                         "failed to find definition for identifier \"{:?}\".",
@@ -383,7 +383,7 @@ impl<'a> Analyzer<'a> {
                     _ => def_node.lhs,
                 };
 
-                let def_id = self.get_definition_id(
+                let def_id = self.definitions.get_definition_id(
                     type_node_id,
                     &format!(
                         "failed to find struct definition for variable \"{}\".",
@@ -396,17 +396,6 @@ impl<'a> Analyzer<'a> {
                 unreachable!("invalid container")
             }
         }
-    }
-
-    pub fn get_definition(&self, node_id: NodeId, msg: &str) -> &Definition {
-        self.definitions.get(&node_id).expect(msg)
-    }
-
-    pub fn get_definition_id(&self, node_id: NodeId, msg: &str) -> NodeId {
-        if let Definition::User(def_id) = self.get_definition(node_id, msg) {
-            return *def_id;
-        }
-        unreachable!("{}", msg)
     }
 
     fn define_symbol(&mut self, name: &'a str, id: u32) -> Result<()> {
@@ -475,6 +464,24 @@ impl<'a> Analyzer<'a> {
     //     }
     //     depth
     // }
+}
+
+pub trait Lookup {
+    fn get_definition_id(&self, node_id: NodeId, msg: &str) -> NodeId;
+}
+
+impl Lookup for HashMap<NodeId, Definition> {
+    fn get_definition_id(&self, node_id: NodeId, msg: &str) -> NodeId {
+        let definition = self
+            .get(&node_id)
+            .expect(&format!("Definition not found: {}", msg));
+        match definition {
+            Definition::User(id) => *id,
+            Definition::BuiltIn(id) => *id,
+            Definition::Foreign(id) => *id,
+            Definition::NotFound => unreachable!("Definition not found: {}", msg),
+        }
+    }
 }
 
 impl<'a> fmt::Display for Analyzer<'a> {

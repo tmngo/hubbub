@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+use crate::analyze::Lookup;
 use crate::builtin;
 use crate::parse::{Node, NodeId, Tag};
 use crate::translate::input::{Data, Input, Layout};
@@ -517,7 +518,9 @@ impl State {
     }
 
     fn locate_variable(&self, data: &Data, node_id: NodeId) -> Location {
-        let def_id = data.get_definition_id(node_id);
+        let def_id = data
+            .definitions
+            .get_definition_id(node_id, "failed to look up variable definition");
         *self.locations.get(&def_id).expect("failed to get location")
     }
 
@@ -528,7 +531,10 @@ impl State {
         let mut parent = data.node(parent_id);
 
         while parent.tag == Tag::Access {
-            let field_index = data.get_definition_id(parent.rhs) as usize;
+            let field_index = data
+                .definitions
+                .get_definition_id(parent.rhs, "failed to lookup field definition")
+                as usize;
             indices.push(field_index);
             parent_id = parent.lhs;
             type_ids.push(data.type_id(parent_id));
