@@ -6,13 +6,13 @@ pub extern "C" fn print_int(value: isize) -> isize {
 }
 
 pub extern "C" fn alloc(n: isize) -> *mut i8 {
-    println!("Allocate!");
+    println!("builtin.rs:alloc(n={})", n);
     let layout = Layout::from_size_align(n as usize, 1).unwrap();
     unsafe { std::alloc::alloc(layout) as *mut i8 }
 }
 
 pub extern "C" fn dealloc(ptr: *mut i8, n: isize) {
-    println!("Deallocate!");
+    println!("builtin.rs:dealloc(ptr={:p}, n={})", ptr, n);
     let layout = Layout::from_size_align(n as usize, 1).unwrap();
     unsafe {
         std::alloc::dealloc(ptr as *mut u8, layout);

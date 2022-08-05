@@ -82,10 +82,14 @@ impl<'a> Typechecker<'a> {
             Type::Float,
             Type::String,
             Type::Type,
-            Type::Function {
-                parameters: vec![TypeIndex::Integer as usize],
-                returns: vec![TypeIndex::Integer as usize],
-            },
+            // Type::Pointer {
+            //     typ: TypeIndex::Integer as TypeId,
+            // },
+            // alloc
+            // Type::Function {
+            //     parameters: vec![TypeIndex::Integer as usize],
+            //     returns: vec![6],
+            // },
         ];
         Self {
             tree,
