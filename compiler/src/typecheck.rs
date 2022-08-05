@@ -1,8 +1,9 @@
-use crate::analyze::Definition;
+use crate::analyze::{Definition, Lookup};
 use crate::parse::{Node, NodeId, Tag, Tree};
 use color_eyre::eyre::{eyre, Result, WrapErr};
 use color_eyre::Section;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use thiserror::Error;
 /**
  * 1. Infer the type of each expression from the types of its components.
@@ -42,6 +43,7 @@ pub enum Type {
     Struct {
         fields: Vec<usize>,
     },
+    TypeParameter,
 }
 
 impl Type {}
@@ -49,25 +51,26 @@ impl Type {}
 pub type TypeId = usize;
 
 pub enum TypeIndex {
-    Void,
-    Boolean,
-    Integer,
-    Float,
-    String,
-    Type,
-    Array,
-    Function,
-    Pointer,
-    Struct,
+    Void,     // 0
+    Boolean,  // 1
+    Integer,  // 2
+    Float,    // 3
+    String,   // 4
+    Type,     // 5
+    Array,    // 6
+    Function, // 7
+    Pointer,  // 8
+    Struct,   // 9
 }
 
 pub struct Typechecker<'a> {
     tree: &'a Tree,
-    definitions: &'a HashMap<u32, Definition>,
+    definitions: &'a HashMap<NodeId, Definition>,
     pub types: Vec<Type>,
     pub error_reports: Vec<TypeError>,
     pub node_types: Vec<usize>,
     pointer_types: HashMap<TypeId, TypeId>,
+    type_parameters: HashMap<NodeId, HashSet<Vec<TypeId>>>,
 }
 
 impl<'a> Typechecker<'a> {
@@ -91,7 +94,12 @@ impl<'a> Typechecker<'a> {
             error_reports: vec![],
             node_types: vec![0; tree.nodes.len()],
             pointer_types: HashMap::new(),
+            type_parameters: HashMap::new(),
         }
+    }
+
+    pub fn results(self) -> (Vec<Type>, Vec<usize>, HashMap<NodeId, HashSet<Vec<TypeId>>>) {
+        (self.types, self.node_types, self.type_parameters)
     }
 
     ///

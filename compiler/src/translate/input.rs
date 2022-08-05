@@ -3,12 +3,14 @@ use crate::parse::{Node, NodeId, Tree};
 use crate::typecheck::{Type as Typ, TypeId};
 use cranelift::prelude::Type;
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 pub struct Input<'a> {
     pub tree: &'a Tree,
     pub definitions: &'a HashMap<u32, Definition>,
     pub types: &'a Vec<Typ>,
     pub node_types: &'a Vec<usize>,
+    type_parameters: HashMap<NodeId, HashSet<Vec<TypeId>>>,
 }
 
 impl<'a> Input<'a> {
@@ -17,12 +19,14 @@ impl<'a> Input<'a> {
         definitions: &'a HashMap<u32, Definition>,
         types: &'a Vec<Typ>,
         node_types: &'a Vec<usize>,
+        type_parameters: HashMap<NodeId, HashSet<Vec<TypeId>>>,
     ) -> Self {
         Self {
             tree: &tree,
             definitions: &definitions,
             types: &types,
             node_types: &node_types,
+            type_parameters,
         }
     }
 }
@@ -32,16 +36,18 @@ pub struct Data<'a> {
     pub definitions: &'a HashMap<u32, Definition>,
     pub types: &'a Vec<Typ>,
     pub node_types: &'a Vec<usize>,
+    pub type_parameters: HashMap<NodeId, HashSet<Vec<TypeId>>>,
     pub layouts: Vec<Layout>,
 }
 
 impl<'a> Data<'a> {
-    pub fn new(input: &'a Input, layouts: Vec<Layout>) -> Self {
+    pub fn new(input: Input<'a>, layouts: Vec<Layout>) -> Self {
         Self {
             tree: input.tree,
             definitions: input.definitions,
             types: input.types,
             node_types: input.node_types,
+            type_parameters: input.type_parameters,
             layouts,
         }
     }

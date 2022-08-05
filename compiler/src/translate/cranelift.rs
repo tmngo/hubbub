@@ -60,7 +60,7 @@ pub struct Generator<'a> {
 }
 
 impl<'a> Generator<'a> {
-    pub fn new(input: &'a Input<'a>, output_name: String, use_jit: bool) -> Self {
+    pub fn new(input: Input<'a>, output_name: String, use_jit: bool) -> Self {
         let flag_builder = settings::builder();
         // flag_builder.enable("is_pic").unwrap();
         let isa_builder = isa::lookup(target_lexicon::HOST).unwrap();
@@ -146,7 +146,12 @@ impl<'a> Generator<'a> {
                 let node = self.data.node(ni);
                 match node.tag {
                     Tag::FunctionDecl => {
-                        let fn_name = self.data.tree.node_lexeme_offset(&node, -1);
+                        // Skip generic functions with no specializations.
+                        if self.data.node(node.lhs).tag == Tag::ParametricPrototype
+                            && !self.data.type_parameters.contains_key(&ni)
+                        {
+                            continue;
+                        }
                         let fn_id = Self::compile_function_decl(
                             &self.data,
                             &mut self.ctx,
@@ -154,6 +159,7 @@ impl<'a> Generator<'a> {
                             &mut self.state,
                             ni,
                         );
+                        let fn_name = self.data.tree.node_lexeme_offset(&node, -1);
                         if fn_name == "main" {
                             fn_ids.push(fn_id);
                             main_id = Some(fn_id);

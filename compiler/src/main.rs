@@ -77,17 +77,16 @@ fn main() -> Result<()> {
     typechecker.check().wrap_err("Type error")?;
     let t_typecheck = start.elapsed();
     typechecker.print();
-    let types = typechecker.types;
-    let node_types = typechecker.node_types;
+    let (types, node_types, type_parameters) = typechecker.results();
     println!("--- END TYPECHECK\n");
 
-    let input = translate::input::Input::new(&tree, &definitions, &types, &node_types);
+    let input =
+        translate::input::Input::new(&tree, &definitions, &types, &node_types, type_parameters);
 
     println!("--- BEGIN GENERATE");
     let start = Instant::now();
     let use_jit = args.len() == 3 && args[2] == "-j";
-    let generator =
-        translate::cranelift::Generator::new(&input, "object_file".to_string(), use_jit);
+    let generator = translate::cranelift::Generator::new(input, "object_file".to_string(), use_jit);
     generator.compile_nodes(Path::new(&obj_filename));
     let t_generate = start.elapsed();
     println!("--- END GENERATE\n");

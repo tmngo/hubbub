@@ -31,18 +31,11 @@ pub fn test_jit(src: &str, expected_tree: &str, expected_definitions: usize, ret
     }
 
     let mut typechecker = Typechecker::new(&tree, &definitions);
-    typechecker.check().ok();
-    let types = typechecker.types;
-    let node_types = typechecker.node_types;
+    let (types, node_types, type_parameters) = typechecker.results();
 
-    let input = Input {
-        tree: &tree,
-        definitions: &definitions,
-        types: &types,
-        node_types: &node_types,
-    };
+    let input = Input::new(&tree, &definitions, &types, &node_types, type_parameters);
 
-    let generator = Generator::new(&input, "".to_string(), true);
+    let generator = Generator::new(input, "".to_string(), true);
     let result = generator.compile_nodes(Path::new(""));
     assert!(
         result.contains(&return_value),

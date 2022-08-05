@@ -293,6 +293,13 @@ impl<'a> Analyzer<'a> {
                 self.resolve_range(body)?;
                 self.exit_scope();
             }
+            Tag::TypeParameters => {
+                for i in node.lhs..node.rhs {
+                    let type_parameter_id = self.tree.node_index(i);
+                    let name = self.tree.node_lexeme(type_parameter_id);
+                    self.define_symbol(name, type_parameter_id)?;
+                }
+            }
             Tag::Parameters => {
                 for i in node.lhs..node.rhs {
                     let field_id = self.tree.node_index(i);

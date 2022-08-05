@@ -89,56 +89,59 @@ pub const _ASSERT_TAG_SIZE: () = assert_size::<Tag>(1);
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Tag {
-    Access,         // lhs, rhs
-    Add,            // lhs, rhs
-    Address,        // expr
-    LogicalAnd,     // lhs, rhs
-    LogicalOr,      // lhs, rhs
-    Assign,         // lhs, rhs
-    AssignAdd,      // lhs, rhs
-    Block,          // start..end [Stmt]
-    BlockDirect,    //
-    BitwiseAnd,     // expr
-    BitwiseNot,     // expr
-    BitwiseOr,      // lhs, rhs
-    BitwiseXor,     // lhs, rhs
-    Break,          //
-    Call,           // func_expr, arguments: Expressions
-    Continue,       //
-    Equality,       // lhs, rhs
-    Expressions,    // start..end [Expr]
-    Dereference,    // expr
-    Factorial,      // expr
-    False,          //
-    Field,          // type_expr
-    FunctionDecl,   // prototype, block
-    Greater,        // lhs, rhs
-    Grouping,       // expr
-    Identifier,     //
-    If,             // condition, block
-    IfElse,         // start..end [If]
-    Import,         // lhs, rhs
-    Inequality,     // lhs, rhs
-    IntegerLiteral, //
-    Invalid,        //
-    Less,           // lhs, rhs
-    Div,            // lhs, rhs
-    Module,         // start..end [Declaration]
-    Mul,            // lhs, rhs
-    Negation,       // expr
-    Not,            // expr
-    Parameters,     // start..end [Field]
-    Prototype,      // parameters: Parameters, returns: Expressions
-    Return,         // expr
-    Root,           // start..end [Decl]
-    StringLiteral,  //
-    Struct,         // start..end [Field]
-    Sub,            // lhs, rhs
-    Subscript,      // lhs, rhs
-    True,           //
-    Type,           // expr
-    VariableDecl,   // type_expr, init_expr
-    While,          // condition, block
+    Access,              // lhs, rhs
+    Add,                 // lhs, rhs
+    Address,             // expr
+    LogicalAnd,          // lhs, rhs
+    LogicalOr,           // lhs, rhs
+    Assign,              // lhs, rhs
+    AssignAdd,           // lhs, rhs
+    Block,               // start..end [Stmt]
+    BlockDirect,         //
+    BitwiseAnd,          // expr
+    BitwiseNot,          // expr
+    BitwiseOr,           // lhs, rhs
+    BitwiseXor,          // lhs, rhs
+    Break,               //
+    Call,                // func_expr, arguments: Expressions
+    Continue,            //
+    Equality,            // lhs, rhs
+    Expressions,         // start..end [Expr]
+    Dereference,         // expr
+    Factorial,           // expr
+    False,               //
+    Field,               // type_expr
+    FunctionDecl,        // prototype, block
+    Greater,             // lhs, rhs
+    Grouping,            // expr
+    Identifier,          //
+    If,                  // condition, block
+    IfElse,              // start..end [If]
+    Import,              // lhs, rhs
+    Inequality,          // lhs, rhs
+    IntegerLiteral,      //
+    Invalid,             //
+    Less,                // lhs, rhs
+    Div,                 // lhs, rhs
+    Module,              // start..end [Declaration]
+    Mul,                 // lhs, rhs
+    Negation,            // expr
+    Not,                 // expr
+    Parameters,          // start..end [Field]
+    ParametricPrototype, //
+    Prototype,           // parameters: Parameters, returns: Expressions
+    Return,              // expr
+    Root,                // start..end [Decl]
+    StringLiteral,       //
+    Struct,              // start..end [Field]
+    Sub,                 // lhs, rhs
+    Subscript,           // lhs, rhs
+    True,                //
+    Type,                // expr
+    TypeParameter,       // start..end [Identifier]
+    TypeParameters,      // start..end [Identifier]
+    VariableDecl,        // type_expr, init_expr
+    While,               // condition, block
 }
 
 pub struct Node2 {
@@ -380,6 +383,9 @@ impl Parser {
             return self.parse_module_import();
         }
         match self.next_token_tag(2) {
+            TokenTag::BraceL => self
+                .parse_decl_function()
+                .wrap_err("Error parsing function declaration"),
             TokenTag::ParenL => {
                 // identifier :: ()
                 if self.next_token_tag(3) == TokenTag::ParenR {
@@ -450,7 +456,11 @@ impl Parser {
                 tokenizer.append_tokens(&mut self.tree.tokens);
                 self.tree.sources.push(source);
             } else {
-                return Err(eyre!("Failed to find module \"{}\".", module_name));
+                return Err(eyre!(
+                    "Failed to find module \"{}\" at path {:?}",
+                    module_name,
+                    path
+                ));
             }
         }
         self.match_token(TokenTag::Newline);
@@ -462,13 +472,40 @@ impl Parser {
         self.expect_token(TokenTag::Identifier)?; // identifier
         let token_index = self.expect_token(TokenTag::ColonColon)?; // '::'
         let prototype = self
-            .parse_prototype()
+            .parse_parametric_prototype()
             .wrap_err("Error parsing function prototype")?;
-        self.expect_token(TokenTag::Newline)?;
-        let body = self
-            .parse_stmt_body(0)
-            .wrap_err("Error parsing function body")?;
+        let body = if self.current_token_tag() == TokenTag::End {
+            self.expect_token_and_newline(TokenTag::End)?; // 'end'
+            0
+        } else {
+            self.expect_tokens(&[TokenTag::Newline, TokenTag::Semicolon])?;
+            self.parse_stmt_body(0)
+                .wrap_err("Error parsing function body")?
+        };
         self.add_node(Tag::FunctionDecl, token_index, prototype, body)
+    }
+
+    fn parse_parametric_prototype(&mut self) -> Result<NodeId> {
+        let token = self.index as TokenId;
+        if self.current_token_tag() == TokenTag::BraceL {
+            let type_parameters = self.parse_type_parameters()?;
+            let prototype = self.parse_prototype()?;
+            self.add_node(Tag::ParametricPrototype, token, type_parameters, prototype)
+        } else {
+            self.parse_prototype()
+        }
+    }
+
+    /// type-parameters =
+    fn parse_type_parameters(&mut self) -> Result<NodeId> {
+        let token = self.expect_token(TokenTag::BraceL)?;
+        let range = parse_until!(self, self.token_isnt(TokenTag::BraceR), {
+            let identifier_token = self.expect_token(TokenTag::Identifier)?;
+            self.match_token(TokenTag::Comma);
+            self.add_leaf(Tag::TypeParameter, identifier_token)?
+        });
+        self.expect_token(TokenTag::BraceR)?;
+        self.add_node(Tag::TypeParameters, token, range.start, range.end)
     }
 
     /// prototype =
@@ -1071,6 +1108,14 @@ impl Tree {
         &self.nodes[id as usize]
     }
 
+    pub fn lchild(&self, parent: &Node) -> &Node {
+        &self.nodes[parent.lhs as usize]
+    }
+
+    pub fn rchild(&self, parent: &Node) -> &Node {
+        &self.nodes[parent.rhs as usize]
+    }
+
     pub fn token(&self, id: TokenId) -> &Token {
         &self.tokens[id as usize]
     }
@@ -1199,7 +1244,7 @@ impl Tree {
                 write!(f, ")");
             }
             // Multiple children, single line.
-            Tag::Type | Tag::Return => {
+            Tag::Return | Tag::Type | Tag::TypeParameters => {
                 write!(f, "({:?}", tag);
                 for i in node.lhs..node.rhs {
                     write!(f, " ");
