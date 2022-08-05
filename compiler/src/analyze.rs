@@ -226,6 +226,9 @@ impl<'a> Analyzer<'a> {
     // }
 
     fn resolve_range(&mut self, node: &Node) -> Result<()> {
+        if node.tag == Tag::Root {
+            return Ok(());
+        }
         for i in node.lhs..node.rhs {
             let ni = self.tree.node_index(i);
             self.resolve_node(ni)?;
@@ -290,8 +293,10 @@ impl<'a> Analyzer<'a> {
             Tag::FunctionDecl => {
                 self.enter_scope();
                 self.resolve_node(node.lhs)?; // Prototype
-                let body = &self.tree.node(node.rhs);
-                self.resolve_range(body)?;
+                if node.rhs != 0 {
+                    let body = &self.tree.node(node.rhs);
+                    self.resolve_range(body)?;
+                }
                 self.exit_scope();
             }
             Tag::TypeParameters => {

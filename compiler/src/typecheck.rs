@@ -272,6 +272,10 @@ impl<'a> Typechecker<'a> {
             }
             Tag::IntegerLiteral => TypeIndex::Integer as TypeId,
             Tag::True | Tag::False => TypeIndex::Boolean as TypeId,
+            Tag::ParametricPrototype => {
+                // Prototype
+                self.infer_node(node.rhs)?
+            }
             Tag::Prototype => {
                 let mut parameters = Vec::new();
                 let mut returns = Vec::new();

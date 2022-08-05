@@ -153,6 +153,10 @@ impl<'a> Generator<'a> {
                         {
                             continue;
                         }
+                        // Skip function signatures
+                        if node.rhs == 0 {
+                            continue;
+                        }
                         let fn_id = Self::compile_function_decl(
                             &self.data,
                             &mut self.ctx,
