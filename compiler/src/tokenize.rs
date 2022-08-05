@@ -195,8 +195,10 @@ impl<'a> Tokenizer<'a> {
         loop {
             let c = if (self.index as usize) < self.source.len() {
                 self.source.as_bytes()[self.index as usize] as char
-            } else {
+            } else if (self.index as usize) == self.source.len() {
                 '\0'
+            } else {
+                return self.token_fixed(Tag::Eof, 0);
             };
             match self.state {
                 Tag::StateStart => {
