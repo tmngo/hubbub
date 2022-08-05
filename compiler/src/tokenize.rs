@@ -121,6 +121,16 @@ impl Token {
         source[self.start as usize..self.end as usize].to_string()
     }
 
+    pub fn line(&self, source: &str) -> i64 {
+        let mut newline_count = 1;
+        for c in source[0..self.start as usize].chars() {
+            if c == '\n' {
+                newline_count += 1;
+            }
+        }
+        newline_count
+    }
+
     pub fn to_str<'a>(&self, source: &'a str) -> &'a str {
         // println!("{} {}", self.start, self.end);
         if self.start as usize >= source.len() {

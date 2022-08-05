@@ -1143,6 +1143,13 @@ impl Tree {
         format!("{}.{}", module_name, node_name)
     }
 
+    pub fn node_token_line(&self, id: NodeId) -> i64 {
+        let node = self.node(id);
+        let token = self.node_token(node);
+        let source = self.token_source(node.token).0;
+        token.line(source)
+    }
+
     pub fn node_lexeme(&self, id: NodeId) -> &str {
         let node = self.node(id);
         let token = self.node_token(node);

@@ -198,7 +198,7 @@ impl<'a> Typechecker<'a> {
                 let rtype = self.infer_node(node.rhs)?;
                 if node.rhs != 0 && ltype != rtype {
                     return Err(eyre!(
-                        "mismatched types: expected {:?}, got {:?}",
+                        "mismatched types in assignment: expected {:?}, got {:?}",
                         self.types[ltype],
                         self.types[rtype]
                     ));
@@ -233,7 +233,11 @@ impl<'a> Typechecker<'a> {
                 if let Type::Pointer { typ } = self.types[pointer_type] {
                     typ
                 } else {
-                    unreachable!("failed to dereference pointer")
+                    return Err(eyre!(
+                        "[line {}] type \"{:?}\" cannot be dereferenced",
+                        self.tree.node_token_line(node_id),
+                        self.types[pointer_type]
+                    ));
                 }
             }
             Tag::Field => self.infer_node(node.rhs)?,
