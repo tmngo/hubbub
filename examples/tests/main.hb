@@ -20,6 +20,5 @@ main :: () -> Int64
     else if d < 30
         e = 30
     end
-    print_int(c + d + e)
     return c + d + e
 end

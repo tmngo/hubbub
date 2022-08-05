@@ -7,6 +7,5 @@ end
 
 main :: () -> Int
     x := fib(7)
-    print_int(x)
     return x
 end

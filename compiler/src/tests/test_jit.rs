@@ -53,29 +53,31 @@ pub fn test_jit(src: &str, expected_tree: &str, expected_definitions: usize, ret
 }
 
 #[test]
-fn jit_struct() {
-    test_jit(STRUCTS, STRUCTS_TREE, 23, 7);
+fn jit_boolean() {
+    let source = &std::fs::read_to_string("../examples/tests/boolean.hb").unwrap();
+    test_jit(source, "", 0, 6);
 }
 
 #[test]
-fn jit_fibonacci() {
-    test_jit(FIBONACCI, FIBONACCI_TREE, 12, 13);
+fn jit_struct() {
+    let source = &std::fs::read_to_string("../examples/tests/struct.hb").unwrap();
+    test_jit(source, STRUCTS_TREE, 23, 7);
 }
 
 #[test]
 fn jit_loop() {
-    let source = &std::fs::read_to_string("../examples/loop.hb").unwrap();
-    test_jit(source, "", 0, 10);
+    let source = &std::fs::read_to_string("../examples/tests/loop.hb").unwrap();
+    test_jit(source, "", 0, 35);
 }
 
 #[test]
 fn jit_main() {
-    let source = &std::fs::read_to_string("../examples/main.hb").unwrap();
+    let source = &std::fs::read_to_string("../examples/tests/main.hb").unwrap();
     test_jit(source, "", 0, 61);
 }
 
 #[test]
-fn jit_recursion() {
-    let source = &std::fs::read_to_string("../examples/recursion.hb").unwrap();
-    test_jit(source, "", 0, 13);
+fn jit_fibonacci() {
+    let source = &std::fs::read_to_string("../examples/tests/fibonacci.hb").unwrap();
+    test_jit(source, FIBONACCI_TREE, 11, 13);
 }

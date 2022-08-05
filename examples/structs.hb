@@ -1,5 +1,7 @@
 // Math :: module "Math"
 
+#import "Base"
+
 Point :: struct
     x: Int
     y: Int

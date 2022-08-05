@@ -2,6 +2,5 @@
 
 main :: () -> Int
     x := cube(3)
-    print_int(x)
-    return 0
+    return x
 end

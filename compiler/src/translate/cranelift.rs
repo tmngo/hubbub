@@ -347,7 +347,9 @@ impl State {
                         let index = data.node_index(j);
                         self.compile_stmt(data, c, index);
                     }
-                    c.b.ins().jump(merge_block, &[]);
+                    if !c.b.is_filled() {
+                        c.b.ins().jump(merge_block, &[]);
+                    }
                 }
                 c.b.seal_block(merge_block);
                 c.b.switch_to_block(merge_block);
@@ -442,6 +444,10 @@ impl State {
             Tag::Mul => {
                 let (lhs, rhs) = self.compile_children(data, c, node);
                 Val::Scalar(c.b.ins().imul(lhs, rhs))
+            }
+            Tag::Equality => {
+                let (lhs, rhs) = self.compile_children(data, c, node);
+                Val::Scalar(c.b.ins().icmp(IntCC::Equal, lhs, rhs))
             }
             Tag::Greater => {
                 let (lhs, rhs) = self.compile_children(data, c, node);

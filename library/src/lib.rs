@@ -7,12 +7,14 @@ fn print_int(i: isize) {
 
 #[no_mangle]
 fn alloc(n: isize) -> *mut i8 {
+    println!("lib.rs:alloc(n={})", n);
     let layout = alloc::Layout::from_size_align(n as usize, 1).unwrap();
     unsafe { alloc::alloc(layout) as *mut i8 }
 }
 
 #[no_mangle]
 fn dealloc(ptr: *mut i8, n: isize) {
+    println!("lib.rs:dealloc(ptr={:p}, n={})", ptr, n);
     let layout = alloc::Layout::from_size_align(n as usize, 1).unwrap();
     unsafe {
         std::alloc::dealloc(ptr as *mut u8, layout);

@@ -1,5 +1,3 @@
-#import "Base"
-
 foo :: (condition: Bool, a: Int, b: Int) -> Int
     if condition
         return a

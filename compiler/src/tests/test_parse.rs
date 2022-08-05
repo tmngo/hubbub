@@ -353,6 +353,41 @@ end",
 )",
     );
 }
+
+#[test]
+fn parse_parametric_fn() {
+    test_parse(
+        Test::File,
+        "\
+equals :: {T} (a: T, b: T) -> Int
+    if a == b
+        return 1
+    else
+        return 0
+    end
+end
+    ",
+        "\
+(Root
+  (Module
+    (FunctionDecl (ParametricPrototype (TypeParameters T) (Prototype (Parameters
+      (Field a T)
+      (Field b T)
+    ) Int)) (Block
+      (IfElse
+        (If (Equality a b) (Block
+          (Return 1)
+        ))
+        (If (Block
+          (Return 0)
+        ))
+      )
+    ))
+  )
+)",
+    )
+}
+
 #[test]
 fn analyze_simple() {
     test_analyze(
@@ -378,9 +413,4 @@ fn analyze_simple() {
         ",
         17,
     );
-}
-
-#[test]
-fn analyze_struct() {
-    test_analyze(STRUCTS, 23);
 }
