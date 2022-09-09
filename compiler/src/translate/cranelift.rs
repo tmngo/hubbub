@@ -8,7 +8,7 @@ use std::path::Path;
 use crate::analyze::Lookup;
 use crate::builtin;
 use crate::parse::{Node, NodeId, Tag};
-use crate::translate::input::{Data, Input, Layout};
+use crate::translate::input::{Data, Input, Layout, Shape};
 use crate::typecheck::{TypeId, TypeIndex};
 
 use cranelift::codegen;
@@ -277,13 +277,32 @@ impl State {
                     Tag::Identifier => self.locate_variable(data, node.lhs),
                     // @a = b
                     Tag::Dereference => {
+                        // Layout of referenced variable
                         let ptr_layout = data.layout(left_node.lhs);
                         let ptr = self
                             .locate(data, left_node.lhs)
                             .load_value(c, flags, ptr_layout);
                         Location::pointer(ptr, 0)
                     }
-                    _ => unreachable!("Invalid lvalue for assignment"),
+                    Tag::Subscript => {
+                        let arr_layout = data.layout(left_node.lhs);
+                        let stride = if let Shape::Array { stride, .. } = arr_layout.shape {
+                            stride
+                        } else {
+                            unreachable!();
+                        };
+                        let base = self
+                            .locate(data, left_node.lhs)
+                            .load_value(c, flags, arr_layout);
+                        let index = self
+                            .compile_expr(data, c, left_node.rhs)
+                            .cranelift_value(c, data.layout(left_node.rhs));
+                        dbg!(arr_layout);
+                        let offset = c.b.ins().imul_imm(index, stride as i64);
+                        let addr = c.b.ins().iadd(base, offset);
+                        Location::pointer(addr, 0)
+                    }
+                    _ => unreachable!("Invalid lvalue {:?} for assignment", left_node.tag),
                 };
                 left_location.store(c, right_value, flags, layout);
             }
@@ -529,6 +548,23 @@ impl State {
                 }
             }
             Tag::Identifier => self.locate(data, node_id).to_val(c, layout),
+            Tag::Subscript => {
+                let flags = MemFlags::new();
+                let arr_layout = data.layout(node.lhs);
+                let stride = if let Shape::Array { stride, .. } = arr_layout.shape {
+                    stride
+                } else {
+                    unreachable!();
+                };
+                let base = self.locate(data, node.lhs).load_value(c, flags, arr_layout);
+                dbg!(arr_layout);
+                let index = self
+                    .compile_expr(data, c, node.rhs)
+                    .cranelift_value(c, data.layout(node.rhs));
+                let offset = c.b.ins().imul_imm(index, stride as i64);
+                let addr = c.b.ins().iadd(base, offset);
+                Location::pointer(addr, 0).to_val(c, layout)
+            }
             _ => unreachable!("Invalid expression tag: {:?}", node.tag),
         }
     }
@@ -591,6 +627,7 @@ impl State {
     }
 }
 
+// https://github.com/bjorn3/rustc_codegen_cranelift/blob/master/src/pointer.rs
 #[derive(Copy, Clone, Debug)]
 pub struct Location {
     base: LocationBase,

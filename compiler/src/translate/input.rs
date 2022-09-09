@@ -125,6 +125,7 @@ impl Layout {
                 }
                 Layout::new_struct(offsets, memory_index, size, ty.bytes())
             }
+            Typ::Array { typ, length } => Layout::new_array(sizeof(types, *typ), *length as u32),
             _ => Layout::new_scalar(ty.bytes(), ty.bytes()),
         }
     }
@@ -145,12 +146,20 @@ impl Layout {
             align,
         }
     }
+    pub fn new_array(stride: u32, count: u32) -> Self {
+        Layout {
+            shape: Shape::Array { stride, count },
+            size: stride * count,
+            align: stride,
+        }
+    }
 }
 
+/// Returns the size of a type in bytes.
 pub fn sizeof(types: &Vec<Typ>, type_id: usize) -> u32 {
     match &types[type_id] {
         Typ::Void => 0,
-        Typ::Array { .. } => 16,
+        Typ::Array { typ, length } => (sizeof(types, *typ) as usize * *length) as u32,
         Typ::Struct { fields } => {
             let mut size = 0;
             for f in fields {

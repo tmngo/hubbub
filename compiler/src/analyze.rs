@@ -124,6 +124,7 @@ impl<'a> Analyzer<'a> {
                 ("F64", TypeIndex::Float as u32),
                 ("String", TypeIndex::String as u32),
                 ("Pointer", TypeIndex::Pointer as u32),
+                ("Array", TypeIndex::Array as u32),
                 // ("alloc", 7),
                 // ("print_int", 7),
             ],

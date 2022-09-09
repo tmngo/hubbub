@@ -30,18 +30,18 @@ pub enum Type {
     String,
     Type,
     Array {
+        typ: TypeId,
         length: usize,
-        typ: usize,
     },
     Function {
-        parameters: Vec<usize>,
-        returns: Vec<usize>,
+        parameters: Vec<TypeId>,
+        returns: Vec<TypeId>,
     },
     Pointer {
-        typ: usize,
+        typ: TypeId,
     },
     Struct {
-        fields: Vec<usize>,
+        fields: Vec<TypeId>,
     },
     TypeParameter,
 }
@@ -68,7 +68,8 @@ pub struct Typechecker<'a> {
     definitions: &'a HashMap<NodeId, Definition>,
     pub types: Vec<Type>,
     pub error_reports: Vec<TypeError>,
-    pub node_types: Vec<usize>,
+    pub node_types: Vec<TypeId>,
+    array_types: HashMap<(TypeId, usize), TypeId>,
     pointer_types: HashMap<TypeId, TypeId>,
     type_parameters: HashMap<NodeId, HashSet<Vec<TypeId>>>,
 }
@@ -97,6 +98,7 @@ impl<'a> Typechecker<'a> {
             types,
             error_reports: vec![],
             node_types: vec![0; tree.nodes.len()],
+            array_types: HashMap::new(),
             pointer_types: HashMap::new(),
             type_parameters: HashMap::new(),
         }
@@ -325,19 +327,59 @@ impl<'a> Typechecker<'a> {
                 }
                 self.add_type(Type::Struct { fields })
             }
+            Tag::Subscript => {
+                let array_type = self.infer_node(node.lhs)?;
+                self.infer_node(node.rhs)?;
+                if let Type::Array { typ, .. } = self.types[array_type] {
+                    typ
+                } else {
+                    return Err(eyre!(
+                        "[line {}] type \"{:?}\" cannot be indexed",
+                        self.tree.node_token_line(node_id),
+                        self.types[array_type]
+                    ));
+                }
+            }
             Tag::Type => {
-                let decl = self.definitions.get(&node_id);
-                let base_type = if let Some(lookup) = decl {
+                let definition = self.definitions.get(&node_id);
+                let base_type = if let Some(lookup) = definition {
                     match lookup {
-                        Definition::User(decl_index) => self.infer_node(*decl_index)?,
+                        Definition::User(definition_id) => self.infer_node(*definition_id)?,
                         Definition::BuiltIn(type_index) => *type_index as TypeId,
                         _ => 0,
                     }
                 } else {
                     return Err(eyre!("Undefined type"));
                 };
+                println!("base type: {:?}", base_type);
                 match base_type {
+                    6 => {
+                        println!("{}", crate::format_red!("Checking Array type"));
+                        // Expect two type parameters.
+                        assert_eq!(node.tag, Tag::Type);
+                        if node.rhs - node.lhs != 2 {
+                            return Err(eyre!(
+                                "Expected 2 type parameters, got {}.",
+                                node.rhs - node.lhs
+                            ));
+                        }
+                        let ni = self.tree.node_index(node.lhs);
+                        let value_type = self.infer_node(ni)?;
+                        let ni = self.tree.node_index(node.lhs + 1);
+                        let length_node = self.tree.node(ni);
+                        assert_eq!(
+                            length_node.tag,
+                            Tag::IntegerLiteral,
+                            "The length of an Array must be an integer literal."
+                        );
+                        let token_str = self.tree.node_lexeme(ni);
+                        dbg!(token_str);
+                        let length = token_str.parse::<i64>().unwrap();
+                        let array_type = self.add_array_type(value_type, length as usize);
+                        array_type
+                    }
                     8 => {
+                        println!("{}", crate::format_red!("Checking Pointer type"));
                         // Expect one type parameter
                         if node.rhs - node.lhs != 1 {
                             return Err(eyre!(
@@ -347,7 +389,12 @@ impl<'a> Typechecker<'a> {
                         }
                         let ni = self.tree.node_index(node.lhs);
                         let value_type = self.infer_node(ni)?;
-                        self.add_pointer_type(value_type)
+                        println!("value type: {:?}", self.types[value_type]);
+
+                        // Map from type parameter T to Pointer{T}
+                        let ptr_type = self.add_pointer_type(value_type);
+                        dbg!(ptr_type);
+                        ptr_type
                     }
                     _ => return Err(eyre!("Undefined type")),
                 }
@@ -394,6 +441,19 @@ impl<'a> Typechecker<'a> {
     fn add_type(&mut self, typ: Type) -> TypeId {
         self.types.push(typ);
         self.types.len() - 1
+    }
+
+    fn add_array_type(&mut self, value_type: TypeId, length: usize) -> TypeId {
+        match self
+            .array_types
+            .try_insert((value_type, length), self.types.len())
+        {
+            Ok(_) => self.add_type(Type::Array {
+                typ: value_type,
+                length,
+            }),
+            Err(err) => *err.entry.get(),
+        }
     }
 
     fn add_pointer_type(&mut self, value_type: TypeId) -> TypeId {
