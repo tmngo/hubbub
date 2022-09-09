@@ -241,9 +241,9 @@ pub type Node = Node1;
 
 #[derive(Debug, Clone)]
 pub struct Module {
-    name: String,
-    alias: Option<String>,
-    first_token_id: u32,
+    pub name: String,
+    pub alias: Option<String>,
+    pub first_token_id: u32,
 }
 
 #[derive(Copy, Clone)]
@@ -526,8 +526,10 @@ impl Parser {
     /// parameters =
     fn parse_parameters(&mut self) -> Result<NodeId> {
         let token = self.expect_token(TokenTag::ParenL)?;
+        let mut source_index = 0;
         let range = parse_until!(self, self.token_isnt(TokenTag::ParenR), {
-            let field = self.parse_field()?;
+            let field = self.parse_field(source_index)?;
+            source_index += 1;
             self.match_token(TokenTag::Comma);
             field
         });
@@ -608,8 +610,10 @@ impl Parser {
         self.expect_token(TokenTag::ColonColon)?;
         let token = self.expect_token(TokenTag::Struct)?;
         self.match_token(TokenTag::Newline);
+        let mut source_index = 0;
         let range = parse_until!(self, self.token_isnt(TokenTag::End), {
-            let field = self.parse_field()?;
+            let field = self.parse_field(source_index)?;
+            source_index += 1;
             self.expect_tokens(&[TokenTag::Newline, TokenTag::Semicolon])?;
             field
         });
@@ -618,12 +622,13 @@ impl Parser {
     }
 
     // field = identifier ':' type ';'
-    fn parse_field(&mut self) -> Result<NodeId> {
+    fn parse_field(&mut self, source_index: u32) -> Result<NodeId> {
         let identifier_token = self.expect_token(TokenTag::Identifier)?;
         let identifier = self.add_leaf(Tag::Identifier, identifier_token)?;
         let colon = self.expect_token(TokenTag::Colon)?;
         let type_expr = self.parse_expr_base()?;
-        self.add_node(Tag::Field, colon, identifier, type_expr)
+        let extra_data = self.add_indices2(type_expr, source_index);
+        self.add_node(Tag::Field, colon, identifier, extra_data)
     }
 
     /**************************************************************************/
@@ -972,12 +977,12 @@ impl Parser {
         Range { start, end }
     }
 
-    // fn add_indices2(&mut self, a: u32, b: u32) -> u32 {
-    //     let start = self.indices.len() as u32;
-    //     self.indices.push(a);
-    //     self.indices.push(b);
-    //     start
-    // }
+    fn add_indices2(&mut self, a: u32, b: u32) -> u32 {
+        let start = self.tree.indices.len() as u32;
+        self.tree.indices.push(a);
+        self.tree.indices.push(b);
+        start
+    }
 
     // fn add_indices3(&mut self, a: u32, b: u32, c: u32) -> u32 {
     //     let start = self.indices.len() as u32;
@@ -1138,13 +1143,16 @@ impl Tree {
 
     pub fn node_full_name(&self, id: NodeId) -> String {
         let node = self.node(id);
-        let node_name = match node.tag {
-            Tag::FunctionDecl => self.node_lexeme_offset(node, -1),
-            _ => self.node_lexeme(id),
-        };
+        let node_name = self.name(id);
         let module_token_id = self.token_source(node.token).1;
-        let module_name = self.token_module(module_token_id).0;
-        format!("{}.{}", module_name, node_name)
+        if let Some(module) = self.token_module(module_token_id) {
+            // if module.name == "Base" {
+            //     return format!("{}", node_name);
+            // }
+            format!("{}.{}", &module.name, node_name)
+        } else {
+            format!("{}", node_name)
+        }
     }
 
     pub fn node_token_line(&self, id: NodeId) -> i64 {
@@ -1157,6 +1165,20 @@ impl Tree {
     pub fn node_lexeme(&self, id: NodeId) -> &str {
         let node = self.node(id);
         let token = self.node_token(node);
+        let source = self.token_source(node.token).0;
+        token.to_str(source)
+    }
+
+    pub fn name(&self, id: NodeId) -> &str {
+        let node = self.node(id);
+        let token_index = match node.tag {
+            Tag::Field => (node.token as i32 - 1),
+            Tag::FunctionDecl => (node.token as i32 - 1),
+            Tag::Module => (node.token as i32 + 1),
+            Tag::Struct => (node.token as i32 - 2),
+            _ => node.token as i32,
+        } as usize;
+        let token = &self.tokens[token_index];
         let source = self.token_source(node.token).0;
         token.to_str(source)
     }
@@ -1179,20 +1201,14 @@ impl Tree {
         token.to_str(source)
     }
 
-    pub fn token_module(&self, token_id: TokenId) -> (&str, usize) {
+    pub fn token_module(&self, token_id: TokenId) -> Option<&Module> {
         if token_id == 0 {
-            return ("<global>", 0);
+            return None;
         }
-        let result = self
+        let module_index = self
             .modules
-            .binary_search_by_key(&token_id, |m| m.first_token_id);
-        match result {
-            Ok(module_index) => (
-                &self.modules[module_index].name,
-                self.modules[module_index].first_token_id as usize,
-            ),
-            Err(_) => ("<error>", 0),
-        }
+            .partition_point(|m| m.first_token_id < token_id);
+        Some(&self.modules[module_index])
     }
 
     fn token_source(&self, token_id: TokenId) -> (&str, TokenId) {
@@ -1270,7 +1286,10 @@ impl Tree {
                     write!(f, " ");
                     self.print_node(f, node.lhs, indentation);
                 }
-                if node.rhs != 0 && tag != Tag::Grouping {
+                if tag == Tag::Field {
+                    write!(f, " ");
+                    self.print_node(f, self.node_index(node.rhs), indentation);
+                } else if node.rhs != 0 && tag != Tag::Grouping {
                     write!(f, " ");
                     self.print_node(f, node.rhs, indentation);
                 }

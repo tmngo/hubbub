@@ -1,6 +1,7 @@
 use crate::translate::input::sizeof;
 use core::mem;
 use std::collections::HashMap;
+use std::fmt::Write;
 use std::fs;
 use std::path::Path;
 
@@ -73,9 +74,9 @@ impl<'a> Generator<'a> {
             let mut jit_builder =
                 JITBuilder::new(cranelift_module::default_libcall_names()).unwrap();
             jit_builder.symbols(vec![
-                ("print_int", builtin::print_int as *const u8),
-                ("alloc", builtin::alloc as *const u8),
-                ("dealloc", builtin::dealloc as *const u8),
+                ("Base.print_int", builtin::print_int as *const u8),
+                ("Base.alloc", builtin::alloc as *const u8),
+                ("Base.dealloc", builtin::dealloc as *const u8),
             ]);
             Box::new(JITModule::new(jit_builder))
         } else {
@@ -164,7 +165,7 @@ impl<'a> Generator<'a> {
                             &mut self.state,
                             ni,
                         );
-                        let fn_name = self.data.tree.node_lexeme_offset(&node, -1);
+                        let fn_name = self.data.tree.name(ni);
                         if fn_name == "main" {
                             fn_ids.push(fn_id);
                             main_id = Some(fn_id);
@@ -186,7 +187,7 @@ impl<'a> Generator<'a> {
         ctx: &mut codegen::Context,
         builder_ctx: &mut FunctionBuilderContext,
         state: &mut State,
-        index: u32,
+        node_id: NodeId,
     ) -> FuncId {
         let target_config = state.module.target_config();
         let ptr_type = target_config.pointer_type();
@@ -196,16 +197,16 @@ impl<'a> Generator<'a> {
             target_config,
         };
 
-        let node = data.node(index);
+        let node = data.node(node_id);
         Self::compile_function_signature(state, &data, &mut c, node.lhs);
         Self::compile_function_body(state, &data, &mut c, node.rhs);
 
         c.b.finalize();
-        let fn_name = data.node_lexeme_offset(node, -1);
-        println!("{} {}", fn_name, c.b.func.display());
+        let name = mangle_function_declaration(data, node_id, false);
+        println!("{} :: {}", name, c.b.func.display());
         let fn_id = state
             .module
-            .declare_function(fn_name, Linkage::Export, &mut c.b.func.signature)
+            .declare_function(&name, Linkage::Export, &mut c.b.func.signature)
             .unwrap();
         state.module.define_function(fn_id, ctx).unwrap();
         state.module.clear_context(ctx);
@@ -484,7 +485,19 @@ impl State {
             Tag::Call => {
                 let mut sig = self.module.make_signature();
                 let function = data.node(node.lhs);
-                let name = data.node_lexeme_offset(function, 0);
+                let name = data.tree.name(node.lhs);
+
+                let function_id = data
+                    .definitions
+                    .get_definition_id(node.lhs, "failed to get function decl");
+
+                println!("name:         {}", name);
+                println!(
+                    "mangled call: {}",
+                    mangle_function_declaration(data, function_id, false)
+                );
+
+                let name = mangle_function_declaration(data, function_id, false);
 
                 // Arguments
                 let arguments = data.node(node.rhs);
@@ -505,7 +518,7 @@ impl State {
 
                 let callee = self
                     .module
-                    .declare_function(name, Linkage::Import, &sig)
+                    .declare_function(&name, Linkage::Import, &sig)
                     .unwrap();
                 let local_callee = self.module.declare_func_in_func(callee, c.b.func);
                 let call = c.b.ins().call(local_callee, &args);
@@ -710,4 +723,46 @@ impl Val {
             }
         }
     }
+}
+
+fn mangle_function_declaration(data: &Data, node_id: NodeId, includes_types: bool) -> String {
+    let node = data.node(node_id);
+    assert_eq!(node.tag, Tag::FunctionDecl);
+    let mut full_name = data.tree.node_full_name(node_id);
+    let lhs = data.node(node.lhs);
+    let prototype = if lhs.tag == Tag::ParametricPrototype {
+        data.node(lhs.rhs)
+    } else {
+        lhs
+    };
+    if includes_types {
+        let parameters = data.node(prototype.lhs);
+        if parameters.rhs > parameters.lhs {
+            write!(full_name, "|");
+        }
+        for i in parameters.lhs..parameters.rhs {
+            let ni = data.node_index(i);
+            let ti = data.type_id(ni);
+            write!(full_name, "{},", ti);
+        }
+    }
+    full_name
+}
+
+fn mangle_function_call(data: &Data, node_id: NodeId) -> String {
+    let node = data.node(node_id);
+    assert_eq!(node.tag, Tag::Call);
+    let function_expr = data.node(node.lhs);
+    let base_name = data.tree.node_lexeme(node.lhs);
+    let mut full_name = format!("{}", base_name);
+    let arguments = data.node(node.rhs);
+    if arguments.rhs > arguments.lhs {
+        write!(full_name, "|");
+    }
+    for i in arguments.lhs..arguments.rhs {
+        let ni = data.node_index(i);
+        let ti = data.type_id(ni);
+        write!(full_name, "{},", ti);
+    }
+    full_name
 }

@@ -118,6 +118,10 @@ impl<'a> Typechecker<'a> {
                 self.infer_declaration_type(decl_id)?;
             }
         }
+        println!(
+            "{}",
+            crate::format_red!("Done inferring module declarations")
+        );
         self.infer_range(root)?;
         if self.error_reports.len() > 0 {
             let err = eyre!(
@@ -177,9 +181,17 @@ impl<'a> Typechecker<'a> {
         let result = match node.tag {
             Tag::Access => {
                 let ltype = self.infer_node(node.lhs)?;
+                // Module access.
+                if ltype == 0 {
+                    return self.infer_node(node.rhs);
+                }
+
+                // Struct access.
                 if let (Type::Struct { fields }, Definition::User(field_index)) = (
                     &self.types[ltype as usize],
-                    self.definitions.get(&node.rhs).unwrap(),
+                    self.definitions
+                        .get(&node.rhs)
+                        .expect("field index not defined"),
                 ) {
                     fields[*field_index as usize]
                 } else {
@@ -246,7 +258,7 @@ impl<'a> Typechecker<'a> {
                     ));
                 }
             }
-            Tag::Field => self.infer_node(node.rhs)?,
+            Tag::Field => self.infer_node(self.tree.node_index(node.rhs))?,
             Tag::FunctionDecl => {
                 // Prototype
                 let fn_type = self.infer_node(node.lhs)?;

@@ -57,10 +57,8 @@ impl<'a> Data<'a> {
     pub fn node_index(&self, index: u32) -> u32 {
         self.tree.node_index(index)
     }
-    pub fn node_lexeme_offset(&self, node: &Node, offset: i32) -> &str {
-        self.tree.node_lexeme_offset(node, offset)
-    }
 
+    // NodeIds can correspond to multiple types.
     pub fn type_id(&self, node_id: NodeId) -> TypeId {
         self.node_types[node_id as usize]
     }
