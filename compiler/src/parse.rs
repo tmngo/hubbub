@@ -101,6 +101,8 @@ pub enum Tag {
     BitwiseAnd,          // expr
     BitwiseNot,          // expr
     BitwiseOr,           // lhs, rhs
+    BitwiseShiftL,       //
+    BitwiseShiftR,       //
     BitwiseXor,          // lhs, rhs
     Break,               //
     Call,                // func_expr, arguments: Expressions
@@ -293,6 +295,8 @@ fn token_to_operator(tag: TokenTag) -> Operator {
         TokenTag::Ampersand => Operator::new(Tag::BitwiseAnd, 4, Associativity::Left),
         TokenTag::Caret => Operator::new(Tag::BitwiseXor, 4, Associativity::Left),
         TokenTag::Pipe => Operator::new(Tag::BitwiseOr, 4, Associativity::Left),
+        TokenTag::LessLess => Operator::new(Tag::BitwiseShiftL, 4, Associativity::Left),
+        TokenTag::GreaterGreater => Operator::new(Tag::BitwiseShiftR, 4, Associativity::Left),
         //
         TokenTag::Minus => Operator::new(Tag::Sub, 6, Associativity::Left),
         TokenTag::Plus => Operator::new(Tag::Add, 6, Associativity::Left),

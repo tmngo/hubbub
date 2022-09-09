@@ -437,6 +437,18 @@ impl State {
                 let (lhs, rhs) = self.compile_children(data, c, node);
                 Val::Scalar(c.b.ins().iadd(lhs, rhs))
             }
+            Tag::BitwiseShiftL => {
+                let (lhs, rhs) = self.compile_children(data, c, node);
+                Val::Scalar(c.b.ins().ishl(lhs, rhs))
+            }
+            Tag::BitwiseShiftR => {
+                let (lhs, rhs) = self.compile_children(data, c, node);
+                Val::Scalar(c.b.ins().sshr(lhs, rhs))
+            }
+            Tag::BitwiseXor => {
+                let (lhs, rhs) = self.compile_children(data, c, node);
+                Val::Scalar(c.b.ins().bxor(lhs, rhs))
+            }
             Tag::Sub => {
                 let (lhs, rhs) = self.compile_children(data, c, node);
                 Val::Scalar(c.b.ins().isub(lhs, rhs))

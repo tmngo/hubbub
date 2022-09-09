@@ -196,6 +196,8 @@ impl<'a> Typechecker<'a> {
             | Tag::Sub
             | Tag::BitwiseAnd
             | Tag::BitwiseOr
+            | Tag::BitwiseShiftL
+            | Tag::BitwiseShiftR
             | Tag::BitwiseXor => self.infer_binary_node(node.lhs, node.rhs)?,
             Tag::Assign => {
                 let ltype = self.infer_node(node.lhs)?;
