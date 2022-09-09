@@ -22,6 +22,7 @@ pub enum Tag {
     Comma,
     Continue,
     Defer,
+    Dollar,
     Dot,
     DotDot,
     DotDotDot,
@@ -70,6 +71,7 @@ pub enum Tag {
     Star,
     StarEqual,
     StarStar,
+    StarStarStar,
     // StateError,
     StateIntegerLiteral10,
     // StateLineComment,
@@ -229,6 +231,7 @@ impl<'a> Tokenizer<'a> {
                         ']' => return self.finish(Tag::BracketR),
                         '^' => return self.finish(Tag::Caret),
                         ',' => return self.finish(Tag::Comma),
+                        '$' => return self.finish(Tag::Dollar),
                         '(' => return self.finish(Tag::ParenL),
                         ')' => return self.finish(Tag::ParenR),
                         '~' => return self.finish(Tag::Tilde),
@@ -275,7 +278,7 @@ impl<'a> Tokenizer<'a> {
                 },
                 Tag::Dot => match c {
                     '.' => self.start(Tag::DotDot),
-                    '*' => self.start(Tag::DotStar),
+                    '*' => return self.finish(Tag::DotStar),
                     _ => return self.token(Tag::Dot),
                 },
                 Tag::DotDot => match c {
@@ -347,8 +350,12 @@ impl<'a> Tokenizer<'a> {
                 },
                 Tag::Star => match c {
                     '=' => return self.finish(Tag::StarEqual),
-                    '*' => return self.finish(Tag::StarStar),
+                    '*' => self.start(Tag::StarStar),
                     _ => return self.token(Tag::Star),
+                },
+                Tag::StarStar => match c {
+                    '*' => return self.finish(Tag::StarStarStar),
+                    _ => return self.token(Tag::StarStar),
                 },
                 Tag::StringLiteral => match c {
                     '"' => return self.finish(Tag::StringLiteral),
