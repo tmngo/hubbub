@@ -74,6 +74,30 @@ impl<'a> Data<'a> {
         &self.layouts[self.type_id(node_id)]
     }
 
+    pub fn mangle_function_declaration(&self, node_id: NodeId, includes_types: bool) -> String {
+        let node = self.node(node_id);
+        assert_eq!(node.tag, Tag::FunctionDecl);
+        let mut full_name = self.tree.node_full_name(node_id);
+        let lhs = self.node(node.lhs);
+        let prototype = if lhs.tag == Tag::ParametricPrototype {
+            self.node(lhs.rhs)
+        } else {
+            lhs
+        };
+        if includes_types {
+            let parameters = self.node(prototype.lhs);
+            if parameters.rhs > parameters.lhs {
+                write!(full_name, "|").ok();
+            }
+            for i in parameters.lhs..parameters.rhs {
+                let ni = self.node_index(i);
+                let ti = self.type_id(ni);
+                write!(full_name, "{},", ti).ok();
+            }
+        }
+        full_name
+    }
+
     // fn node_type_to_offsets(&self, node_id: NodeId) -> Vec<i32> {
     //     let type_id = self.type_id(node_id);
     //     let mut offsets = Vec::new();

@@ -194,7 +194,7 @@ impl<'a> Generator<'a> {
         Self::compile_function_body(state, &data, &mut c, node.rhs);
 
         c.b.finalize();
-        let name = mangle_function_declaration(data, node_id, false);
+        let name = data.mangle_function_declaration(node_id, false);
         println!("{} :: {}", name, c.b.func.display());
         let fn_id = state
             .module
@@ -495,20 +495,18 @@ impl State {
             Tag::False => Val::Scalar(c.b.ins().iconst(ty, 0)),
             Tag::Call => {
                 let mut sig = self.module.make_signature();
-                let function = data.node(node.lhs);
-                let name = data.tree.name(node.lhs);
 
                 let function_id = data
                     .definitions
                     .get_definition_id(node.lhs, "failed to get function decl");
 
-                println!("name:         {}", name);
+                println!("name:         {}", data.tree.name(node.lhs));
                 println!(
                     "mangled call: {}",
-                    mangle_function_declaration(data, function_id, false)
+                    data.mangle_function_declaration(function_id, false)
                 );
 
-                let name = mangle_function_declaration(data, function_id, false);
+                let name = data.mangle_function_declaration(function_id, false);
 
                 // Arguments
                 let arguments = data.node(node.rhs);
@@ -752,46 +750,4 @@ impl Val {
             }
         }
     }
-}
-
-fn mangle_function_declaration(data: &Data, node_id: NodeId, includes_types: bool) -> String {
-    let node = data.node(node_id);
-    assert_eq!(node.tag, Tag::FunctionDecl);
-    let mut full_name = data.tree.node_full_name(node_id);
-    let lhs = data.node(node.lhs);
-    let prototype = if lhs.tag == Tag::ParametricPrototype {
-        data.node(lhs.rhs)
-    } else {
-        lhs
-    };
-    if includes_types {
-        let parameters = data.node(prototype.lhs);
-        if parameters.rhs > parameters.lhs {
-            write!(full_name, "|");
-        }
-        for i in parameters.lhs..parameters.rhs {
-            let ni = data.node_index(i);
-            let ti = data.type_id(ni);
-            write!(full_name, "{},", ti);
-        }
-    }
-    full_name
-}
-
-fn mangle_function_call(data: &Data, node_id: NodeId) -> String {
-    let node = data.node(node_id);
-    assert_eq!(node.tag, Tag::Call);
-    let function_expr = data.node(node.lhs);
-    let base_name = data.tree.node_lexeme(node.lhs);
-    let mut full_name = format!("{}", base_name);
-    let arguments = data.node(node.rhs);
-    if arguments.rhs > arguments.lhs {
-        write!(full_name, "|");
-    }
-    for i in arguments.lhs..arguments.rhs {
-        let ni = data.node_index(i);
-        let ti = data.type_id(ni);
-        write!(full_name, "{},", ti);
-    }
-    full_name
 }
