@@ -1,10 +1,14 @@
-use crate::analyze::{Definition, Lookup};
-use crate::parse::{Node, NodeId, Tag, Tree};
-use color_eyre::eyre::{eyre, Result, WrapErr};
-use color_eyre::Section;
-use std::collections::HashMap;
-use std::collections::HashSet;
+use crate::{
+    analyze::{Definition, Lookup},
+    parse::{Node, NodeId, Tag, Tree},
+};
+use color_eyre::{
+    eyre::{eyre, Result},
+    Section,
+};
+use std::collections::{HashMap, HashSet};
 use thiserror::Error;
+
 /**
  * 1. Infer the type of each expression from the types of its components.
  * 2. Check that the types of expressions in certain contexts match what is expected.

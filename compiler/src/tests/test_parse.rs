@@ -1,7 +1,4 @@
-use crate::analyze::Analyzer;
-use crate::parse::Parser;
-use crate::tests::input::*;
-use crate::tokenize::Tokenizer;
+use crate::{analyze::Analyzer, parse::Parser, tokenize::Tokenizer};
 
 pub enum Test {
     File,
@@ -9,15 +6,11 @@ pub enum Test {
     Stmt,
 }
 
-pub fn test_parse(test: Test, src: &str, expected: &str) {
-    let source = src.to_string();
-
-    // Tokenize
-    let mut tokenizer = Tokenizer::new(&source);
+pub fn test_parse(test: Test, source: &str, expected: &str) {
+    let mut tokenizer = Tokenizer::new(source);
     let tokens = tokenizer.tokenize();
 
-    // Parse
-    let mut parser = Parser::new(&source, tokens);
+    let mut parser = Parser::new(source, tokens);
 
     match test {
         Test::File => {
@@ -38,21 +31,15 @@ pub fn test_parse(test: Test, src: &str, expected: &str) {
     assert_eq!(&result, expected);
 }
 
-pub fn test_analyze(src: &str, def_count: usize) {
-    let source = src.to_string();
-    // source.push('\0');
-
-    // Tokenize
-    let mut tokenizer = Tokenizer::new(&source);
+pub fn test_analyze(source: &str, def_count: usize) {
+    let mut tokenizer = Tokenizer::new(source);
     let tokens = tokenizer.tokenize();
 
-    // Parse
-    let mut parser = Parser::new(&source, tokens);
+    let mut parser = Parser::new(source, tokens);
     parser.parse().ok();
     let tree = parser.tree();
     println!("{}", tree);
 
-    // Analyze
     let mut analyzer = Analyzer::new(&tree);
     analyzer.resolve().ok();
     assert_eq!(def_count, analyzer.definitions.len());

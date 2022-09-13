@@ -1,26 +1,23 @@
-use crate::translate::input::sizeof;
-use core::mem;
-use std::collections::HashMap;
-use std::fmt::Write;
-use std::fs;
-use std::path::Path;
-
-use crate::analyze::Lookup;
-use crate::builtin;
-use crate::parse::{Node, NodeId, Tag};
-use crate::translate::input::{Data, Input, Layout, Shape};
-use crate::typecheck::{TypeId, TypeIndex};
-
-use cranelift::codegen;
-use cranelift::codegen::ir::StackSlot;
-use cranelift::prelude::{isa, settings};
+use crate::{
+    analyze::Lookup,
+    builtin,
+    parse::{Node, NodeId, Tag},
+    translate::input::{sizeof, Data, Input, Layout, Shape},
+    typecheck::{TypeId, TypeIndex},
+};
 use cranelift::prelude::{
-    AbiParam, FunctionBuilder, FunctionBuilderContext, InstBuilder, IntCC, MemFlags, StackSlotData,
-    StackSlotKind, Type, Value, Variable,
+    codegen::{
+        ir::{Function, StackSlot},
+        Context,
+    },
+    isa::{lookup, TargetFrontendConfig},
+    settings, AbiParam, FunctionBuilder, FunctionBuilderContext, InstBuilder, IntCC, MemFlags,
+    StackSlotData, StackSlotKind, Type, Value, Variable,
 };
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataContext, FuncId, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
+use std::{collections::HashMap, fs, path::Path};
 
 pub trait CraneliftModule: Module {
     fn finalize(self: Box<Self>, id: FuncId, output_file: &Path) -> i64;
@@ -30,7 +27,7 @@ impl CraneliftModule for JITModule {
     fn finalize(mut self: Box<Self>, id: FuncId, _output_file: &Path) -> i64 {
         self.finalize_definitions();
         let main = self.get_finalized_function(id);
-        let main: fn() -> i64 = unsafe { mem::transmute(main) };
+        let main: fn() -> i64 = unsafe { std::mem::transmute(main) };
         println!("--- JIT output:");
         let result = main();
         println!("--- JIT result: {}", result);
@@ -50,12 +47,12 @@ impl CraneliftModule for ObjectModule {
 pub struct FnContext<'a> {
     b: FunctionBuilder<'a>,
     ptr_type: Type,
-    target_config: isa::TargetFrontendConfig,
+    target_config: TargetFrontendConfig,
 }
 
 pub struct Generator<'a> {
     pub builder_ctx: FunctionBuilderContext,
-    pub ctx: codegen::Context,
+    pub ctx: Context,
     data_ctx: DataContext,
     data: Data<'a>,
     pub state: State,
@@ -65,7 +62,7 @@ impl<'a> Generator<'a> {
     pub fn new(input: Input<'a>, output_name: String, use_jit: bool) -> Self {
         let flag_builder = settings::builder();
         // flag_builder.enable("is_pic").unwrap();
-        let isa_builder = isa::lookup(target_lexicon::HOST).unwrap();
+        let isa_builder = lookup(target_lexicon::HOST).unwrap();
         let isa = isa_builder
             .finish(settings::Flags::new(flag_builder))
             .unwrap();
@@ -106,12 +103,7 @@ impl<'a> Generator<'a> {
     }
 
     ///
-    pub fn init_signature(
-        func: &mut codegen::ir::Function,
-        parameters: &Node,
-        returns: &Node,
-        t: Type,
-    ) {
+    pub fn init_signature(func: &mut Function, parameters: &Node, returns: &Node, t: Type) {
         for _ in parameters.lhs..parameters.rhs {
             // Tag::Field
             func.signature.params.push(AbiParam::new(t));
@@ -184,7 +176,7 @@ impl<'a> Generator<'a> {
     ///
     pub fn compile_function_decl(
         data: &Data,
-        ctx: &mut codegen::Context,
+        ctx: &mut Context,
         builder_ctx: &mut FunctionBuilderContext,
         state: &mut State,
         node_id: NodeId,

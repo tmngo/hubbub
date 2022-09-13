@@ -2,8 +2,7 @@
 #![feature(option_result_contains)]
 
 use color_eyre::eyre::{eyre, Result, WrapErr};
-use std::path::Path;
-use std::time::Instant;
+use std::{path::Path, time::Instant};
 
 pub mod analyze;
 mod builtin;

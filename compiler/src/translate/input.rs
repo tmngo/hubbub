@@ -1,9 +1,12 @@
-use crate::analyze::Definition;
-use crate::parse::{Node, NodeId, Tree};
-use crate::typecheck::{Type as Typ, TypeId};
-use cranelift::prelude::Type;
-use std::collections::HashMap;
-use std::collections::HashSet;
+use crate::{
+    analyze::Definition,
+    parse::{Node, NodeId, Tag, Tree},
+    typecheck::{Type as Typ, TypeId},
+};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Write,
+};
 
 pub struct Input<'a> {
     pub tree: &'a Tree,

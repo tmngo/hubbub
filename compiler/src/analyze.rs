@@ -1,11 +1,10 @@
-use crate::parse::{Node, NodeId, Tag, Tree};
-use crate::typecheck::TypeIndex;
-use crate::utils::assert_size;
+use crate::{
+    parse::{Node, NodeId, Tag, Tree},
+    typecheck::TypeIndex,
+    utils::assert_size,
+};
 use color_eyre::eyre::{eyre, Result, WrapErr};
-use std::collections::HashMap;
-// use std::collections::HashMap::OccupiedError;
-use crate::output::Color;
-use std::fmt;
+use std::{collections::HashMap, fmt};
 
 /**
  * This associates identifiers

@@ -1,11 +1,12 @@
-use crate::tokenize::{Tag as TokenTag, Token, Tokenizer};
-use crate::utils::assert_size;
-use std::fmt;
-use std::fmt::Debug;
-
-use std::ops::Range;
-
+use crate::{
+    tokenize::{Tag as TokenTag, Token, Tokenizer},
+    utils::assert_size,
+};
 use color_eyre::eyre::{eyre, Result, WrapErr};
+use std::{
+    fmt::{self, Debug},
+    ops::Range,
+};
 
 /*
 program = decl*

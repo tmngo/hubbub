@@ -1,6 +1,5 @@
 use phf::phf_map;
-use std::iter::Peekable;
-use std::str::CharIndices;
+use std::{iter::Peekable, str::CharIndices};
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Tag {

@@ -1,6 +1,3 @@
-use std::path::Path;
-use std::process::Command;
-
 use crate::{
     analyze::Analyzer,
     link,
@@ -10,6 +7,7 @@ use crate::{
     translate::{cranelift::Generator, input::Input},
     typecheck::Typechecker,
 };
+use std::{path::Path, process::Command};
 
 pub enum Test {
     AotAndJit,
