@@ -1,4 +1,6 @@
 use phf::phf_map;
+use std::iter::Peekable;
+use std::str::CharIndices;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Tag {
@@ -145,6 +147,7 @@ impl Token {
 pub struct Tokenizer<'a> {
     index: u32,
     source: &'a str,
+    char_indices: Peekable<CharIndices<'a>>,
     state: Tag,
     token: Token,
 }
@@ -155,6 +158,7 @@ impl<'a> Tokenizer<'a> {
             index: 0,
             source,
             state: Tag::StateStart,
+            char_indices: source.char_indices().peekable(),
             token: Token {
                 tag: Tag::Invalid,
                 start: 0,
@@ -195,12 +199,10 @@ impl<'a> Tokenizer<'a> {
         };
         self.state = Tag::StateStart;
         loop {
-            let c = if (self.index as usize) < self.source.len() {
-                self.source.as_bytes()[self.index as usize] as char
-            } else if (self.index as usize) == self.source.len() {
-                '\0'
+            let c = if let Some((_, ch)) = self.char_indices.peek() {
+                *ch
             } else {
-                return self.token_fixed(Tag::Eof, 0);
+                '\0'
             };
             match self.state {
                 Tag::StateStart => {
@@ -211,14 +213,12 @@ impl<'a> Tokenizer<'a> {
                             return self.token_fixed(Tag::Eof, 0);
                         }
                         // Whitespace
-                        ' ' | '\r' => {
-                            self.index += 1;
-                        }
+                        ' ' | '\r' => self.advance(),
                         '\n' => {
                             if last != Tag::Newline {
                                 self.start(Tag::Newline);
                             } else {
-                                self.index += 1;
+                                self.advance();
                             }
                         }
                         // Identifier
@@ -256,6 +256,7 @@ impl<'a> Tokenizer<'a> {
                         // Integer literals
                         '0' => self.start(Tag::StateZero),
                         '1'..='9' => self.start(Tag::StateIntegerLiteral10),
+                        _ if unicode_ident::is_xid_start(c) => self.start(Tag::Identifier),
                         // Invalid tokens
                         _ => {
                             panic!("invalid token {:?}", c);
@@ -296,15 +297,12 @@ impl<'a> Tokenizer<'a> {
                     _ => return self.token(Tag::Greater),
                 },
                 Tag::Hash => match c {
-                    'a'..='z' | '-' => {
-                        self.index += 1;
-                    }
+                    'a'..='z' | '-' => self.advance(),
                     _ => return self.hashtag(),
                 },
                 Tag::Identifier => match c {
-                    'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '-' => {
-                        self.index += 1;
-                    }
+                    'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '-' => self.advance(),
+                    _ if unicode_ident::is_xid_continue(c) => self.advance(),
                     _ => return self.keyword_or_identifier(),
                 },
                 Tag::Less => match c {
@@ -319,9 +317,7 @@ impl<'a> Tokenizer<'a> {
                     _ => return self.token(Tag::Minus),
                 },
                 Tag::Newline => match c {
-                    ' ' | '\n' | '\r' | '\t' => {
-                        self.index += 1;
-                    }
+                    ' ' | '\n' | '\r' | '\t' => self.advance(),
                     _ => return self.token_fixed(Tag::Newline, 1),
                 },
                 Tag::Percent => match c {
@@ -359,9 +355,7 @@ impl<'a> Tokenizer<'a> {
                 },
                 Tag::StringLiteral => match c {
                     '"' => return self.finish(Tag::StringLiteral),
-                    _ => {
-                        self.index += 1;
-                    }
+                    _ => self.advance(),
                 },
                 Tag::StateLineCommentStart => match c {
                     '\n' => {
@@ -371,12 +365,10 @@ impl<'a> Tokenizer<'a> {
                             self.start(Tag::Newline);
                         }
                     }
-                    _ => {
-                        self.index += 1;
-                    }
+                    _ => self.advance(),
                 },
                 Tag::StateIntegerLiteral10 => match c {
-                    '0'..='9' | '_' => self.index += 1,
+                    '0'..='9' | '_' => self.advance(),
                     _ => return self.token(Tag::IntegerLiteral),
                 },
                 Tag::StateZero => match c {
@@ -390,14 +382,23 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
+    fn advance(&mut self) {
+        self.char_indices.next();
+        if let Some(char_index) = self.char_indices.peek() {
+            self.index = char_index.0 as u32;
+        } else {
+            self.index = self.source.len() as u32;
+        }
+    }
+
     fn start(&mut self, tag: Tag) {
         self.token.tag = tag;
         self.state = tag;
-        self.index += 1;
+        self.advance();
     }
 
     fn finish(&mut self, tag: Tag) -> Token {
-        self.index += 1;
+        self.advance();
         self.token(tag)
     }
 
