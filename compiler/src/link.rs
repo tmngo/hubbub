@@ -14,7 +14,7 @@ use target_lexicon::Triple;
  *
  */
 
-pub fn link(object_filename: &str, output_filename: &str) {
+pub fn link(object_filename: &str, output_filename: &str, base_dir: &str) {
     let host = &format!("{}", Triple::host());
     let tool = cc::Build::new()
         .host(host)
@@ -28,7 +28,7 @@ pub fn link(object_filename: &str, output_filename: &str) {
         command.args([
             &format!("-Fe{}", output_filename),
             object_filename,
-            "target/debug/hubbub_runtime.lib",
+            &format!("{}target/debug/hubbub_runtime.lib", base_dir),
             "advapi32.lib",
             "bcrypt.lib",
             "kernel32.lib",
@@ -40,7 +40,7 @@ pub fn link(object_filename: &str, output_filename: &str) {
         command.args(&[
             &format!("-o{}", output_filename),
             object_filename,
-            "target/debug/hubbub_runtime.lib",
+            &format!("{}target/debug/hubbub_runtime.lib", base_dir),
             "-ladvapi32",
             "-lbcrypt",
             "-lkernel32",

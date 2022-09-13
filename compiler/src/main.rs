@@ -92,8 +92,8 @@ fn main() -> Result<()> {
     println!("--- END GENERATE\n");
 
     if !use_jit {
-        println!("--- BEGIN LINK [host: {}]", target_lexicon::Triple::host());
-        link::link(&obj_filename, &exe_filename);
+        println!("--- BEGIN LINK [host: {}]", target_lexicon::HOST);
+        link::link(&obj_filename, &exe_filename, "");
         println!("--- END LINK\n");
     }
 
