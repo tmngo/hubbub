@@ -68,12 +68,12 @@ fn main() -> Result<()> {
     analyzer.resolve().wrap_err("Name resolution error")?;
     let t_analyze = start.elapsed();
     print!("{}", analyzer);
-    let definitions = analyzer.definitions;
+    let mut definitions = analyzer.definitions;
     println!("--- END ANALYZE\n");
 
     println!("--- BEGIN TYPECHECK");
     let start = Instant::now();
-    let mut typechecker = typecheck::Typechecker::new(&tree, &definitions);
+    let mut typechecker = typecheck::Typechecker::new(&tree, &mut definitions);
     typechecker.check().wrap_err("Type error")?;
     let t_typecheck = start.elapsed();
     typechecker.print();

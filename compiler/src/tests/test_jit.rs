@@ -25,7 +25,7 @@ pub fn test_jit(src: &str, expected_tree: &str, expected_definitions: usize, ret
 
     let mut analyzer = Analyzer::new(&tree);
     analyzer.resolve().expect("Name resolution error");
-    let definitions = analyzer.definitions;
+    let mut definitions = analyzer.definitions;
     if expected_definitions != 0 {
         assert_eq!(
             definitions.len(),
@@ -36,7 +36,7 @@ pub fn test_jit(src: &str, expected_tree: &str, expected_definitions: usize, ret
         );
     }
 
-    let mut typechecker = Typechecker::new(&tree, &definitions);
+    let mut typechecker = Typechecker::new(&tree, &mut definitions);
     typechecker.check().expect("Type error");
     let (types, node_types, type_parameters) = typechecker.results();
 

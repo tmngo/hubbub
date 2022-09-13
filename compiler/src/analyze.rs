@@ -449,6 +449,7 @@ impl<'a> Analyzer<'a> {
     /// Access: the lhs can be either another access or an identifier.
     fn get_container_definition(&self, container_id: NodeId) -> NodeId {
         match self.tree.node(container_id).tag {
+            // The lhs of the Access is either an identfier, or another Access.
             Tag::Access | Tag::Identifier => {
                 // identifier -> variable decl / access -> field
                 // If container_id is an Access,
@@ -466,6 +467,10 @@ impl<'a> Analyzer<'a> {
                     Tag::Field => self.tree.node_index(def_node.rhs),
                     _ => def_node.lhs,
                 };
+
+                if type_node_id == 0 {
+                    return 0;
+                }
 
                 let def_id = self.definitions.get_definition_id(
                     type_node_id,

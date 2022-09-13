@@ -65,8 +65,9 @@ pub enum TypeIndex {
 
 pub struct Typechecker<'a> {
     tree: &'a Tree,
-    definitions: &'a HashMap<NodeId, Definition>,
+    definitions: &'a mut HashMap<NodeId, Definition>,
     pub types: Vec<Type>,
+    type_definitions: HashMap<TypeId, NodeId>,
     pub error_reports: Vec<TypeError>,
     pub node_types: Vec<TypeId>,
     array_types: HashMap<(TypeId, usize), TypeId>,
@@ -75,7 +76,7 @@ pub struct Typechecker<'a> {
 }
 
 impl<'a> Typechecker<'a> {
-    pub fn new(tree: &'a Tree, definitions: &'a HashMap<u32, Definition>) -> Self {
+    pub fn new(tree: &'a Tree, definitions: &'a mut HashMap<u32, Definition>) -> Self {
         let types = vec![
             Type::Void,
             Type::Boolean,
@@ -95,6 +96,7 @@ impl<'a> Typechecker<'a> {
         Self {
             tree,
             definitions,
+            type_definitions: HashMap::new(),
             types,
             error_reports: vec![],
             node_types: vec![0; tree.nodes.len()],
@@ -148,10 +150,12 @@ impl<'a> Typechecker<'a> {
         match node.tag {
             Tag::FunctionDecl => {
                 // prototype
-                self.infer_node(node.lhs)?;
+                let type_id = self.infer_node(node.lhs)?;
+                self.type_definitions.insert(type_id, index);
             }
             Tag::Struct => {
-                self.infer_node(index)?;
+                let type_id = self.infer_node(index)?;
+                self.type_definitions.insert(type_id, index);
             }
             _ => {}
         };
@@ -186,6 +190,22 @@ impl<'a> Typechecker<'a> {
                 // Module access.
                 if ltype == 0 {
                     return self.infer_node(node.rhs);
+                }
+
+                if let Some(&type_definition) = self.type_definitions.get(&ltype) {
+                    let struct_decl = self.tree.node(type_definition);
+                    assert_eq!(struct_decl.tag, Tag::Struct);
+                    for i in struct_decl.lhs..struct_decl.rhs {
+                        let field_id = self.tree.node_index(i);
+                        if self.tree.name(field_id) == self.tree.name(node.rhs) {
+                            self.definitions.insert(node_id, Definition::User(field_id));
+                            let field = self.tree.node(field_id);
+                            let field_index = self.tree.node_index(field.rhs + 1);
+                            self.definitions
+                                .insert(node.rhs, Definition::User(field_index));
+                            break;
+                        }
+                    }
                 }
 
                 // Struct access.
