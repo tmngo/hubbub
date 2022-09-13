@@ -59,7 +59,7 @@ pub struct Generator<'a> {
 }
 
 impl<'a> Generator<'a> {
-    pub fn new(input: Input<'a>, output_name: String, use_jit: bool) -> Self {
+    pub fn new(input: &'a Input<'a>, output_name: String, use_jit: bool) -> Self {
         let flag_builder = settings::builder();
         // flag_builder.enable("is_pic").unwrap();
         let isa_builder = lookup(target_lexicon::HOST).unwrap();
@@ -94,7 +94,7 @@ impl<'a> Generator<'a> {
             builder_ctx: FunctionBuilderContext::new(),
             ctx: module.make_context(),
             data_ctx: DataContext::new(),
-            data: Data::new(input, layouts),
+            data: Data::new(&input, layouts),
             state: State {
                 module,
                 locations: HashMap::new(),

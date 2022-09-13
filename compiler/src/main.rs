@@ -85,7 +85,8 @@ fn main() -> Result<()> {
     println!("--- BEGIN GENERATE");
     let start = Instant::now();
     let use_jit = args.len() == 3 && args[2] == "-j";
-    let generator = translate::cranelift::Generator::new(input, "object_file".to_string(), use_jit);
+    let generator =
+        translate::cranelift::Generator::new(&input, "object_file".to_string(), use_jit);
     generator.compile_nodes(Path::new(&obj_filename));
     let t_generate = start.elapsed();
     println!("--- END GENERATE\n");

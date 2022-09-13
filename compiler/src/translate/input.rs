@@ -44,7 +44,7 @@ pub struct Data<'a> {
 }
 
 impl<'a> Data<'a> {
-    pub fn new(input: Input<'a>, layouts: Vec<Layout>) -> Self {
+    pub fn new(input: &'a Input<'a>, layouts: Vec<Layout>) -> Self {
         Self {
             tree: input.tree,
             definitions: input.definitions,
