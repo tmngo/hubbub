@@ -570,8 +570,8 @@ impl Lookup for HashMap<NodeId, Definition> {
 impl<'a> fmt::Display for Analyzer<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         for (i, scope) in self.scopes.iter().enumerate() {
-            writeln!(f, "Scope [{}]: parent: {}", i, scope.parent);
-            writeln!(f, "  {:?}", scope.symbols);
+            writeln!(f, "Scope [{}]: parent: {}", i, scope.parent)?;
+            writeln!(f, "  {:?}", scope.symbols)?;
         }
         let mut references = HashMap::new();
         for (key, value) in &self.definitions {
@@ -586,7 +586,7 @@ impl<'a> fmt::Display for Analyzer<'a> {
                 format!("{:?}", key),
                 value.len(),
                 value,
-            );
+            )?;
         }
         Ok(())
     }

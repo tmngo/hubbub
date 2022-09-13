@@ -1100,8 +1100,8 @@ impl Parser {
 
 const SPACES: usize = 2;
 
-fn write_indent(f: &mut fmt::Formatter, indentation: usize) {
-    write!(f, "{1:0$}", indentation * SPACES, "");
+fn write_indent(f: &mut fmt::Formatter, indentation: usize) -> fmt::Result {
+    write!(f, "{1:0$}", indentation * SPACES, "")
 }
 
 pub struct Tree {
@@ -1230,16 +1230,16 @@ impl Tree {
     /**************************************************************************/
     // Debug
 
-    fn print_node(&self, f: &mut fmt::Formatter, id: NodeId, indentation: usize) {
+    fn print_node(&self, f: &mut fmt::Formatter, id: NodeId, indentation: usize) -> fmt::Result {
         let node = self.node(id);
         let tag = node.tag;
         if node.lhs == 0 && node.rhs == 0 {
             if tag == Tag::Parameters {
-                write!(f, "()");
+                write!(f, "()")?;
             } else {
-                write!(f, "{}", self.node_lexeme(id));
+                write!(f, "{}", self.node_lexeme(id))?;
             }
-            return;
+            return Ok(());
         }
 
         match tag {
@@ -1261,42 +1261,42 @@ impl Tree {
                 //         writeln!(f);
                 //     }
                 // }
-                writeln!(f, "({:?}", tag);
+                writeln!(f, "({:?}", tag)?;
                 for i in node.lhs..node.rhs {
-                    write_indent(f, indentation + 1);
-                    self.print_node(f, self.node_index(i), indentation + 1);
-                    writeln!(f, "");
+                    write_indent(f, indentation + 1)?;
+                    self.print_node(f, self.node_index(i), indentation + 1)?;
+                    writeln!(f, "")?;
                 }
-                write_indent(f, indentation);
-                write!(f, ")");
+                write_indent(f, indentation)?;
+                write!(f, ")")?;
             }
             // Multiple children, single line.
             Tag::Return | Tag::Type | Tag::TypeParameters => {
-                write!(f, "({:?}", tag);
+                write!(f, "({:?}", tag)?;
                 for i in node.lhs..node.rhs {
-                    write!(f, " ");
-                    self.print_node(f, self.node_index(i), indentation + 1);
+                    write!(f, " ")?;
+                    self.print_node(f, self.node_index(i), indentation + 1)?;
                 }
-                write!(f, ")");
+                write!(f, ")")?;
             }
             // One or two children.
             _ => {
-                write!(f, "({:?}", tag);
+                write!(f, "({:?}", tag)?;
                 if node.lhs != 0 {
-                    write!(f, " ");
-                    self.print_node(f, node.lhs, indentation);
+                    write!(f, " ")?;
+                    self.print_node(f, node.lhs, indentation)?;
                 }
                 if tag == Tag::Field {
-                    write!(f, " ");
-                    self.print_node(f, self.node_index(node.rhs), indentation);
+                    write!(f, " ")?;
+                    self.print_node(f, self.node_index(node.rhs), indentation)?;
                 } else if node.rhs != 0 && tag != Tag::Grouping {
-                    write!(f, " ");
-                    self.print_node(f, node.rhs, indentation);
+                    write!(f, " ")?;
+                    self.print_node(f, node.rhs, indentation)?;
                 }
-                write!(f, ")");
-                return;
+                write!(f, ")")?;
             }
         }
+        Ok(())
     }
 }
 
@@ -1304,9 +1304,9 @@ impl fmt::Display for Tree {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let root = self.node(0);
         if root.lhs == 0 && root.rhs == 0 {
-            self.print_node(f, (self.nodes.len() - 1) as u32, 0)
+            self.print_node(f, (self.nodes.len() - 1) as u32, 0)?;
         } else {
-            self.print_node(f, 0 as u32, 0)
+            self.print_node(f, 0 as u32, 0)?;
         };
         Ok(())
     }
