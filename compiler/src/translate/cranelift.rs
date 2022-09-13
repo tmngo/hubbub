@@ -87,7 +87,7 @@ impl<'a> Generator<'a> {
         let layouts = input
             .types
             .iter()
-            .map(|typ| Layout::new(input.types, &typ, ty))
+            .map(|typ| Layout::new(input.types, &typ, ty.bytes()))
             .collect();
 
         Self {
@@ -673,11 +673,10 @@ impl Location {
     fn load_value(&self, c: &mut FnContext, flags: MemFlags, layout: &Layout) -> Value {
         let (ins, ty) = (c.b.ins(), c.ptr_type);
         match self.base {
-            LocationBase::Pointer(base_addr) => ins.load(ty, flags, base_addr, self.offset),
-            LocationBase::Register(variable) => c.b.use_var(variable),
+            LocationBase::Pointer(_) | LocationBase::Register(_) => self.load_scalar(c, flags),
             LocationBase::Stack(stack_slot) => {
                 if layout.size <= 8 {
-                    ins.stack_load(ty, stack_slot, self.offset)
+                    self.load_scalar(c, flags)
                 } else {
                     ins.stack_addr(ty, stack_slot, self.offset)
                 }

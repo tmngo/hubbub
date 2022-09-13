@@ -88,12 +88,20 @@ fn main() -> Result<()> {
     let generator =
         translate::cranelift::Generator::new(&input, "object_file".to_string(), use_jit);
     generator.compile_nodes(Path::new(&obj_filename));
+    if !use_jit {
+        translate::llvm::compile(&input, use_jit, &format!("llvm{}", &obj_filename));
+    }
     let t_generate = start.elapsed();
     println!("--- END GENERATE\n");
 
     if !use_jit {
         println!("--- BEGIN LINK [host: {}]", target_lexicon::HOST);
         link::link(&obj_filename, &exe_filename, "");
+        link::link(
+            &format!("llvm{}", &obj_filename),
+            &format!("llvm{}", &exe_filename),
+            "",
+        );
         println!("--- END LINK\n");
     }
 

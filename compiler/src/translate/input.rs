@@ -135,11 +135,11 @@ impl<'a> Data<'a> {
 pub struct Layout {
     pub shape: Shape,
     pub size: u32,
-    align: u32,
+    pub align: u32,
 }
 
 impl Layout {
-    pub fn new(types: &Vec<Typ>, typ: &Typ, ty: Type) -> Self {
+    pub fn new(types: &Vec<Typ>, typ: &Typ, bytes: u32) -> Self {
         match typ {
             Typ::Struct { fields } => {
                 let mut size = 0;
@@ -150,10 +150,10 @@ impl Layout {
                     memory_index.push(i as u32);
                     size += sizeof(types, type_id);
                 }
-                Layout::new_struct(offsets, memory_index, size, ty.bytes())
+                Layout::new_struct(offsets, memory_index, size, bytes)
             }
             Typ::Array { typ, length } => Layout::new_array(sizeof(types, *typ), *length as u32),
-            _ => Layout::new_scalar(ty.bytes(), ty.bytes()),
+            _ => Layout::new_scalar(bytes, bytes),
         }
     }
     pub fn new_struct(offsets: Vec<i32>, memory_index: Vec<u32>, size: u32, align: u32) -> Self {

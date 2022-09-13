@@ -17,4 +17,4 @@ phf = { version = "0.11.0", features = ["macros"] }
 target-lexicon = "0.12.4"
 thiserror = "1.0"
 unicode-ident = "1.0.3"
-# inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "master", features = ["llvm13-0"] }
+inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "master", features = ["llvm13-0"] }
