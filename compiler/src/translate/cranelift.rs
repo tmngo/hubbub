@@ -87,14 +87,14 @@ impl<'a> Generator<'a> {
         let layouts = input
             .types
             .iter()
-            .map(|typ| Layout::new(input.types, &typ, ty.bytes()))
+            .map(|typ| Layout::new(input.types, typ, ty.bytes()))
             .collect();
 
         Self {
             builder_ctx: FunctionBuilderContext::new(),
             ctx: module.make_context(),
             data_ctx: DataContext::new(),
-            data: Data::new(&input, layouts),
+            data: Data::new(input, layouts),
             state: State {
                 module,
                 locations: HashMap::new(),
@@ -138,32 +138,29 @@ impl<'a> Generator<'a> {
             for i in module.lhs..module.rhs {
                 let ni = self.data.node_index(i);
                 let node = self.data.node(ni);
-                match node.tag {
-                    Tag::FunctionDecl => {
-                        // Skip generic functions with no specializations.
-                        if self.data.node(node.lhs).tag == Tag::ParametricPrototype
-                            && !self.data.type_parameters.contains_key(&ni)
-                        {
-                            continue;
-                        }
-                        // Skip function signatures
-                        if node.rhs == 0 {
-                            continue;
-                        }
-                        let fn_id = Self::compile_function_decl(
-                            &self.data,
-                            &mut self.ctx,
-                            &mut self.builder_ctx,
-                            &mut self.state,
-                            ni,
-                        );
-                        let fn_name = self.data.tree.name(ni);
-                        if fn_name == "main" {
-                            fn_ids.push(fn_id);
-                            main_id = Some(fn_id);
-                        }
+                if let Tag::FunctionDecl = node.tag {
+                    // Skip generic functions with no specializations.
+                    if self.data.node(node.lhs).tag == Tag::ParametricPrototype
+                        && !self.data.type_parameters.contains_key(&ni)
+                    {
+                        continue;
                     }
-                    _ => {}
+                    // Skip function signatures
+                    if node.rhs == 0 {
+                        continue;
+                    }
+                    let fn_id = Self::compile_function_decl(
+                        &self.data,
+                        &mut self.ctx,
+                        &mut self.builder_ctx,
+                        &mut self.state,
+                        ni,
+                    );
+                    let fn_name = self.data.tree.name(ni);
+                    if fn_name == "main" {
+                        fn_ids.push(fn_id);
+                        main_id = Some(fn_id);
+                    }
                 };
             }
         }
@@ -190,15 +187,15 @@ impl<'a> Generator<'a> {
         };
 
         let node = data.node(node_id);
-        Self::compile_function_signature(state, &data, &mut c, node.lhs);
-        Self::compile_function_body(state, &data, &mut c, node.rhs);
+        Self::compile_function_signature(state, data, &mut c, node.lhs);
+        Self::compile_function_body(state, data, &mut c, node.rhs);
 
         c.b.finalize();
         let name = data.mangle_function_declaration(node_id, false);
         println!("{} :: {}", name, c.b.func.display());
         let fn_id = state
             .module
-            .declare_function(&name, Linkage::Export, &mut c.b.func.signature)
+            .declare_function(&name, Linkage::Export, &c.b.func.signature)
             .unwrap();
         state.module.define_function(fn_id, ctx).unwrap();
         state.module.clear_context(ctx);
@@ -214,7 +211,7 @@ impl<'a> Generator<'a> {
         let prototype = data.node(node_id);
         let parameters = data.node(prototype.lhs);
         let returns = data.node(prototype.rhs);
-        Self::init_signature(&mut c.b.func, parameters, returns, c.ptr_type);
+        Self::init_signature(c.b.func, parameters, returns, c.ptr_type);
 
         let entry_block = c.b.create_block();
         c.b.append_block_params_for_function_params(entry_block);
@@ -224,7 +221,7 @@ impl<'a> Generator<'a> {
         // Define parameters as stack variables.
         for i in parameters.lhs..parameters.rhs {
             let ni = data.node_index(i);
-            let stack_slot = state.create_stack_slot(&data, c, ni);
+            let stack_slot = state.create_stack_slot(data, c, ni);
             let location = Location::stack(stack_slot, 0);
             state.locations.insert(ni, location);
             let layout = data.layout(ni);

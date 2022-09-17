@@ -202,7 +202,7 @@ impl<'a> Analyzer<'a> {
                     // let module_name = self.tree.node_lexeme_offset(&node, 1).trim_matches('"');
                     // self.define_symbol(name, index)?;
                     // let module_info = self.tree.token_module(module_node.token);
-                    let module_scope_index = self.get_module_scope_index(&node);
+                    let module_scope_index = self.get_module_scope_index(node);
                     let current_scope = &mut self.scopes[self.current];
                     if node.lhs != 0 {
                         // let alias_node = self.tree.node(node.lhs);
@@ -242,7 +242,7 @@ impl<'a> Analyzer<'a> {
     fn get_module_scope_index(&self, module_node: &Node) -> usize {
         let module_name = self
             .tree
-            .node_lexeme_offset(&module_node, 1)
+            .node_lexeme_offset(module_node, 1)
             .trim_matches('"');
         if let Some(module_index) = self.tree.get_module_index(module_name) {
             module_index + 2
@@ -306,7 +306,7 @@ impl<'a> Analyzer<'a> {
                         let container_def = self.tree.node(container_def_id);
                         if let Tag::Import = container_def.tag {
                             // self.definitions.insert(id, definition);
-                            let module_scope_index = self.get_module_scope_index(&container_def);
+                            let module_scope_index = self.get_module_scope_index(container_def);
                             // let member_definition = self.lookup(name: &str)
                             // self.definitions.insert(node.rhs, Definition::User())
                             let name = self.tree.node_lexeme(node.rhs);
@@ -337,7 +337,7 @@ impl<'a> Analyzer<'a> {
                         .struct_scopes
                         .get(&struct_decl_id)
                         .expect("failed to get struct scope")
-                        .get(&field_name)
+                        .get(field_name)
                     {
                         Some(value) => value,
                         _ => {
@@ -487,14 +487,14 @@ impl<'a> Analyzer<'a> {
     }
 
     fn define_symbol(scope: &mut Scope<'a>, name: &'a str, id: u32) -> Result<()> {
-        if let Err(_) = scope.symbols.try_insert(name, id) {
+        if scope.symbols.try_insert(name, id).is_err() {
             return Err(eyre!(" - Name \"{}\" is already defined.", name));
         }
         Ok(())
     }
 
     fn lookup(&self, name: &str) -> Definition {
-        if self.scopes.len() == 0 {
+        if self.scopes.is_empty() {
             return Definition::NotFound;
         }
         let mut scope_index = self.current;
@@ -561,7 +561,7 @@ impl Lookup for HashMap<NodeId, Definition> {
     fn get_definition_id(&self, node_id: NodeId, msg: &str) -> NodeId {
         let definition = self
             .get(&node_id)
-            .expect(&format!("Definition not found: {}", msg));
+            .unwrap_or_else(|| panic!("Definition not found: {}", msg));
         match definition {
             Definition::User(id) => *id,
             Definition::BuiltIn(id) => *id,

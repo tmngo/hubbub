@@ -6,7 +6,7 @@ pub trait Color {
 
 impl Color for &str {
     fn red(self) -> String {
-        format!("{}", self)
+        self.to_string()
     }
 }
 

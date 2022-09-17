@@ -32,7 +32,7 @@ pub fn test(
     parser.parse().expect("Parse error");
     let tree = parser.tree();
 
-    if expected_tree != "" {
+    if !expected_tree.is_empty() {
         assert_eq!(expected_tree, &format!("{}", tree));
     }
 
@@ -62,7 +62,7 @@ pub fn test(
 }
 
 pub fn test_backend(filename: &str, input: &Input, use_jit: bool, expected_exit_code: i64) {
-    let generator = Generator::new(&input, "".to_string(), use_jit);
+    let generator = Generator::new(input, "".to_string(), use_jit);
     let obj_filename = format!("../test-{}.obj", filename);
     let obj_path = Path::new(&obj_filename);
     let result = generator.compile_nodes(obj_path);

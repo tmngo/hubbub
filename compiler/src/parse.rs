@@ -88,7 +88,7 @@ LISTS
 // Assert that Tag size <= 1 byte
 pub const _ASSERT_TAG_SIZE: () = assert_size::<Tag>(1);
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Tag {
     Access,              // lhs, rhs
     Add,                 // lhs, rhs
@@ -442,7 +442,7 @@ impl Parser {
             .trim_matches('"')
             .to_string();
 
-        if let None = self.tree.get_module_index(&module_name) {
+        if self.tree.get_module_index(&module_name).is_none() {
             let filename = &format!("{}.hb", module_name);
             let path = std::env::current_exe()
                 .unwrap()
@@ -834,12 +834,11 @@ impl Parser {
 
     /// expr-prefix = prefix-op* expr-operand
     fn parse_expr_prefix(&mut self) -> Result<NodeId> {
-        let tag;
-        match self.current_token_tag() {
-            TokenTag::Ampersand => tag = Tag::Address,
-            TokenTag::Bang => tag = Tag::Not,
-            TokenTag::Minus => tag = Tag::Negation,
-            TokenTag::Tilde => tag = Tag::BitwiseNot,
+        let tag = match self.current_token_tag() {
+            TokenTag::Ampersand => Tag::Address,
+            TokenTag::Bang => Tag::Not,
+            TokenTag::Minus => Tag::Negation,
+            TokenTag::Tilde => Tag::BitwiseNot,
             // TokenTag::ParenL => {
             //     self.shift_token();
             //     let expr = self.parse_expr();
@@ -847,7 +846,7 @@ impl Parser {
             //     return expr;
             // }
             _ => return self.parse_expr_postfix(),
-        }
+        };
         let op_token = self.shift_token();
         let expr = self.parse_expr_prefix()?;
         self.add_node(tag, op_token, expr, 0)
@@ -1152,7 +1151,7 @@ impl Tree {
             // }
             format!("{}.{}", &module.name, node_name)
         } else {
-            format!("{}", node_name)
+            node_name.to_string()
         }
     }
 
@@ -1173,10 +1172,10 @@ impl Tree {
     pub fn name(&self, id: NodeId) -> &str {
         let node = self.node(id);
         let token_index = match node.tag {
-            Tag::Field => (node.token as i32 - 1),
-            Tag::FunctionDecl => (node.token as i32 - 1),
-            Tag::Module => (node.token as i32 + 1),
-            Tag::Struct => (node.token as i32 - 2),
+            Tag::Field => node.token as i32 - 1,
+            Tag::FunctionDecl => node.token as i32 - 1,
+            Tag::Module => node.token as i32 + 1,
+            Tag::Struct => node.token as i32 - 2,
             _ => node.token as i32,
         } as usize;
         let token = &self.tokens[token_index];
@@ -1266,7 +1265,7 @@ impl Tree {
                 for i in node.lhs..node.rhs {
                     write_indent(f, indentation + 1)?;
                     self.print_node(f, self.node_index(i), indentation + 1)?;
-                    writeln!(f, "")?;
+                    writeln!(f)?;
                 }
                 write_indent(f, indentation)?;
                 write!(f, ")")?;
@@ -1307,7 +1306,7 @@ impl fmt::Display for Tree {
         if root.lhs == 0 && root.rhs == 0 {
             self.print_node(f, (self.nodes.len() - 1) as u32, 0)?;
         } else {
-            self.print_node(f, 0 as u32, 0)?;
+            self.print_node(f, 0_u32, 0)?;
         };
         Ok(())
     }

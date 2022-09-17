@@ -131,7 +131,7 @@ impl<'a> Typechecker<'a> {
             crate::format_red!("Done inferring module declarations")
         );
         self.infer_range(root)?;
-        if self.error_reports.len() > 0 {
+        if !self.error_reports.is_empty() {
             let err = eyre!(
                 "There were {} typechecking errors.",
                 self.error_reports.len()
@@ -254,7 +254,7 @@ impl<'a> Typechecker<'a> {
             | Tag::IfElse
             | Tag::Module
             | Tag::Parameters
-            | Tag::Return => self.infer_range(&node)?,
+            | Tag::Return => self.infer_range(node)?,
             Tag::Call => {
                 let ltype = self.infer_node(node.lhs)?;
                 self.infer_node(node.rhs)?;
@@ -263,7 +263,7 @@ impl<'a> Typechecker<'a> {
                     returns,
                 } = &self.types[ltype]
                 {
-                    if returns.len() > 0 {
+                    if !returns.is_empty() {
                         returns[0]
                     } else {
                         0
@@ -399,8 +399,7 @@ impl<'a> Typechecker<'a> {
                         let token_str = self.tree.node_lexeme(ni);
                         dbg!(token_str);
                         let length = token_str.parse::<i64>().unwrap();
-                        let array_type = self.add_array_type(value_type, length as usize);
-                        array_type
+                        self.add_array_type(value_type, length as usize)
                     }
                     8 => {
                         println!("{}", crate::format_red!("Checking Pointer type"));
@@ -445,7 +444,7 @@ impl<'a> Typechecker<'a> {
             }
         };
         self.set_node_type(node_id, result);
-        return Ok(self.node_types[node_id as usize]);
+        Ok(self.node_types[node_id as usize])
     }
 
     ///

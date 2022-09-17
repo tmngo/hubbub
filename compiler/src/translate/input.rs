@@ -25,10 +25,10 @@ impl<'a> Input<'a> {
         type_parameters: HashMap<NodeId, HashSet<Vec<TypeId>>>,
     ) -> Self {
         Self {
-            tree: &tree,
-            definitions: &definitions,
-            types: &types,
-            node_types: &node_types,
+            tree,
+            definitions,
+            types,
+            node_types,
             type_parameters,
         }
     }

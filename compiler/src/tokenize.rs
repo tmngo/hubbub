@@ -1,7 +1,7 @@
 use phf::phf_map;
 use std::{iter::Peekable, str::CharIndices};
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Tag {
     Ampersand,
     AmpersandAmpersand,
@@ -120,7 +120,7 @@ pub struct Token {
 }
 
 impl Token {
-    pub fn to_string(&self, source: &str) -> String {
+    pub fn to_string(self, source: &str) -> String {
         source[self.start as usize..self.end as usize].to_string()
     }
 
@@ -134,7 +134,7 @@ impl Token {
         newline_count
     }
 
-    pub fn to_str<'a>(&self, source: &'a str) -> &'a str {
+    pub fn to_str(self, source: &str) -> &str {
         // println!("{} {}", self.start, self.end);
         if self.start as usize >= source.len() {
             return "EOF";
@@ -428,14 +428,14 @@ impl<'a> Tokenizer<'a> {
     }
 }
 
-pub fn print(source: &str, tokens: &Vec<Token>) {
+pub fn print(source: &str, tokens: &[Token]) {
     for (i, token) in tokens.iter().enumerate() {
         println!(
             "{:<5} {:<16} {:<9} {}",
             i,
             format!("{:?}", token.tag),
             format!("{}..{}", token.start, token.end),
-            token.to_str(source).replace("\n", "\\n")
+            token.to_str(source).replace('\n', "\\n")
         );
     }
 }

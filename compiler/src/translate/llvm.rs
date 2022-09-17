@@ -1,7 +1,7 @@
 use crate::{
     analyze::Lookup,
     parse::{Node, NodeId, Tag},
-    translate::input::{Data, Input, Layout, Shape},
+    translate::input::{Data, Input, Layout},
     typecheck::{Type as Typ, TypeId, TypeIndex},
 };
 use inkwell::{
@@ -46,9 +46,9 @@ pub fn compile(input: &Input, use_jit: bool, obj_filename: &str) {
     let layouts = input
         .types
         .iter()
-        .map(|typ| Layout::new(input.types, &typ, 8))
+        .map(|typ| Layout::new(input.types, typ, 8))
         .collect();
-    let data = Data::new(&input, layouts);
+    let data = Data::new(input, layouts);
     let target_data = execution_engine.get_target_data();
     let ptr_sized_int_type = context.ptr_sized_int_type(target_data, None);
 
@@ -125,18 +125,15 @@ impl<'ctx> Generator<'ctx> {
             for i in module.lhs..module.rhs {
                 let ni = self.data.tree.node_index(i);
                 let node = self.data.tree.node(ni);
-                match node.tag {
-                    Tag::FunctionDecl => {
-                        // Skip generic functions with no specializations.
-                        if self.data.tree.node(node.lhs).tag == Tag::ParametricPrototype
-                            && !self.data.type_parameters.contains_key(&ni)
-                        {
-                            continue;
-                        }
-                        let name = self.data.mangle_function_declaration(ni, false);
-                        self.compile_function_signature(node.lhs, &name);
+                if let Tag::FunctionDecl = node.tag {
+                    // Skip generic functions with no specializations.
+                    if self.data.tree.node(node.lhs).tag == Tag::ParametricPrototype
+                        && !self.data.type_parameters.contains_key(&ni)
+                    {
+                        continue;
                     }
-                    _ => {}
+                    let name = self.data.mangle_function_declaration(ni, false);
+                    self.compile_function_signature(node.lhs, &name);
                 };
             }
         }
@@ -153,30 +150,28 @@ impl<'ctx> Generator<'ctx> {
                 let ni = self.data.tree.node_index(i);
                 let node = self.data.tree.node(ni);
                 // println!("{:?}", node.tag);
-                match node.tag {
-                    Tag::FunctionDecl => {
-                        // Skip generic functions with no specializations.
-                        if self.data.tree.node(node.lhs).tag == Tag::ParametricPrototype
-                            && !self.data.type_parameters.contains_key(&ni)
-                        {
-                            continue;
-                        }
-                        // Skip function signatures
-                        if node.rhs == 0 {
-                            continue;
-                        }
-                        let fn_value = self.compile_function_decl(state, ni);
-                        let fn_name = self.data.tree.name(ni);
-                        if fn_name == "main" {
-                            fn_values.push(fn_value);
-                            main_fn = Some(fn_value);
-                        }
+                println!("compiling {}", self.data.tree.name(ni));
+                if let Tag::FunctionDecl = node.tag {
+                    // Skip generic functions with no specializations.
+                    if self.data.tree.node(node.lhs).tag == Tag::ParametricPrototype
+                        && !self.data.type_parameters.contains_key(&ni)
+                    {
+                        continue;
                     }
-                    _ => {}
+                    // Skip function signatures
+                    if node.rhs == 0 {
+                        continue;
+                    }
+                    let fn_value = self.compile_function_decl(state, ni);
+                    let fn_name = self.data.tree.name(ni);
+                    if fn_name == "main" {
+                        fn_values.push(fn_value);
+                        main_fn = Some(fn_value);
+                    }
                 };
             }
         }
-        if let Some(_) = main_fn {
+        if main_fn.is_some() {
             // return Some(self.state.module.finalize(id, filename));
         }
         println!("compile_nodes");
@@ -341,14 +336,12 @@ impl<'ctx> Generator<'ctx> {
 
                 // Branch if zero
                 let zero = self.ptr_sized_int_type.const_zero();
-                let condition_expr = builder
-                    .build_int_compare(
-                        IntPredicate::EQ,
-                        condition_expr.into_int_value(),
-                        zero,
-                        "ifcond",
-                    )
-                    .into();
+                let condition_expr = builder.build_int_compare(
+                    IntPredicate::EQ,
+                    condition_expr.into_int_value(),
+                    zero,
+                    "ifcond",
+                );
                 builder.build_conditional_branch(condition_expr, then_block, merge_block);
                 builder.build_unconditional_branch(then_block);
                 // then block
@@ -357,11 +350,11 @@ impl<'ctx> Generator<'ctx> {
                     let ni = data.node_index(i);
                     self.compile_stmt(state, ni);
                 }
-                if !builder
+                if builder
                     .get_insert_block()
                     .unwrap()
                     .get_terminator()
-                    .is_some()
+                    .is_none()
                 {
                     builder.build_unconditional_branch(merge_block);
                 }
@@ -387,14 +380,12 @@ impl<'ctx> Generator<'ctx> {
                 for i in 0..if_count {
                     let condition_expr = self.compile_expr(state, if_nodes[i].lhs);
                     let zero = self.ptr_sized_int_type.const_zero();
-                    let condition_expr = builder
-                        .build_int_compare(
-                            IntPredicate::NE,
-                            condition_expr.into_int_value(),
-                            zero,
-                            "ifcond",
-                        )
-                        .into();
+                    let condition_expr = builder.build_int_compare(
+                        IntPredicate::NE,
+                        condition_expr.into_int_value(),
+                        zero,
+                        "ifcond",
+                    );
                     if i < if_count - 1 {
                         let block = self.context.append_basic_block(parent_fn, "block");
                         builder.build_conditional_branch(condition_expr, then_blocks[i], block);
@@ -418,11 +409,11 @@ impl<'ctx> Generator<'ctx> {
                         let index = data.node_index(j);
                         self.compile_stmt(state, index);
                     }
-                    if !builder
+                    if builder
                         .get_insert_block()
                         .unwrap()
                         .get_terminator()
-                        .is_some()
+                        .is_none()
                     {
                         builder.build_unconditional_branch(merge_block);
                     }

@@ -37,7 +37,7 @@ pub fn link(object_filename: &str, output_filename: &str, base_dir: &str) {
             "msvcrt.lib",
         ]);
     } else if tool.is_like_clang() {
-        command.args(&[
+        command.args([
             &format!("-o{}", output_filename),
             object_filename,
             &format!("{}target/debug/hubbub_runtime.lib", base_dir),
@@ -66,7 +66,7 @@ pub fn link(object_filename: &str, output_filename: &str, base_dir: &str) {
 // #[cfg(not(windows))]
 pub fn link_gcc(object_filename: &str, output_filename: &str) {
     let mut command = Command::new("gcc");
-    command.args(&[
+    command.args([
         &format!("-o{}", output_filename),
         object_filename,
         "target/debug/libhubbub_runtime.a",
