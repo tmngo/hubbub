@@ -224,8 +224,9 @@ impl<'a> Generator<'a> {
             let stack_slot = state.create_stack_slot(data, c, ni);
             let location = Location::stack(stack_slot, 0);
             state.locations.insert(ni, location);
+            let parameter_index = (i - parameters.lhs) as usize;
+            let value = c.b.block_params(entry_block)[parameter_index];
             let layout = data.layout(ni);
-            let value = c.b.block_params(entry_block)[(i - parameters.lhs) as usize];
             location.store(c, value, MemFlags::new(), layout);
         }
     }
@@ -254,46 +255,12 @@ impl State {
                 // rhs: expr
                 assert_eq!(data.type_id(node.lhs), data.type_id(node.rhs));
                 let layout = data.layout(node.rhs);
-                let left_node = data.node(node.lhs);
-                let right_value = self
+                let rvalue = self
                     .compile_expr(data, c, node.rhs)
                     .cranelift_value(c, layout);
                 let flags = MemFlags::new();
-                let left_location = match left_node.tag {
-                    // a.x = b
-                    Tag::Access => self.locate_field(data, node.lhs),
-                    // a = b
-                    Tag::Identifier => self.locate_variable(data, node.lhs),
-                    // @a = b
-                    Tag::Dereference => {
-                        // Layout of referenced variable
-                        let ptr_layout = data.layout(left_node.lhs);
-                        let ptr = self
-                            .locate(data, left_node.lhs)
-                            .load_value(c, flags, ptr_layout);
-                        Location::pointer(ptr, 0)
-                    }
-                    Tag::Subscript => {
-                        let arr_layout = data.layout(left_node.lhs);
-                        let stride = if let Shape::Array { stride, .. } = arr_layout.shape {
-                            stride
-                        } else {
-                            unreachable!();
-                        };
-                        let base = self
-                            .locate(data, left_node.lhs)
-                            .load_value(c, flags, arr_layout);
-                        let index = self
-                            .compile_expr(data, c, left_node.rhs)
-                            .cranelift_value(c, data.layout(left_node.rhs));
-                        dbg!(arr_layout);
-                        let offset = c.b.ins().imul_imm(index, stride as i64);
-                        let addr = c.b.ins().iadd(base, offset);
-                        Location::pointer(addr, 0)
-                    }
-                    _ => unreachable!("Invalid lvalue {:?} for assignment", left_node.tag),
-                };
-                left_location.store(c, right_value, flags, layout);
+                let lvalue = self.compile_lvalue(data, c, node.lhs);
+                lvalue.store(c, rvalue, flags, layout);
             }
             Tag::If => {
                 let condition_expr = self
@@ -327,12 +294,15 @@ impl State {
                     if_nodes.push(if_node);
                     then_blocks.push(c.b.create_block());
                 }
-                let if_count = if if_nodes.last().unwrap().lhs == 0 {
+                // If the last else-if block has no condition, it's an else.
+                let has_else = if_nodes.last().unwrap().lhs == 0;
+                let if_count = if has_else {
                     if_nodes.len() - 1
                 } else {
                     if_nodes.len()
                 };
                 let merge_block = c.b.create_block();
+                // Compile branches.
                 for i in 0..if_count {
                     let condition_expr = self
                         .compile_expr(data, c, if_nodes[i].lhs)
@@ -340,19 +310,21 @@ impl State {
                     c.b.ins().brnz(condition_expr, then_blocks[i], &[]);
                     c.b.seal_block(then_blocks[i]);
                     if i < if_count - 1 {
+                        // This is not the last else-if block.
                         let block = c.b.create_block();
                         c.b.ins().jump(block, &[]);
                         c.b.seal_block(block);
                         c.b.switch_to_block(block);
-                    }
-                    if i == if_nodes.len() - 1 {
+                    } else if !has_else {
+                        // This is the last else-if block and there's no else.
                         c.b.ins().jump(merge_block, &[]);
+                    } else {
+                        // This is the last else-if block and there's an else.
+                        c.b.ins().jump(then_blocks[if_count], &[]);
+                        c.b.seal_block(then_blocks[if_count]);
                     }
                 }
-                for i in if_count..if_nodes.len() {
-                    c.b.ins().jump(then_blocks[i], &[]);
-                    c.b.seal_block(then_blocks[i]);
-                }
+                // Compile block statements.
                 for (i, if_node) in if_nodes.iter().enumerate() {
                     c.b.switch_to_block(then_blocks[i]);
                     let body = data.node(if_node.rhs);
@@ -484,7 +456,7 @@ impl State {
             }
             Tag::Grouping => self.compile_expr(data, c, node.lhs),
             Tag::IntegerLiteral => {
-                let token_str = data.node_lexeme_offset(node, 0);
+                let token_str = data.tree.node_lexeme(node_id);
                 let value = token_str.parse::<i64>().unwrap();
                 Val::Scalar(c.b.ins().iconst(ty, value))
             }
@@ -511,6 +483,7 @@ impl State {
                 for i in arguments.lhs..arguments.rhs {
                     let ni = data.node_index(i);
                     let layout = data.layout(ni);
+                    // For structs, this value is a struct pointer.
                     let value = self.compile_expr(data, c, ni).cranelift_value(c, layout);
                     sig.params.push(AbiParam::new(ty));
                     args.push(value);
@@ -564,6 +537,41 @@ impl State {
             .compile_expr(data, c, node.rhs)
             .cranelift_value(c, data.layout(node.rhs));
         (lhs, rhs)
+    }
+
+    fn compile_lvalue(&mut self, data: &Data, c: &mut FnContext, node_id: NodeId) -> Location {
+        let node = data.tree.node(node_id);
+        let flags = MemFlags::new();
+        match node.tag {
+            // a.x = b
+            Tag::Access => self.locate_field(data, node_id),
+            // a = b
+            Tag::Identifier => self.locate_variable(data, node_id),
+            // @a = b
+            Tag::Dereference => {
+                // Layout of referenced variable
+                let ptr_layout = data.layout(node.lhs);
+                let ptr = self.locate(data, node.lhs).load_value(c, flags, ptr_layout);
+                Location::pointer(ptr, 0)
+            }
+            Tag::Subscript => {
+                let arr_layout = data.layout(node.lhs);
+                let stride = if let Shape::Array { stride, .. } = arr_layout.shape {
+                    stride
+                } else {
+                    unreachable!();
+                };
+                let base = self.locate(data, node.lhs).load_value(c, flags, arr_layout);
+                let index = self
+                    .compile_expr(data, c, node.rhs)
+                    .cranelift_value(c, data.layout(node.rhs));
+                dbg!(arr_layout);
+                let offset = c.b.ins().imul_imm(index, stride as i64);
+                let addr = c.b.ins().iadd(base, offset);
+                Location::pointer(addr, 0)
+            }
+            _ => unreachable!("Invalid lvalue {:?} for assignment", node.tag),
+        }
     }
 
     fn locate(&self, data: &Data, node_id: NodeId) -> Location {
