@@ -166,3 +166,7 @@ fn unicode() {
 fn while_loop() {
     test("loop", Test::AotAndJit, "", 0, 35);
 }
+#[test]
+fn xorshift() {
+    test("xorshift", Test::AotAndJit, "", 0, 6515429219844733763);
+}
