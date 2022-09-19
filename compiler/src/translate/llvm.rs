@@ -34,7 +34,7 @@ struct State<'a> {
     function: Option<FunctionValue<'a>>,
 }
 
-pub fn compile(input: &Input, use_jit: bool, obj_filename: &str) {
+pub fn compile(input: &Input, use_jit: bool, obj_filename: &Path) {
     let context = Context::create();
     let module = context.create_module("");
     let execution_engine = if use_jit {
@@ -104,11 +104,11 @@ pub fn compile(input: &Input, use_jit: bool, obj_filename: &str) {
     codegen.module.set_triple(&target_machine.get_triple());
 
     // Print LLVM IR.
-    codegen.module.print_to_stderr();
+    println!("{}", codegen.module.print_to_string().to_string_lossy());
 
     // Write object file.
     target_machine
-        .write_to_file(&codegen.module, FileType::Object, Path::new(&obj_filename))
+        .write_to_file(&codegen.module, FileType::Object, obj_filename)
         .unwrap();
 }
 
@@ -176,8 +176,6 @@ impl<'ctx> Generator<'ctx> {
         if main_fn.is_some() {
             // return Some(self.state.module.finalize(id, filename));
         }
-        println!("compile_nodes");
-
         None
     }
 
@@ -190,7 +188,6 @@ impl<'ctx> Generator<'ctx> {
         let name = self.data.mangle_function_declaration(node_id, false);
 
         let fn_value = self.module.get_function(&name).unwrap();
-        // let fn_value = self.compile_function_signature(state, node.lhs, &name);
 
         let entry_block = self.context.append_basic_block(fn_value, "entry");
         self.builder.position_at_end(entry_block);
@@ -241,10 +238,19 @@ impl<'ctx> Generator<'ctx> {
                 self.context.struct_type(&return_types, false).into()
             }
             Tag::Identifier => llvm_type(self.context, data.types, data.type_id(prototype.rhs)),
-            _ => self.context.struct_type(&[], false).into(),
+            _ => {
+                if returns.rhs - returns.lhs == 1 {
+                    llvm_type(self.context, data.types, data.type_id(prototype.rhs))
+                } else {
+                    self.context.struct_type(&[], false).into()
+                }
+            }
         };
         let fn_type = ret_type.fn_type(argslice, false);
         let fn_value = self.module.add_function(name, fn_type, None);
+
+        println!("{}", crate::format_red!("{:?}", fn_value.get_name()));
+        dbg!(fn_type);
 
         fn_value
     }
@@ -279,6 +285,21 @@ impl<'ctx> Generator<'ctx> {
             let ni = data.node_index(i);
             self.compile_stmt(state, ni);
         }
+        if self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_terminator()
+            .is_none()
+        {
+            let ret_type = state
+                .function
+                .unwrap()
+                .get_type()
+                .get_return_type()
+                .unwrap();
+            self.builder.build_return(Some(&ret_type.const_zero()));
+        }
     }
 
     pub fn compile_stmt(&self, state: &mut State<'ctx>, node_id: NodeId) {
@@ -298,21 +319,12 @@ impl<'ctx> Generator<'ctx> {
             }
             Tag::If => {
                 let parent_fn = state.function.unwrap();
-                let condition_expr = self.compile_expr(state, node.lhs);
+                let condition_expr = self.compile_expr(state, node.lhs).into_int_value();
                 let then_block = self.context.append_basic_block(parent_fn, "then");
                 let merge_block = self.context.append_basic_block(parent_fn, "merge");
                 let body = data.node(node.rhs);
 
-                // Branch if zero
-                let zero = self.ptr_sized_int_type.const_zero();
-                let condition_expr = builder.build_int_compare(
-                    IntPredicate::EQ,
-                    condition_expr.into_int_value(),
-                    zero,
-                    "ifcond",
-                );
                 builder.build_conditional_branch(condition_expr, then_block, merge_block);
-                builder.build_unconditional_branch(then_block);
                 // then block
                 builder.position_at_end(then_block);
                 for i in body.lhs..body.rhs {
@@ -337,40 +349,43 @@ impl<'ctx> Generator<'ctx> {
                 for i in node.lhs..node.rhs {
                     let index = data.node_index(i);
                     let if_node = data.node(index);
+                    assert_eq!(if_node.tag, Tag::If);
                     if_nodes.push(if_node);
                     then_blocks.push(self.context.append_basic_block(parent_fn, "then"));
                 }
-                let if_count = if if_nodes.last().unwrap().lhs == 0 {
+                // If the last else-if block has no condition, it's an else.
+                let has_else = if_nodes.last().unwrap().lhs == 0;
+                let if_count = if has_else {
                     if_nodes.len() - 1
                 } else {
                     if_nodes.len()
                 };
                 let merge_block = self.context.append_basic_block(parent_fn, "merge");
+                // Compile branches.
                 for i in 0..if_count {
-                    let condition_expr = self.compile_expr(state, if_nodes[i].lhs);
-                    let zero = self.ptr_sized_int_type.const_zero();
-                    let condition_expr = builder.build_int_compare(
-                        IntPredicate::NE,
-                        condition_expr.into_int_value(),
-                        zero,
-                        "ifcond",
-                    );
+                    let condition_expr = self.compile_expr(state, if_nodes[i].lhs).into_int_value();
                     if i < if_count - 1 {
+                        // This is not the last else-if block.
                         let block = self.context.append_basic_block(parent_fn, "block");
                         builder.build_conditional_branch(condition_expr, then_blocks[i], block);
                         builder.position_at_end(block);
-                    }
-                    if i == if_nodes.len() - 1 {
+                    } else if !has_else {
+                        // This is the last else-if block and there's no else.
                         builder.build_conditional_branch(
                             condition_expr,
                             then_blocks[i],
                             merge_block,
                         );
+                    } else {
+                        // This is the last else-if block and there's an else.
+                        builder.build_conditional_branch(
+                            condition_expr,
+                            then_blocks[i],
+                            then_blocks[if_count],
+                        );
                     }
                 }
-                for i in if_count..if_nodes.len() {
-                    builder.build_unconditional_branch(then_blocks[i]);
-                }
+                // Compile block statements.
                 for (i, if_node) in if_nodes.iter().enumerate() {
                     builder.position_at_end(then_blocks[i]);
                     let body = data.node(if_node.rhs);
@@ -404,16 +419,22 @@ impl<'ctx> Generator<'ctx> {
                 }
             }
             Tag::Return => {
-                let mut return_values = Vec::new();
-                for i in node.lhs..node.rhs {
-                    let ni = data.node_index(i);
-                    let val = self.compile_expr(state, ni);
-                    return_values.push(val);
-                }
-                if return_values.len() == 0 {
-                    builder.build_return(None);
+                // let mut return_values = Vec::new();
+                // for i in node.lhs..node.rhs {
+                //     let ni = data.node_index(i);
+                //     let val = self.compile_expr(state, ni);
+                //     let zero = self.context.i64_type().const_zero();
+                //     dbg!(val, zero);
+                //     return_values.push(zero);
+                // }
+                if node.lhs == node.rhs {
+                    println!("returning none");
+                    let unit_value = self.context.const_struct(&[], false).as_basic_value_enum();
+                    builder.build_return(Some(&unit_value));
                 } else {
-                    builder.build_return(Some(&return_values[0]));
+                    println!("returning some");
+                    let val = self.compile_expr(state, data.node_index(node.lhs));
+                    builder.build_return(Some(dbg!(&val)));
                 }
             }
             Tag::While => {
@@ -422,15 +443,6 @@ impl<'ctx> Generator<'ctx> {
                 let while_block = self.context.append_basic_block(parent_fn, "while_block");
                 let merge_block = self.context.append_basic_block(parent_fn, "merge_block");
                 // check condition
-                // let zero = self.context.bool_type().const_zero();
-                // let condition_expr = builder
-                //     .build_int_compare(
-                //         IntPredicate::NE,
-                //         condition_expr.into_int_value(),
-                //         zero,
-                //         "whilecond",
-                //     )
-                //     .into();
                 // true? jump to loop body
                 // false? jump to after loop
                 builder.build_conditional_branch(condition_expr, while_block, merge_block);
@@ -443,15 +455,6 @@ impl<'ctx> Generator<'ctx> {
                 }
                 let condition_expr = self.compile_expr(state, node.lhs).into_int_value();
                 // brnz block_while
-                // let zero = self.context.bool_type().const_zero();
-                // let condition_expr = builder
-                //     .build_int_compare(
-                //         IntPredicate::NE,
-                //         condition_expr.into_int_value(),
-                //         zero,
-                //         "whilecond",
-                //     )
-                //     .into();
                 builder.build_conditional_branch(condition_expr, while_block, merge_block);
                 // block_merge:
                 builder.position_at_end(merge_block);
@@ -551,21 +554,34 @@ impl<'ctx> Generator<'ctx> {
                     .const_int(value as u64, false)
                     .into()
             }
-            Tag::True => BasicValueEnum::IntValue(self.context.i64_type().const_int(1, false)),
-            Tag::False => BasicValueEnum::IntValue(self.context.i64_type().const_int(0, false)),
+            Tag::True => self.context.bool_type().const_int(1, false).into(),
+            Tag::False => self.context.bool_type().const_int(0, false).into(),
             Tag::Call => {
                 let function_id = data
                     .definitions
                     .get_definition_id(node.lhs, "failed to get function decl");
 
-                println!("name:         {}", data.tree.name(node.lhs));
-                println!(
-                    "mangled call: {}",
-                    data.mangle_function_declaration(function_id, false)
-                );
+                // println!("name:    {}", data.tree.name(node.lhs));
+                // println!(
+                //     "mangled call: {}",
+                //     data.mangle_function_declaration(function_id, false)
+                // );
 
                 let name = data.mangle_function_declaration(function_id, false);
-                let callee = self.module.get_function(&name).unwrap();
+
+                // self.module.print_to_stderr();
+
+                // let names: Vec<String> = self
+                //     .module
+                //     .get_functions()
+                //     .map(|f| f.get_name().to_string_lossy().to_string())
+                //     .collect();
+                // dbg!(names);
+
+                let callee = self
+                    .module
+                    .get_function(&name)
+                    .unwrap_or_else(|| panic!("failed to get module function \"{}\"", name));
 
                 // Arguments
                 let arguments = data.node(node.rhs);
@@ -586,12 +602,14 @@ impl<'ctx> Generator<'ctx> {
                     .map(|&val| val.into())
                     .collect::<Vec<BasicMetadataValueEnum>>();
                 let argslice = argslice.as_slice();
-
                 let call_site_value = builder.build_call(callee, argslice, &name);
                 if return_type != TypeIndex::Void as TypeId {
-                    call_site_value.try_as_basic_value().left().unwrap()
+                    call_site_value
+                        .try_as_basic_value()
+                        .left()
+                        .expect("basic value expected")
                 } else {
-                    BasicValueEnum::IntValue(self.context.i64_type().const_int(0, false))
+                    self.context.const_struct(&[], false).as_basic_value_enum()
                 }
             }
             Tag::Identifier => {
@@ -710,6 +728,7 @@ pub fn llvm_type<'ctx>(
         }
         Typ::Void => context.struct_type(&[], false).into(),
         Typ::Integer => context.i64_type().into(),
+        Typ::Boolean => context.bool_type().into(),
         _ => unreachable!("Invalid type"),
     }
 }
