@@ -1,11 +1,11 @@
 use std::alloc;
 
-#[no_mangle]
+#[export_name = "Base.print_int"]
 fn print_int(i: isize) {
     println!("{}", i);
 }
 
-#[no_mangle]
+#[export_name = "Base.alloc"]
 fn alloc(n: isize) -> *mut i8 {
     println!("lib.rs:alloc(n={})", n);
     let layout = alloc::Layout::from_size_align(n as usize, 1).unwrap();
