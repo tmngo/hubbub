@@ -310,10 +310,10 @@ fn token_to_operator(tag: TokenTag) -> Operator {
 }
 
 /// The body should return a NodeId.
-macro_rules! parse_until {
+macro_rules! parse_while {
     ($self:expr, $cond:expr, $body:block) => {{
         let stack_top = $self.stack.len();
-        while $cond {
+        while $self.index < $self.tree.tokens.len() - 1 && !$self.token_is(TokenTag::Eof) && $cond {
             let node: NodeId = $body;
             $self.stack.push(node);
         }
@@ -355,7 +355,7 @@ impl Parser {
 
     /// program = module*
     fn parse_modules(&mut self) -> Result<Range<NodeId>> {
-        let range = parse_until!(self, self.index < self.tree.tokens.len() - 1, {
+        let range = parse_while!(self, self.index < self.tree.tokens.len() - 1, {
             self.parse_module()?
         });
         self.tree.nodes[0] = Node {
@@ -371,7 +371,7 @@ impl Parser {
     fn parse_module(&mut self) -> Result<NodeId> {
         let first_module_token = self.index as TokenId;
         self.match_token(TokenTag::Newline);
-        let range = parse_until!(self, self.token_isnt(TokenTag::Eof), {
+        let range = parse_while!(self, self.token_isnt(TokenTag::Eof), {
             self.parse_root_declaration()?
         });
         self.expect_token(TokenTag::Eof)?;
@@ -504,7 +504,7 @@ impl Parser {
     /// type-parameters =
     fn parse_type_parameters(&mut self) -> Result<NodeId> {
         let token = self.expect_token(TokenTag::BraceL)?;
-        let range = parse_until!(self, self.token_isnt(TokenTag::BraceR), {
+        let range = parse_while!(self, self.token_isnt(TokenTag::BraceR), {
             let identifier_token = self.expect_token(TokenTag::Identifier)?;
             self.match_token(TokenTag::Comma);
             self.add_leaf(Tag::TypeParameter, identifier_token)?
@@ -528,7 +528,7 @@ impl Parser {
     fn parse_parameters(&mut self) -> Result<NodeId> {
         let token = self.expect_token(TokenTag::ParenL)?;
         let mut source_index = 0;
-        let range = parse_until!(self, self.token_isnt(TokenTag::ParenR), {
+        let range = parse_while!(self, self.token_isnt(TokenTag::ParenR), {
             let field = self.parse_field(source_index)?;
             source_index += 1;
             self.match_token(TokenTag::Comma);
@@ -541,7 +541,7 @@ impl Parser {
     /// type-list = expr-base | '(' (expr-base ',')* ')'
     fn parse_type_list(&mut self) -> Result<NodeId> {
         if self.match_token(TokenTag::ParenL) {
-            let range = parse_until!(self, self.token_isnt(TokenTag::ParenR), {
+            let range = parse_while!(self, self.token_isnt(TokenTag::ParenR), {
                 let type_expr = self.parse_expr_base()?;
                 self.match_token(TokenTag::Comma);
                 type_expr
@@ -553,12 +553,12 @@ impl Parser {
         }
     }
 
-    /// type-list = expr-base | '(' (expr-base ',')* ')'
+    /// identifier-list = identifier (',' identifier)* ','?
     fn parse_identifier_list(&mut self) -> Result<NodeId> {
         if self.next_token_tag(1) == TokenTag::Comma
             && self.next_token_tag(2) == TokenTag::Identifier
         {
-            let range = parse_until!(
+            let range = parse_while!(
                 self,
                 self.token_isnt(TokenTag::Colon) && !self.token_is(TokenTag::ColonEqual),
                 {
@@ -612,7 +612,7 @@ impl Parser {
         let token = self.expect_token(TokenTag::Struct)?;
         self.match_token(TokenTag::Newline);
         let mut source_index = 0;
-        let range = parse_until!(self, self.token_isnt(TokenTag::End), {
+        let range = parse_while!(self, self.token_isnt(TokenTag::End), {
             let field = self.parse_field(source_index)?;
             source_index += 1;
             self.expect_tokens(&[TokenTag::Newline, TokenTag::Semicolon])?;
@@ -651,7 +651,7 @@ impl Parser {
             TokenTag::If => self.parse_stmt_if(),
             TokenTag::Return => {
                 let token = self.shift_token();
-                let range = parse_until!(
+                let range = parse_while!(
                     self,
                     self.token_isnt(TokenTag::Newline) && !self.token_is(TokenTag::Semicolon),
                     {
@@ -713,7 +713,7 @@ impl Parser {
 
     /// body = stmt* 'end'
     fn parse_stmt_body(&mut self, token: TokenId) -> Result<NodeId> {
-        let range = parse_until!(self, self.token_isnt(TokenTag::End), { self.parse_stmt()? });
+        let range = parse_while!(self, self.token_isnt(TokenTag::End), { self.parse_stmt()? });
         self.expect_token_and_newline(TokenTag::End)?; // 'end'
         self.add_node(Tag::Block, token, range.start, range.end)
     }
@@ -722,7 +722,7 @@ impl Parser {
     fn parse_stmt_if(&mut self) -> Result<NodeId> {
         let if_token = self.current_token();
 
-        let range = parse_until!(self, self.token_isnt(TokenTag::End), {
+        let range = parse_while!(self, self.token_isnt(TokenTag::End), {
             // Parse condition
             let mut else_if_token = self.shift_token(); // 'else' | 'if'
 
@@ -740,7 +740,7 @@ impl Parser {
             self.match_token(TokenTag::Newline);
 
             // Parse body
-            let range = parse_until!(
+            let range = parse_while!(
                 self,
                 self.token_isnt(TokenTag::Else) && !self.token_is(TokenTag::End),
                 { self.parse_stmt()? }
@@ -763,7 +763,7 @@ impl Parser {
         let token = self.shift_token();
         let condition = self.parse_expr()?;
         self.match_token(TokenTag::Newline);
-        let range = parse_until!(self, self.token_isnt(TokenTag::End), { self.parse_stmt()? });
+        let range = parse_while!(self, self.token_isnt(TokenTag::End), { self.parse_stmt()? });
         self.expect_token_and_newline(TokenTag::End)?;
         let body = self.add_node(Tag::Block, 0, range.start, range.end)?;
         self.add_node(Tag::While, token, condition, body)
@@ -883,7 +883,7 @@ impl Parser {
                 }
                 TokenTag::ParenL => {
                     let token = self.shift_token();
-                    let range = parse_until!(self, self.token_isnt(TokenTag::ParenR), {
+                    let range = parse_while!(self, self.token_isnt(TokenTag::ParenR), {
                         let expr = self.parse_expr()?;
                         self.match_token(TokenTag::Comma);
                         expr
@@ -905,7 +905,7 @@ impl Parser {
                 let identifier = self.add_leaf(Tag::Identifier, token);
                 if self.match_token(TokenTag::BraceL) {
                     // IDENTIFIER '{' expr-list '}'
-                    let range = parse_until!(self, self.token_isnt(TokenTag::BraceR), {
+                    let range = parse_while!(self, self.token_isnt(TokenTag::BraceR), {
                         let expr = self.parse_expr()?;
                         self.match_token(TokenTag::Comma);
                         expr
@@ -1092,9 +1092,7 @@ impl Parser {
     }
 
     fn token_isnt(&self, tag: TokenTag) -> bool {
-        self.index < self.tree.tokens.len() - 1
-            && !self.token_is(tag)
-            && !self.token_is(TokenTag::Eof)
+        !self.token_is(tag)
     }
 }
 
