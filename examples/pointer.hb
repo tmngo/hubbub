@@ -1,3 +1,5 @@
+#import "Base"
+
 mutate :: (ptr: Pointer{Int}, x: Int)
     ptr@ = x
     return
@@ -22,6 +24,11 @@ main :: () -> Int
 
     mutate(p, 60)
     print_int(value)
+
+    pointer := alloc(8)
+    print_int(pointer@)
+    pointer@ = 8
+    print_int(pointer@)
 
     return 0
 end
