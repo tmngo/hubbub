@@ -12,7 +12,9 @@ use inkwell::{
     passes::PassManager,
     targets::{CodeModel, FileType, RelocMode, Target, TargetMachine, TargetTriple},
     types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, IntType},
-    values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PointerValue},
+    values::{
+        BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue,
+    },
     AddressSpace, IntPredicate, OptimizationLevel,
 };
 use std::{collections::HashMap, path::Path};
@@ -261,13 +263,12 @@ impl<'ctx> Generator<'ctx> {
             let ni = data.node_index(i);
             let type_id = data.type_id(ni);
             let llvm_type = llvm_type(self.context, data.types, type_id);
-            let stack_addr = builder.build_alloca(llvm_type, "alloca");
-            let location = Location::stack(stack_addr, 0);
+            let stack_addr = builder.build_alloca(llvm_type, "alloca_param");
+            let location = Location::new(stack_addr, 0);
             state.locations.insert(ni, location);
             let parameter_index = i - parameters.lhs;
             let value = fn_value.get_nth_param(parameter_index).unwrap();
-            let layout = data.layout(ni);
-            location.store(self, value, layout);
+            self.builder.build_store(stack_addr, value);
         }
     }
 
@@ -285,47 +286,15 @@ impl<'ctx> Generator<'ctx> {
         let node = data.node(node_id);
         match node.tag {
             Tag::Assign => {
-                // lhs: expr
-                // rhs: expr
                 assert_eq!(data.type_id(node.lhs), data.type_id(node.rhs));
-                let layout = data.layout(node.rhs);
-                let left_node = data.node(node.lhs);
-                let right_value = self.compile_expr(state, node.rhs);
-                let left_location = match left_node.tag {
-                    // a.x = b
-                    Tag::Access => self.locate_field(state, node.lhs),
-                    // a = b
-                    Tag::Identifier => self.locate_variable(state, node.lhs),
-                    // @a = b
-                    Tag::Dereference => {
-                        // Layout of referenced variable
-                        let ptr_layout = data.layout(left_node.lhs);
-                        let location = self.locate(state, left_node.lhs);
-                        let ptr = location
-                            .load_value(self, ptr_layout)
-                            .into_pointer_value()
-                            .clone();
-                        Location::pointer(ptr.clone(), 0)
-                    }
-                    Tag::Subscript => {
-                        let arr_layout = data.layout(left_node.lhs);
-                        let stride = if let Shape::Array { stride, .. } = arr_layout.shape {
-                            stride
-                        } else {
-                            unreachable!();
-                        };
-                        let location = self.locate(state, left_node.lhs);
-                        let base = location.load_value(self, arr_layout).into_pointer_value();
-                        let index_value = self.compile_expr(state, node.rhs).into_int_value();
-                        let stride_value = self.context.i64_type().const_int(stride as u64, false);
-                        let offset_value: IntValue =
-                            builder.build_int_mul(index_value, stride_value.into(), "offset");
-                        let addr = unsafe { builder.build_gep(base, &[offset_value], "gep") };
-                        Location::pointer(addr, 0)
-                    }
-                    _ => unreachable!("Invalid lvalue {:?} for assignment", left_node.tag),
-                };
-                left_location.store(self, right_value, layout);
+                let rvalue = self.compile_expr(state, node.rhs);
+                let lvalue = self.compile_lvalue(state, node.lhs);
+                let lvalue = self.builder.build_pointer_cast(
+                    lvalue,
+                    rvalue.get_type().ptr_type(AddressSpace::Generic),
+                    "ptr_cast",
+                );
+                self.builder.build_store(lvalue, rvalue);
             }
             Tag::If => {
                 let parent_fn = state.function.unwrap();
@@ -425,14 +394,13 @@ impl<'ctx> Generator<'ctx> {
                 // rhs: expr
                 let type_id = data.type_id(node_id);
                 let llvm_type = llvm_type(self.context, data.types, type_id);
-                let stack_addr = builder.build_alloca(llvm_type, "alloca");
+                let stack_addr = builder.build_alloca(llvm_type, "alloca_local");
 
-                let location = Location::stack(stack_addr, 0);
+                let location = Location::new(stack_addr, 0);
                 state.locations.insert(node_id, location);
                 if node.rhs != 0 {
-                    let layout = data.layout(node.rhs);
                     let value = self.compile_expr(state, node.rhs);
-                    location.store(self, value, layout);
+                    self.builder.build_store(location.base, value);
                 }
             }
             Tag::Return => {
@@ -494,85 +462,94 @@ impl<'ctx> Generator<'ctx> {
         }
     }
 
-    pub fn compile_expr(&self, state: &mut State<'ctx>, node_id: NodeId) -> BasicValueEnum {
+    pub fn compile_expr(&self, state: &mut State<'ctx>, node_id: NodeId) -> BasicValueEnum<'ctx> {
         let (data, builder) = (&self.data, &self.builder);
         let node = data.node(node_id);
-        let layout = data.layout(node_id);
         match node.tag {
-            Tag::Access => self.locate_field(state, node_id).load_value(self, layout),
-            Tag::Address => self
-                .locate(state, node.lhs)
-                .get_addr(self.context, builder)
-                .into(),
+            Tag::Access => {
+                let container = self.compile_expr(state, node.lhs);
+                let field_id = data
+                    .definitions
+                    .get_definition_id(node_id, "failed to lookup field definition");
+                let field = data.node(field_id);
+                let field_index = data.node_index(field.rhs + 1);
+                match container {
+                    BasicValueEnum::PointerValue(pointer) => {
+                        let gep = builder.build_struct_gep(pointer, field_index, "").unwrap();
+                        self.builder.build_load(gep, "")
+                    }
+                    BasicValueEnum::StructValue(value) => {
+                        builder.build_extract_value(value, field_index, "").unwrap()
+                    }
+                    _ => unreachable!("cannot gep_struct for non-struct value"),
+                }
+            }
+            Tag::Address => self.locate(state, node.lhs).base.into(),
             Tag::Dereference => {
-                let ptr_layout = data.layout(node.lhs);
-                let ptr = self
-                    .locate(state, node.lhs)
-                    .load_value(self, ptr_layout)
-                    .into_pointer_value()
-                    .clone();
-                Location::pointer(ptr, 0).load_value(self, layout)
+                let location = self.compile_lvalue(state, node.lhs);
+                let ptr = builder
+                    .build_load(location, "pointer_value")
+                    .into_pointer_value();
+                builder.build_load(ptr, "deref")
             }
             Tag::Add => {
                 let (lhs, rhs) = self.compile_children(state, node);
-                BasicValueEnum::IntValue(builder.build_int_add(lhs, rhs, "int_add"))
+                builder.build_int_add(lhs, rhs, "int_add").into()
             }
             Tag::BitwiseShiftL => {
                 let (lhs, rhs) = self.compile_children(state, node);
-                BasicValueEnum::IntValue(builder.build_left_shift(lhs, rhs, "left_shift"))
+                builder.build_left_shift(lhs, rhs, "left_shift").into()
             }
             Tag::BitwiseShiftR => {
                 let (lhs, rhs) = self.compile_children(state, node);
-                BasicValueEnum::IntValue(builder.build_right_shift(lhs, rhs, false, "right_shift"))
+                builder
+                    .build_right_shift(lhs, rhs, true, "right_shift")
+                    .into()
             }
             Tag::BitwiseXor => {
                 let (lhs, rhs) = self.compile_children(state, node);
-                BasicValueEnum::IntValue(builder.build_xor(lhs, rhs, "xor"))
+                builder.build_xor(lhs, rhs, "xor").into()
             }
             Tag::Sub => {
                 let (lhs, rhs) = self.compile_children(state, node);
-                BasicValueEnum::IntValue(builder.build_int_sub(lhs, rhs, "int_sub"))
+                builder.build_int_sub(lhs, rhs, "int_sub").into()
             }
             Tag::Div => {
                 let (lhs, rhs) = self.compile_children(state, node);
-                BasicValueEnum::IntValue(builder.build_int_signed_div(lhs, rhs, "int_signed_div"))
+                builder
+                    .build_int_signed_div(lhs, rhs, "int_signed_div")
+                    .into()
             }
             Tag::Mul => {
                 let (lhs, rhs) = self.compile_children(state, node);
-                BasicValueEnum::IntValue(builder.build_int_mul(lhs, rhs, "int_mul"))
+                builder.build_int_mul(lhs, rhs, "int_mul").into()
             }
             Tag::Equality => {
                 let (lhs, rhs) = self.compile_children(state, node);
-                BasicValueEnum::IntValue(builder.build_int_compare(
-                    IntPredicate::EQ,
-                    lhs,
-                    rhs,
-                    "int_compare_eq",
-                ))
+                builder
+                    .build_int_compare(IntPredicate::EQ, lhs, rhs, "int_compare_eq")
+                    .into()
             }
             Tag::Greater => {
                 let (lhs, rhs) = self.compile_children(state, node);
-                BasicValueEnum::IntValue(builder.build_int_compare(
-                    IntPredicate::SGT,
-                    lhs,
-                    rhs,
-                    "int_compare_sgt",
-                ))
+                builder
+                    .build_int_compare(IntPredicate::SGT, lhs, rhs, "int_compare_sgt")
+                    .into()
             }
             Tag::Less => {
                 let (lhs, rhs) = self.compile_children(state, node);
-                BasicValueEnum::IntValue(builder.build_int_compare(
-                    IntPredicate::SLT,
-                    lhs,
-                    rhs,
-                    "int_compare_slt",
-                ))
+                builder
+                    .build_int_compare(IntPredicate::SLT, lhs, rhs, "int_compare_slt")
+                    .into()
             }
             Tag::Grouping => self.compile_expr(state, node.lhs),
             Tag::IntegerLiteral => {
                 let token_str = data.tree.node_lexeme(node_id);
                 let value = token_str.parse::<i64>().unwrap();
-                BasicValueEnum::IntValue(self.context.i64_type().const_int(value as u64, false))
+                self.context
+                    .i64_type()
+                    .const_int(value as u64, false)
+                    .into()
             }
             Tag::True => BasicValueEnum::IntValue(self.context.i64_type().const_int(1, false)),
             Tag::False => BasicValueEnum::IntValue(self.context.i64_type().const_int(0, false)),
@@ -617,56 +594,72 @@ impl<'ctx> Generator<'ctx> {
                     BasicValueEnum::IntValue(self.context.i64_type().const_int(0, false))
                 }
             }
-            Tag::Identifier => self.locate(state, node_id).load_value(self, layout),
+            Tag::Identifier => {
+                let name = data.tree.name(node_id);
+                let location = self.locate(state, node_id);
+                builder.build_load(location.base, name)
+            }
             Tag::Subscript => {
-                let arr_layout = data.layout(node.lhs);
-                let stride = if let Shape::Array { stride, .. } = arr_layout.shape {
-                    stride
-                } else {
-                    unreachable!();
-                };
-                let base = self
-                    .locate(state, node.lhs)
-                    .load_value(self, arr_layout)
-                    .into_pointer_value();
-                dbg!(arr_layout);
-                let index_value = self.compile_expr(state, node.rhs).into_int_value();
-                let stride_value = self.context.i64_type().const_int(stride as u64, false);
-                let offset_value = builder
-                    .build_int_mul(index_value, stride_value.into(), "offset")
-                    .into();
-                let addr = unsafe { builder.build_gep(base, &[offset_value], "gep") };
-                let location = Location::pointer(addr, 0);
-                location.load_value(self, layout)
+                let lvalue = self.compile_lvalue(state, node_id);
+                builder.build_load(lvalue, "subscript")
             }
             _ => unreachable!("Invalid expression tag: {:?}", node.tag),
         }
     }
 
-    fn compile_children(&self, state: &mut State<'ctx>, node: &Node) -> (IntValue, IntValue) {
-        let lhs = if let BasicValueEnum::IntValue(value) = self.compile_expr(state, node.lhs) {
-            value
-        } else {
-            unreachable!()
-        };
-        let rhs = if let BasicValueEnum::IntValue(value) = self.compile_expr(state, node.rhs) {
-            value
-        } else {
-            unreachable!()
-        };
+    fn compile_lvalue(&self, state: &mut State<'ctx>, node_id: NodeId) -> PointerValue<'ctx> {
+        let (data, builder) = (&self.data, &self.builder);
+        let node = data.node(node_id);
+        match node.tag {
+            Tag::Access => {
+                let field_id = data
+                    .definitions
+                    .get_definition_id(node_id, "failed to lookup field definition");
+                let field = data.node(field_id);
+                let field_index = data.node_index(field.rhs + 1);
+                let struct_ptr = self.compile_lvalue(state, node.lhs);
+                builder
+                    .build_struct_gep(struct_ptr, field_index, "")
+                    .unwrap()
+            }
+            // a = b
+            Tag::Identifier => self.locate(state, node_id).base,
+            // @a = b
+            Tag::Dereference => {
+                let location = self.compile_lvalue(state, node.lhs);
+                builder
+                    .build_load(location, "pointer_value")
+                    .into_pointer_value()
+            }
+            Tag::Subscript => {
+                let array_ptr = self.locate(state, node.lhs).base;
+                let index_value = self.compile_expr(state, node.rhs).into_int_value();
+                let zero = self.context.i64_type().const_int(0, false);
+                unsafe { builder.build_gep(array_ptr, &[zero, index_value], "gep") }
+            }
+            _ => unreachable!("Invalid lvalue {:?} for assignment", node.tag),
+        }
+    }
+
+    fn compile_children(
+        &self,
+        state: &mut State<'ctx>,
+        node: &Node,
+    ) -> (IntValue<'ctx>, IntValue<'ctx>) {
+        let lhs = self.compile_expr(state, node.lhs).into_int_value();
+        let rhs = self.compile_expr(state, node.rhs).into_int_value();
         (lhs, rhs)
     }
 
-    fn locate(&self, state: &mut State<'ctx>, node_id: NodeId) -> Location {
+    fn locate(&self, state: &mut State<'ctx>, node_id: NodeId) -> Location<'ctx> {
         let node = self.data.node(node_id);
         match node.tag {
-            Tag::Access => self.locate_field(state, node_id),
             Tag::Identifier => self.locate_variable(state, node_id),
             _ => unreachable!("Cannot locate node with tag {:?}", node.tag),
         }
     }
 
-    fn locate_variable(&self, state: &mut State<'ctx>, node_id: NodeId) -> Location {
+    fn locate_variable(&self, state: &mut State<'ctx>, node_id: NodeId) -> Location<'ctx> {
         let def_id = self
             .data
             .definitions
@@ -677,36 +670,21 @@ impl<'ctx> Generator<'ctx> {
             .expect("failed to get identifier location")
     }
 
-    fn locate_field(&self, state: &mut State<'ctx>, node_id: NodeId) -> Location {
-        let data = &self.data;
-        let mut indices = Vec::new();
-        let mut type_ids = Vec::new();
-        let mut parent_id = node_id;
-        let mut parent = data.node(parent_id);
-
-        while parent.tag == Tag::Access {
-            // let field_id = data
-            //     .definitions
-            //     .get_definition_id(parent_id, "failed to lookup field definition");
-            // let field = data.node(field_id);
-            // let source_index = data.node_index(field.rhs + 1);
-            let field_index = data
-                .definitions
-                .get_definition_id(parent.rhs, "failed to lookup field definition")
-                as usize;
-            indices.push(field_index);
-            parent_id = parent.lhs;
-            type_ids.push(data.type_id(parent_id));
-            parent = data.node(parent_id);
+    fn gep_struct(&self, value: BasicValueEnum<'ctx>, field_index: u32) -> BasicValueEnum<'ctx> {
+        match value {
+            BasicValueEnum::PointerValue(pointer) => {
+                let gep = self
+                    .builder
+                    .build_struct_gep(pointer, field_index, "")
+                    .unwrap();
+                self.builder.build_load(gep, "")
+            }
+            BasicValueEnum::StructValue(value) => self
+                .builder
+                .build_extract_value(value, field_index, "")
+                .unwrap(),
+            _ => unreachable!("cannot gep_struct for non-struct value"),
         }
-
-        let mut offset = 0;
-        for i in (0..indices.len()).rev() {
-            let layout = &data.layouts[type_ids[i]];
-            offset += layout.shape.offset(indices[i]) as i32;
-        }
-
-        self.locate_variable(state, parent_id).offset(offset)
     }
 }
 
@@ -738,42 +716,13 @@ pub fn llvm_type<'ctx>(
 
 #[derive(Copy, Clone, Debug)]
 pub struct Location<'ctx> {
-    base: LocationBase<'ctx>,
+    base: PointerValue<'ctx>,
     offset: i32,
 }
 
-#[derive(Copy, Clone, Debug)]
-enum LocationBase<'ctx> {
-    Pointer(PointerValue<'ctx>),
-    Register(BasicValueEnum<'ctx>),
-    Stack(PointerValue<'ctx>),
-}
-
 impl<'ctx> Location<'ctx> {
-    fn pointer(base_addr: PointerValue<'ctx>, offset: i32) -> Self {
-        let base = LocationBase::Pointer(base_addr);
+    fn new(base: PointerValue<'ctx>, offset: i32) -> Self {
         Self { base, offset }
-    }
-    fn stack(stack_addr: PointerValue<'ctx>, offset: i32) -> Self {
-        let base = LocationBase::Stack(stack_addr);
-        Self { base, offset }
-    }
-    fn get_addr(&self, context: &'ctx Context, builder: &'ctx Builder) -> PointerValue<'ctx> {
-        match self.base {
-            LocationBase::Pointer(base_addr) => {
-                if self.offset == 0 {
-                    base_addr
-                } else {
-                    let offset = context.i64_type().const_int(self.offset as u64, false);
-                    unsafe { builder.build_gep(base_addr, &[offset], "gep") }
-                }
-            }
-            LocationBase::Stack(stack_addr) => {
-                let offset = context.i64_type().const_int(self.offset as u64, false);
-                unsafe { builder.build_gep(stack_addr, &[offset], "gep") }
-            }
-            LocationBase::Register(_) => unreachable!("cannot get address of register"),
-        }
     }
     fn offset(self, extra_offset: i32) -> Self {
         Location {
@@ -781,98 +730,4 @@ impl<'ctx> Location<'ctx> {
             offset: self.offset + extra_offset,
         }
     }
-    fn load_scalar(self, generator: &'ctx Generator) -> BasicValueEnum<'ctx> {
-        let (context, builder) = (generator.context, &generator.builder);
-        match self.base {
-            LocationBase::Pointer(base_addr) => {
-                if self.offset == 0 {
-                    builder.build_load(base_addr, "load")
-                } else {
-                    let offset = context.i64_type().const_int(self.offset as u64, false);
-                    let ptr = unsafe { builder.build_gep(base_addr, &[offset], "gep") };
-                    builder.build_load(ptr, "load")
-                }
-            }
-            LocationBase::Register(value) => value,
-            LocationBase::Stack(stack_addr) => {
-                if self.offset == 0 {
-                    builder.build_load(stack_addr, "load")
-                } else {
-                    let offset = context.i64_type().const_int(self.offset as u64, false);
-                    let ptr = unsafe { builder.build_gep(stack_addr, &[offset], "gep") };
-                    builder.build_load(ptr, "load")
-                }
-            }
-        }
-    }
-    fn load_value(self, generator: &'ctx Generator, layout: &Layout) -> BasicValueEnum<'ctx> {
-        let (context, builder) = (&generator.context, &generator.builder);
-        match self.base {
-            LocationBase::Pointer(_) | LocationBase::Register(_) => self.load_scalar(generator),
-            LocationBase::Stack(stack_addr) => {
-                if layout.size <= 8 {
-                    self.load_scalar(generator)
-                } else {
-                    let offset = context.i64_type().const_int(self.offset as u64, false);
-                    let ptr = unsafe { builder.build_gep(stack_addr, &[offset], "gep") };
-                    BasicValueEnum::PointerValue(ptr)
-                }
-            }
-        }
-    }
-    fn store(&self, generator: &Generator, value: BasicValueEnum, layout: &Layout) {
-        let (context, builder, ptr_sized_int_type) = (
-            &generator.context,
-            &generator.builder,
-            generator.ptr_sized_int_type,
-        );
-        match self.base {
-            // lvalue is a pointer, store in address, rvalue is scalar/aggregate
-            LocationBase::Pointer(base_addr) => {
-                let ptr = if self.offset == 0 {
-                    base_addr
-                } else {
-                    let offset = context.i64_type().const_int(self.offset as u64, false);
-                    unsafe { builder.build_gep(base_addr, &[offset], "gep") }
-                };
-                builder.build_store(ptr, value);
-            }
-            // lvalue is a register variable, rvalue must be a scalar
-            LocationBase::Register(_) => unreachable!("Cannot store in register"),
-            // lvalue is a stack variable, rvalue is scalar/aggregate
-            LocationBase::Stack(stack_addr) => {
-                if layout.size <= 8 {
-                    let ptr = if self.offset == 0 {
-                        stack_addr
-                    } else {
-                        let offset = context.i64_type().const_int(self.offset as u64, false);
-                        unsafe { builder.build_gep(stack_addr, &[offset], "gep") }
-                    };
-                    builder.build_store(ptr, value);
-                } else {
-                    let src_addr = value.into_pointer_value();
-                    let offset = context.i64_type().const_int(self.offset as u64, false);
-                    let dest_addr = unsafe { builder.build_gep(stack_addr, &[offset], "gep") };
-                    let size = ptr_sized_int_type.const_int(layout.size as u64, false);
-                    builder
-                        .build_memcpy(dest_addr, layout.align, src_addr, layout.align, size)
-                        .ok();
-                }
-            }
-        };
-    }
-
-    // fn to_value(self, generator: &Generator, layout: &Layout) -> BasicValueEnum {
-    //     match self.base {
-    //         LocationBase::Register(value) => value,
-    //         LocationBase::Pointer(_) => Val::Reference(self, None),
-    //         LocationBase::Stack(stack_slot) => {
-    //             if layout.size <= 8 {
-    //                 Val::Scalar(ins.stack_load(ty, stack_slot, self.offset))
-    //             } else {
-    //                 Val::Reference(self, None)
-    //             }
-    //         }
-    //     }
-    // }
 }
