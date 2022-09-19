@@ -289,21 +289,25 @@ impl<'a> Analyzer<'a> {
                 // rhs: member identifier
                 // Assumes lhs is a declaration.
                 self.resolve_node(container_id)?;
+
                 // This should always return a struct definition.
                 let container = self.tree.node(container_id);
+
+                // The lhs of the Access is either an identfier, or another Access.
+                // identifier -> variable decl
+                // access -> field
+                let container_decl_id = self.definitions.get_definition_id(
+                    container_id,
+                    &format!(
+                        "failed to find definition for identifier \"{:?}\".",
+                        self.tree.node_lexeme(container_id)
+                    ),
+                );
 
                 // Check if the container we're accessing is a module.
                 match container.tag {
                     Tag::Access | Tag::Identifier => {
-                        let container_def_id = self.definitions.get_definition_id(
-                            container_id,
-                            &format!(
-                                "failed to find definition for container identifier \"{:?}\".",
-                                self.tree.node_lexeme(container_id)
-                            ),
-                        );
-
-                        let container_def = self.tree.node(container_def_id);
+                        let container_def = self.tree.node(container_decl_id);
                         if let Tag::Import = container_def.tag {
                             // self.definitions.insert(id, definition);
                             let module_scope_index = self.get_module_scope_index(container_def);
@@ -328,7 +332,7 @@ impl<'a> Analyzer<'a> {
                 }
 
                 // This doesn't need to be lookup() because structs are declared at the top level.
-                let struct_decl_id = self.get_container_definition(container_id);
+                let struct_decl_id = self.get_container_definition(container_decl_id);
                 // Resolve type
                 if struct_decl_id != 0 {
                     let field_name = self.tree.name(node.rhs);
@@ -416,8 +420,23 @@ impl<'a> Analyzer<'a> {
                 }
             }
             Tag::VariableDecl => {
-                let name = self.tree.node_lexeme(node.token);
-                Self::define_symbol(&mut self.scopes[self.current], name, id)?;
+                // Resolve identifier(s).
+                let lhs = self.tree.node(node.token);
+                match lhs.tag {
+                    Tag::Expressions => {
+                        for i in lhs.lhs..lhs.rhs {
+                            let ni = self.tree.node_index(i);
+                            let name = self.tree.name(ni);
+                            Self::define_symbol(&mut self.scopes[self.current], name, ni)?;
+                        }
+                    }
+                    Tag::Identifier => {
+                        let ni = node.token;
+                        let name = self.tree.name(ni);
+                        Self::define_symbol(&mut self.scopes[self.current], name, ni)?;
+                    }
+                    _ => {}
+                }
                 self.resolve_node(node.lhs)?;
                 self.resolve_node(node.rhs)?;
             }
@@ -446,44 +465,29 @@ impl<'a> Analyzer<'a> {
     }
 
     /// Access: the lhs can be either another access or an identifier.
-    fn get_container_definition(&self, container_id: NodeId) -> NodeId {
-        match self.tree.node(container_id).tag {
-            // The lhs of the Access is either an identfier, or another Access.
-            Tag::Access | Tag::Identifier => {
-                // identifier -> variable decl / access -> field
-                // If container_id is an Access,
-                let type_def = self.definitions.get_definition_id(
-                    container_id,
-                    &format!(
-                        "failed to find definition for identifier \"{:?}\".",
-                        self.tree.node_lexeme(container_id)
-                    ),
-                );
+    fn get_container_definition(&self, container_decl_id: NodeId) -> NodeId {
+        let def_node = self.tree.node(container_decl_id);
+        let type_node_id = match def_node.tag {
+            // field -> struct decl
+            Tag::Field => self.tree.node_index(def_node.rhs),
+            // variable decl -> struct decl
+            Tag::VariableDecl => def_node.lhs,
+            // identifier -> var decl
+            Tag::Identifier => self.tree.node(def_node.lhs).lhs,
+            _ => unreachable!(),
+        };
 
-                let def_node = self.tree.node(type_def);
-                // variable decl -> struct decl / field -> struct decl
-                let type_node_id = match def_node.tag {
-                    Tag::Field => self.tree.node_index(def_node.rhs),
-                    _ => def_node.lhs,
-                };
-
-                if type_node_id == 0 {
-                    return 0;
-                }
-
-                let def_id = self.definitions.get_definition_id(
-                    type_node_id,
-                    &format!(
-                        "failed to find struct definition for variable \"{}\".",
-                        self.tree.node_lexeme(def_node.lhs)
-                    ),
-                );
-                return def_id;
-            }
-            _ => {
-                unreachable!("invalid container")
-            }
+        if type_node_id == 0 {
+            return 0;
         }
+
+        self.definitions.get_definition_id(
+            type_node_id,
+            &format!(
+                "failed to find struct definition for variable \"{}\".",
+                self.tree.node_lexeme(def_node.lhs)
+            ),
+        )
     }
 
     fn define_symbol(scope: &mut Scope<'a>, name: &'a str, id: u32) -> Result<()> {

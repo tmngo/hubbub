@@ -407,15 +407,42 @@ impl<'ctx> Generator<'ctx> {
             Tag::VariableDecl => {
                 // lhs: type
                 // rhs: expr
-                let type_id = data.type_id(node_id);
-                let llvm_type = llvm_type(self.context, data.types, type_id);
-                let stack_addr = builder.build_alloca(llvm_type, "alloca_local");
-
-                let location = Location::new(stack_addr, 0);
-                state.locations.insert(node_id, location);
-                if node.rhs != 0 {
-                    let value = self.compile_expr(state, node.rhs);
-                    self.builder.build_store(location.base, value);
+                let lhs = data.tree.node(node.token);
+                match lhs.tag {
+                    Tag::Expressions => {
+                        let mut locs = vec![];
+                        for i in lhs.lhs..lhs.rhs {
+                            let ni = data.tree.node_index(i);
+                            let type_id = data.type_id(ni);
+                            let llvm_type = llvm_type(self.context, data.types, type_id);
+                            let stack_addr = builder.build_alloca(llvm_type, "alloca_local");
+                            let location = Location::new(stack_addr, 0);
+                            state.locations.insert(ni, location);
+                            locs.push(location);
+                        }
+                        let rhs = data.tree.node(node.rhs);
+                        if rhs.tag == Tag::Expressions {
+                            for i in rhs.lhs..rhs.rhs {
+                                let ni = data.tree.node_index(i);
+                                let value = self.compile_expr(state, ni);
+                                self.builder
+                                    .build_store(locs[(i - rhs.lhs) as usize].base, value);
+                            }
+                        }
+                    }
+                    Tag::Identifier => {
+                        let ni = node.token;
+                        let type_id = data.type_id(ni);
+                        let llvm_type = llvm_type(self.context, data.types, type_id);
+                        let stack_addr = builder.build_alloca(llvm_type, "alloca_local");
+                        let location = Location::new(stack_addr, 0);
+                        state.locations.insert(ni, location);
+                        if node.rhs != 0 {
+                            let value = self.compile_expr(state, node.rhs);
+                            self.builder.build_store(location.base, value);
+                        }
+                    }
+                    _ => {}
                 }
             }
             Tag::Return => {

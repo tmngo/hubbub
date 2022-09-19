@@ -581,11 +581,40 @@ impl Parser {
         }
     }
 
+    /// expr-list = expr (',' expr)* ','?
+    fn parse_expr_list(&mut self) -> Result<NodeId> {
+        let range = parse_while!(
+            self,
+            self.token_isnt(TokenTag::Newline) && self.token_isnt(TokenTag::Semicolon),
+            {
+                let expr = self.parse_expr()?;
+                println!("{:?}", format!("{}", TreeNode(&self.tree, expr)));
+
+                self.match_token(TokenTag::Comma);
+                expr
+            }
+        );
+        let first = self.tree.node_index(range.start);
+        let first_identifer = self.tree.node(first);
+        if range.end - range.start == 1 {
+            Ok(first)
+        } else {
+            self.add_node(
+                Tag::Expressions,
+                first_identifer.token,
+                range.start,
+                range.end,
+            )
+        }
+    }
+
     // token: ':'
     // lhs: type_expr
     // rhs: init_expr
     fn parse_decl_variable(&mut self) -> Result<NodeId> {
-        let identifier_list = self.parse_identifier_list()?;
+        let identifier_list = self
+            .parse_identifier_list()
+            .wrap_err("Error parsing identifier list")?;
         let token = self.shift_token(); // : or ::
         let mut type_expr = 0;
         let mut init_expr = 0;
@@ -597,12 +626,26 @@ impl Parser {
                 }
             }
             TokenTag::ColonEqual => {
-                init_expr = self.parse_expr()?;
+                init_expr = self.parse_expr_list()?;
             }
             _ => init_expr = self.parse_expr()?,
         }
         self.expect_tokens(&[TokenTag::Newline, TokenTag::Semicolon])?;
-        self.add_node(Tag::VariableDecl, identifier_list, type_expr, init_expr)
+        let variable_decl =
+            self.add_node(Tag::VariableDecl, identifier_list, type_expr, init_expr)?;
+        let identifier_node = self.tree.node_mut(identifier_list);
+        match identifier_node.tag {
+            Tag::Identifier => identifier_node.lhs = variable_decl,
+            Tag::Expressions => {
+                for i in identifier_node.lhs..identifier_node.rhs {
+                    let ni = self.tree.node_index(i);
+                    let node = self.tree.node_mut(ni);
+                    node.lhs = variable_decl;
+                }
+            }
+            _ => unreachable!(),
+        }
+        Ok(variable_decl)
     }
 
     /// struct-decl = identifier :: struct field* end
@@ -628,7 +671,7 @@ impl Parser {
         let identifier = self.add_leaf(Tag::Identifier, identifier_token)?;
         let colon = self.expect_token(TokenTag::Colon)?;
         let type_expr = self.parse_expr_base()?;
-        let extra_data = self.add_indices2(type_expr, source_index);
+        let extra_data = self.add_indices_fixed(&[type_expr, source_index]);
         self.add_node(Tag::Field, colon, identifier, extra_data)
     }
 
@@ -666,16 +709,17 @@ impl Parser {
             }
             TokenTag::While => self.parse_stmt_while(),
             _ => match self.next_token_tag(1) {
-                TokenTag::Colon | TokenTag::ColonEqual => {
+                TokenTag::Colon | TokenTag::ColonEqual | TokenTag::Comma => {
                     // self.shift_token();
                     self.parse_decl_variable()
+                        .wrap_err("Error parsing variable declaration")
                 }
                 _ => self.parse_stmt_assign(),
             },
         }
     }
 
-    // stmt-assign =
+    // stmt-assign = expr assign-op expr
     fn parse_stmt_assign(&mut self) -> Result<NodeId> {
         let lhs = self.parse_expr()?;
         if lhs == 0 {
@@ -977,10 +1021,11 @@ impl Parser {
         Range { start, end }
     }
 
-    fn add_indices2(&mut self, a: u32, b: u32) -> u32 {
+    fn add_indices_fixed(&mut self, indices: &[u32]) -> u32 {
         let start = self.tree.indices.len() as u32;
-        self.tree.indices.push(a);
-        self.tree.indices.push(b);
+        for &i in indices {
+            self.tree.indices.push(i);
+        }
         start
     }
 
@@ -1113,6 +1158,10 @@ pub struct Tree {
 impl Tree {
     pub fn node(&self, id: NodeId) -> &Node {
         &self.nodes[id as usize]
+    }
+
+    pub fn node_mut(&mut self, id: NodeId) -> &mut Node {
+        &mut self.nodes[id as usize]
     }
 
     pub fn lchild(&self, parent: &Node) -> &Node {
@@ -1280,6 +1329,9 @@ impl Tree {
             // One or two children.
             _ => {
                 write!(f, "({:?}", tag)?;
+                if tag == Tag::Identifier {
+                    return Ok(());
+                }
                 if node.lhs != 0 {
                     write!(f, " ")?;
                     self.print_node(f, node.lhs, indentation)?;
@@ -1294,6 +1346,15 @@ impl Tree {
                 write!(f, ")")?;
             }
         }
+        Ok(())
+    }
+}
+
+struct TreeNode<'a>(&'a Tree, NodeId);
+
+impl<'a> fmt::Display for TreeNode<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.print_node(f, self.1, 0)?;
         Ok(())
     }
 }

@@ -147,6 +147,10 @@ fn if_else() {
     test("if_else", Test::AotAndJit, "", 0, 61);
 }
 #[test]
+fn multiple() {
+    test("multiple", Test::AotAndJit, "", 0, 10);
+}
+#[test]
 fn pointer() {
     test("pointer", Test::AotAndJit, "", 0, 158);
 }

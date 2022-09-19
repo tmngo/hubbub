@@ -6,6 +6,7 @@ use color_eyre::{
     eyre::{eyre, Result},
     Section,
 };
+use smallvec::{smallvec, SmallVec};
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
@@ -154,11 +155,11 @@ impl<'a> Typechecker<'a> {
         match node.tag {
             Tag::FunctionDecl => {
                 // prototype
-                let type_id = self.infer_node(node.lhs)?;
+                let type_id = self.infer_node(node.lhs)?[0];
                 self.type_definitions.insert(type_id, index);
             }
             Tag::Struct => {
-                let type_id = self.infer_node(index)?;
+                let type_id = self.infer_node(index)?[0];
                 self.type_definitions.insert(type_id, index);
             }
             _ => {}
@@ -179,18 +180,19 @@ impl<'a> Typechecker<'a> {
     }
 
     ///
-    fn infer_node(&mut self, node_id: NodeId) -> Result<TypeId> {
+    fn infer_node(&mut self, node_id: NodeId) -> Result<SmallVec<[TypeId; 8]>> {
         if node_id == 0 {
-            return Ok(0);
+            return Ok(smallvec![0]);
         }
         if self.node_types[node_id as usize] != 0 {
-            return Ok(self.node_types[node_id as usize]);
+            return Ok(smallvec![self.node_types[node_id as usize]]);
         }
         let node = self.tree.node(node_id);
-        println!("[{}] - {:?}", node_id, node.tag);
+        let mut inferred_node_ids = vec![];
+        let mut inferred_type_ids = vec![];
         let result = match node.tag {
             Tag::Access => {
-                let ltype = self.infer_node(node.lhs)?;
+                let ltype = self.infer_node(node.lhs)?[0];
                 // Module access.
                 if ltype == 0 {
                     return self.infer_node(node.rhs);
@@ -225,11 +227,15 @@ impl<'a> Typechecker<'a> {
                 }
             }
             Tag::Address => {
-                let value_type = self.infer_node(node.lhs)?;
+                let value_type = self.infer_node(node.lhs)?[0];
                 self.add_pointer_type(value_type)
             }
-            Tag::Add
-            | Tag::Div
+            Tag::Add => {
+                let ltype = self.infer_node(node.lhs)?[0];
+                self.infer_node(node.rhs)?;
+                ltype
+            }
+            Tag::Div
             | Tag::Mul
             | Tag::Sub
             | Tag::BitwiseAnd
@@ -238,8 +244,8 @@ impl<'a> Typechecker<'a> {
             | Tag::BitwiseShiftR
             | Tag::BitwiseXor => self.infer_binary_node(node.lhs, node.rhs)?,
             Tag::Assign => {
-                let ltype = self.infer_node(node.lhs)?;
-                let rtype = self.infer_node(node.rhs)?;
+                let ltype = self.infer_node(node.lhs)?[0];
+                let rtype = self.infer_node(node.rhs)?[0];
                 if node.rhs != 0 && ltype != rtype {
                     return Err(eyre!(
                         "mismatched types in assignment: expected {:?}, got {:?}",
@@ -256,7 +262,7 @@ impl<'a> Typechecker<'a> {
             | Tag::Parameters
             | Tag::Return => self.infer_range(node)?,
             Tag::Call => {
-                let ltype = self.infer_node(node.lhs)?;
+                let ltype = self.infer_node(node.lhs)?[0];
                 self.infer_node(node.rhs)?;
                 if let Type::Function {
                     parameters: _,
@@ -273,7 +279,7 @@ impl<'a> Typechecker<'a> {
                 }
             }
             Tag::Dereference => {
-                let pointer_type = self.infer_node(node.lhs)?;
+                let pointer_type = self.infer_node(node.lhs)?[0];
                 if let Type::Pointer { typ } = self.types[pointer_type] {
                     typ
                 } else {
@@ -284,10 +290,10 @@ impl<'a> Typechecker<'a> {
                     ));
                 }
             }
-            Tag::Field => self.infer_node(self.tree.node_index(node.rhs))?,
+            Tag::Field => self.infer_node(self.tree.node_index(node.rhs))?[0],
             Tag::FunctionDecl => {
                 // Prototype
-                let fn_type = self.infer_node(node.lhs)?;
+                let fn_type = self.infer_node(node.lhs)?[0];
                 // Immediately set the declaration's type to handle recursion.
                 self.set_node_type(node_id, fn_type);
                 // Body
@@ -299,10 +305,11 @@ impl<'a> Typechecker<'a> {
                 TypeIndex::Boolean as TypeId
             }
             Tag::Identifier => {
+                // The type of an identifier is the type of its definition.
                 let decl = self.definitions.get(&node_id);
                 if let Some(lookup) = decl {
                     match lookup {
-                        Definition::User(decl_index) => self.infer_node(*decl_index)?,
+                        Definition::User(decl_index) => self.infer_node(*decl_index)?[0],
                         Definition::BuiltIn(type_index) => *type_index as TypeId,
                         _ => 0,
                     }
@@ -314,13 +321,13 @@ impl<'a> Typechecker<'a> {
             Tag::True | Tag::False => TypeIndex::Boolean as TypeId,
             Tag::ParametricPrototype => {
                 // Prototype
-                self.infer_node(node.rhs)?
+                self.infer_node(node.rhs)?[0]
             }
             Tag::Prototype => {
                 let mut parameters = Vec::new();
                 let mut returns = Vec::new();
                 self.infer_node(node.lhs)?; // parameters
-                let return_type = self.infer_node(node.rhs)?; // returns
+                let return_type = self.infer_node(node.rhs)?[0]; // returns
                 let params = self.tree.node(node.lhs);
                 for i in params.lhs..params.rhs {
                     let ni = self.tree.node_index(i) as usize;
@@ -332,7 +339,7 @@ impl<'a> Typechecker<'a> {
                         let ni = self.tree.node_index(i) as usize;
                         returns.push(self.node_types[ni]);
                     }
-                } else if rets.tag == Tag::Identifier {
+                } else if rets.tag == Tag::Identifier || rets.tag == Tag::Type {
                     returns.push(return_type);
                 }
                 self.add_type(Type::Function {
@@ -352,7 +359,7 @@ impl<'a> Typechecker<'a> {
                 self.add_type(Type::Struct { fields })
             }
             Tag::Subscript => {
-                let array_type = self.infer_node(node.lhs)?;
+                let array_type = self.infer_node(node.lhs)?[0];
                 self.infer_node(node.rhs)?;
                 if let Type::Array { typ, .. } = self.types[array_type] {
                     typ
@@ -368,7 +375,7 @@ impl<'a> Typechecker<'a> {
                 let definition = self.definitions.get(&node_id);
                 let base_type = if let Some(lookup) = definition {
                     match lookup {
-                        Definition::User(definition_id) => self.infer_node(*definition_id)?,
+                        Definition::User(definition_id) => self.infer_node(*definition_id)?[0],
                         Definition::BuiltIn(type_index) => *type_index as TypeId,
                         _ => 0,
                     }
@@ -388,7 +395,7 @@ impl<'a> Typechecker<'a> {
                             ));
                         }
                         let ni = self.tree.node_index(node.lhs);
-                        let value_type = self.infer_node(ni)?;
+                        let value_type = self.infer_node(ni)?[0];
                         let ni = self.tree.node_index(node.lhs + 1);
                         let length_node = self.tree.node(ni);
                         assert_eq!(
@@ -411,7 +418,7 @@ impl<'a> Typechecker<'a> {
                             ));
                         }
                         let ni = self.tree.node_index(node.lhs);
-                        let value_type = self.infer_node(ni)?;
+                        let value_type = self.infer_node(ni)?[0];
                         println!("value type: {:?}", self.types[value_type]);
 
                         // Map from type parameter T to Pointer{T}
@@ -425,17 +432,52 @@ impl<'a> Typechecker<'a> {
             Tag::VariableDecl => {
                 // lhs: type-expr
                 // rhs: init-expr
-                let ltype = self.infer_node(node.lhs)?;
-                let rtype = self.infer_node(node.rhs)?;
-                if ltype != 0 && rtype == 0 {
-                    ltype
-                } else if ltype == 0 && rtype != 0 {
-                    rtype
-                } else if ltype != rtype {
-                    return Err(eyre!("annotation type doesn't match"));
-                } else {
-                    ltype
+                let identifiers = self.tree.node(node.token);
+
+                let annotation = self.infer_node(node.lhs)?[0];
+                self.infer_node(node.rhs)?;
+
+                let mut rtypes = SmallVec::<[usize; 8]>::new();
+                let rvalues = self.tree.node(node.rhs);
+                match rvalues.tag {
+                    Tag::Expressions => {
+                        for i in rvalues.lhs..rvalues.rhs {
+                            let ni = self.tree.node_index(i);
+                            let ti = self.node_types[ni as usize];
+                            rtypes.push(ti);
+                        }
+                    }
+                    _ => {
+                        let ni = node.rhs;
+                        let ti = self.node_types[ni as usize];
+                        rtypes.push(ti);
+                    }
                 }
+
+                // dbg!(&rtypes);
+                // dbg!(annotation);
+
+                match identifiers.tag {
+                    Tag::Expressions => {
+                        for i in identifiers.lhs..identifiers.rhs {
+                            let ni = self.tree.node_index(i);
+                            inferred_node_ids.push(ni);
+                            let rtype = rtypes[(i - identifiers.lhs) as usize];
+                            let inferred_type = infer_type(annotation, rtype)?;
+                            inferred_type_ids.push(inferred_type);
+                        }
+                    }
+                    Tag::Identifier => {
+                        let ni = node.token;
+                        inferred_node_ids.push(ni);
+                        let rtype = rtypes[0];
+                        let inferred_type = infer_type(annotation, rtype)?;
+                        inferred_type_ids.push(inferred_type);
+                    }
+                    _ => unreachable!(),
+                }
+                0
+                // infer_type(annotation, rtypes[0])?
             }
             _ => {
                 self.infer_node(node.lhs)?;
@@ -443,14 +485,17 @@ impl<'a> Typechecker<'a> {
                 0
             }
         };
+        for (&ni, &ti) in inferred_node_ids.iter().zip(inferred_type_ids.iter()) {
+            self.set_node_type(ni, ti);
+        }
         self.set_node_type(node_id, result);
-        Ok(self.node_types[node_id as usize])
+        Ok(smallvec![self.node_types[node_id as usize]])
     }
 
     ///
     fn infer_binary_node(&mut self, lhs: u32, rhs: u32) -> Result<TypeId> {
-        let ltype = self.infer_node(lhs)?;
-        let rtype = self.infer_node(rhs)?;
+        let ltype = self.infer_node(lhs)?[0];
+        let rtype = self.infer_node(rhs)?[0];
         if ltype != rtype {
             return Err(eyre!(
                 "mismatched types: lhs is {:?}, rhs is {:?}",
@@ -503,5 +548,19 @@ impl<'a> Typechecker<'a> {
                 self.types[self.node_types[i] as usize]
             );
         }
+    }
+}
+
+fn infer_type(annotation_type: TypeId, value_type: TypeId) -> Result<TypeId> {
+    if annotation_type != 0 && value_type == 0 {
+        // Explicit type based on annotation.
+        Ok(annotation_type)
+    } else if annotation_type == 0 && value_type != 0 {
+        // Infer type based on rvalue.
+        Ok(value_type)
+    } else if annotation_type != value_type {
+        Err(eyre!("annotation type doesn't match"))
+    } else {
+        Ok(annotation_type)
     }
 }

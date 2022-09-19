@@ -31,7 +31,7 @@ fn main() -> Result<()> {
         return Err(eyre!("USAGE: hubbub.exe file"));
     }
     let filename = &args[1];
-    let src_filename = format!("examples/{}.hb", filename);
+    let src_filename = format!("{}.hb", filename);
     dbg!(&src_filename);
     let obj_filename = format!("{}.obj", filename);
     let exe_filename = format!("{}.exe", filename);

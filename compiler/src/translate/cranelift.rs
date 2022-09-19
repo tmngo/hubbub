@@ -342,15 +342,48 @@ impl State {
             Tag::VariableDecl => {
                 // lhs: type
                 // rhs: expr
-                let slot = self.create_stack_slot(data, c, node_id);
-                let location = Location::stack(slot, 0);
-                self.locations.insert(node_id, location);
-                if node.rhs != 0 {
-                    let layout = data.layout(node.rhs);
-                    let value = self
-                        .compile_expr(data, c, node.rhs)
-                        .cranelift_value(c, data.layout(node.rhs));
-                    location.store(c, value, MemFlags::new(), layout);
+                let lhs = data.tree.node(node.token);
+                match lhs.tag {
+                    Tag::Expressions => {
+                        let mut locs = vec![];
+                        for i in lhs.lhs..lhs.rhs {
+                            let ni = data.tree.node_index(i);
+                            let slot = self.create_stack_slot(data, c, ni);
+                            let location = Location::stack(slot, 0);
+                            self.locations.insert(ni, location);
+                            locs.push(location);
+                        }
+                        let rhs = data.tree.node(node.rhs);
+                        if rhs.tag == Tag::Expressions {
+                            for i in rhs.lhs..rhs.rhs {
+                                let ni = data.tree.node_index(i);
+                                let layout = data.layout(ni);
+                                let value = self
+                                    .compile_expr(data, c, ni)
+                                    .cranelift_value(c, data.layout(ni));
+                                locs[(i - rhs.lhs) as usize].store(
+                                    c,
+                                    value,
+                                    MemFlags::new(),
+                                    layout,
+                                );
+                            }
+                        }
+                    }
+                    Tag::Identifier => {
+                        let ni = node.token;
+                        let slot = self.create_stack_slot(data, c, ni);
+                        let location = Location::stack(slot, 0);
+                        self.locations.insert(ni, location);
+                        if node.rhs != 0 {
+                            let layout = data.layout(node.rhs);
+                            let value = self
+                                .compile_expr(data, c, node.rhs)
+                                .cranelift_value(c, data.layout(node.rhs));
+                            location.store(c, value, MemFlags::new(), layout);
+                        }
+                    }
+                    _ => {}
                 }
             }
             Tag::Return => {
