@@ -2,7 +2,7 @@
 #![feature(option_result_contains)]
 
 use color_eyre::eyre::{eyre, Result, WrapErr};
-use std::{path::Path, time::Instant};
+use std::{collections::HashSet, path::Path, time::Instant};
 
 pub mod analyze;
 mod builtin;
@@ -25,6 +25,7 @@ fn main() -> Result<()> {
         // .capture_span_trace_by_default(true)
         .install()?;
     let args: Vec<String> = std::env::args().collect();
+    let flags: HashSet<&String> = HashSet::from_iter(args.iter().skip(2));
     if args.len() == 1 {
         println!("USAGE: hubbub.exe file");
         return Err(eyre!("USAGE: hubbub.exe file"));
@@ -84,24 +85,33 @@ fn main() -> Result<()> {
 
     println!("--- BEGIN GENERATE");
     let start = Instant::now();
-    let use_jit = args.len() == 3 && args[2] == "-j";
-    let generator =
-        translate::cranelift::Generator::new(&input, "object_file".to_string(), use_jit);
-    generator.compile_nodes(Path::new(&obj_filename));
-    if !use_jit {
-        translate::llvm::compile(&input, use_jit, &format!("llvm{}", &obj_filename));
+    let use_jit = flags.contains(&"-j".to_string());
+    let use_llvm = !use_jit && flags.contains(&"-r".to_string());
+    if use_llvm {
+        translate::llvm::compile(
+            &input,
+            use_jit,
+            Path::new(&format!("llvm{}", &obj_filename)),
+        );
+    } else {
+        let generator =
+            translate::cranelift::Generator::new(&input, "object_file".to_string(), use_jit);
+        generator.compile_nodes(Path::new(&obj_filename));
     }
     let t_generate = start.elapsed();
     println!("--- END GENERATE\n");
 
     if !use_jit {
         println!("--- BEGIN LINK [host: {}]", target_lexicon::HOST);
-        link::link(&obj_filename, &exe_filename, "");
-        link::link(
-            &format!("llvm{}", &obj_filename),
-            &format!("llvm{}", &exe_filename),
-            "",
-        );
+        if use_llvm {
+            link::link(
+                &format!("llvm{}", &obj_filename),
+                &format!("llvm{}", &exe_filename),
+                "",
+            );
+        } else {
+            link::link(&obj_filename, &exe_filename, "");
+        }
         println!("--- END LINK\n");
     }
 
