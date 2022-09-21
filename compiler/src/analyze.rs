@@ -34,27 +34,6 @@ pub enum Definition {
 // Assert that Tag size <= 1 byte
 pub const _ASSERT_LOOKUP_SIZE: () = assert_size::<Definition>(8);
 
-// #[derive(PartialEq)]
-// enum State {
-//     Unresolved,
-//     Resolving,
-//     Resolved,
-// }
-
-// enum Kind {
-//     Function,
-//     Global,
-//     Local,
-//     Parameter,
-//     Struct,
-// }
-
-// struct Symbol {
-//     node: u32,
-//     state: State,
-//     kind: Kind,
-// }
-
 #[derive(Debug, Clone)]
 pub struct Scope<'a> {
     symbols: HashMap<&'a str, u32>,
@@ -167,11 +146,9 @@ impl<'a> Analyzer<'a> {
         for i in root.lhs..root.rhs {
             let ni = self.tree.node_index(i);
             let module = self.tree.node(ni);
-            if let Some(module_info) = self.tree.token_module(module.token) {
-                let module_name = &module_info.name;
-                dbg!(module_name);
-            }
-            println!("entering module scope");
+            // if let Some(module_info) = self.tree.token_module(module.token) {
+            //     dbg!(&module_info.name);
+            // }
             self.enter_scope();
             module_scopes.push(self.current);
             self.collect_module_decls(module)
@@ -218,14 +195,13 @@ impl<'a> Analyzer<'a> {
                     let module_scope_index = self.get_module_scope_index(node);
                     let current_scope = &mut self.scopes[self.current];
                     if node.lhs != 0 {
-                        // let alias_node = self.tree.node(node.lhs);
                         let module_alias = self.tree.name(node.lhs);
-                        dbg!(module_alias);
+                        // dbg!(module_alias);
                         current_scope.named_imports.push(module_scope_index);
                         // Map module_alias to Import node.
                         Self::define_symbol(current_scope, module_alias, node_id)?;
                     } else {
-                        dbg!(module_scope_index);
+                        // dbg!(module_scope_index);
                         // for (name, id) in self.scopes[module_scope_index].symbols.clone().iter()
                         // {
                         //     self.define_symbol(name, *id)?;
@@ -263,21 +239,6 @@ impl<'a> Analyzer<'a> {
             unreachable!("failed to get module scope index")
         }
     }
-
-    // fn resolve_symbol(&self, mut sym: Symbol) {
-    //     if sym.state == State::Resolved {
-    //         return;
-    //     } else if sym.state == State::Resolving {
-    //         return;
-    //     }
-
-    //     sym.state = State::Resolving;
-    //     match self.nodes[sym.node as usize].tag {
-    //         Tag::VariableDecl => {}
-    //         _ => {}
-    //     }
-    //     sym.state = State::Resolved;
-    // }
 
     fn resolve_range(&mut self, node: &Node) -> Result<()> {
         if node.tag == Tag::Root {
