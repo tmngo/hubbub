@@ -1,5 +1,5 @@
 use crate::{
-    analyze::{Definition, Lookup},
+    analyze::Definition,
     parse::{Node, NodeId, Tag, Tree},
 };
 use color_eyre::{
@@ -71,6 +71,7 @@ pub enum TypeIndex {
 pub struct Typechecker<'a> {
     tree: &'a Tree,
     definitions: &'a mut HashMap<NodeId, Definition>,
+    overload_sets: &'a HashMap<NodeId, Vec<NodeId>>,
     pub types: Vec<Type>,
     type_definitions: HashMap<TypeId, NodeId>,
     pub error_reports: Vec<TypeError>,
@@ -81,7 +82,11 @@ pub struct Typechecker<'a> {
 }
 
 impl<'a> Typechecker<'a> {
-    pub fn new(tree: &'a Tree, definitions: &'a mut HashMap<u32, Definition>) -> Self {
+    pub fn new(
+        tree: &'a Tree,
+        definitions: &'a mut HashMap<u32, Definition>,
+        overload_sets: &'a HashMap<NodeId, Vec<NodeId>>,
+    ) -> Self {
         let types = vec![
             Type::Void,
             Type::Boolean,
@@ -101,6 +106,7 @@ impl<'a> Typechecker<'a> {
         Self {
             tree,
             definitions,
+            overload_sets,
             type_definitions: HashMap::new(),
             types,
             error_reports: vec![],
@@ -190,6 +196,7 @@ impl<'a> Typechecker<'a> {
         let node = self.tree.node(node_id);
         let mut inferred_node_ids = vec![];
         let mut inferred_type_ids = vec![];
+        // println!("[{}] - {:?}", node_id, node.tag);
         let result = match node.tag {
             Tag::Access => {
                 let ltype = self.infer_node(node.lhs)?[0];
@@ -262,8 +269,141 @@ impl<'a> Typechecker<'a> {
             | Tag::Parameters
             | Tag::Return => self.infer_range(node)?,
             Tag::Call => {
-                let ltype = self.infer_node(node.lhs)?[0];
+                // Argument expressions
                 self.infer_node(node.rhs)?;
+                let expressions = self.tree.rchild(node);
+
+                // Callee
+                let callee_id = node.lhs;
+                let definition = self.definitions.get(&callee_id).unwrap_or_else(|| {
+                    panic!("Definition not found: {}", self.tree.name(callee_id))
+                });
+                let (definition_id, is_overload) = match definition {
+                    Definition::User(id)
+                    | Definition::BuiltIn(id)
+                    | Definition::Foreign(id)
+                    | Definition::Resolved(id) => (*id, false),
+                    Definition::Overload(id) => (*id, true),
+                    Definition::NotFound => {
+                        unreachable!("Definition not found: {}", self.tree.name(callee_id))
+                    }
+                };
+
+                if is_overload {
+                    let overload_set = self.overload_sets.get(&definition_id).unwrap();
+                    let mut match_found = false;
+
+                    let mut argument_types = vec![];
+                    for i in expressions.lhs..expressions.rhs {
+                        let arg_id = self.tree.node_index(i);
+                        let arg_type = self.node_types[arg_id as usize];
+                        argument_types.push(arg_type);
+                    }
+
+                    'outer: for &fn_decl_id in overload_set {
+                        let fn_decl = self.tree.node(fn_decl_id);
+                        let prototype = self.tree.node(fn_decl.lhs);
+                        let parameters = self.tree.lchild(prototype);
+                        assert_eq!(parameters.tag, Tag::Parameters);
+
+                        if (parameters.rhs - parameters.lhs) as usize != argument_types.len() {
+                            continue 'outer;
+                        }
+
+                        for i in parameters.lhs..parameters.rhs {
+                            let param_id = self.tree.node_index(i);
+                            let param_type = self.node_types[param_id as usize];
+                            let arg_type = argument_types[(i - parameters.lhs) as usize];
+                            if arg_type != param_type {
+                                continue 'outer;
+                            }
+                        }
+
+                        match_found = true;
+                        self.definitions
+                            .insert(callee_id, Definition::Resolved(fn_decl_id));
+                        self.definitions
+                            .insert(fn_decl_id, Definition::Resolved(fn_decl_id));
+                    }
+                    if !match_found {
+                        return Err(eyre!("failed to find matching overload"));
+                    }
+                } else {
+                    let fn_decl = self.tree.node(definition_id);
+                    let prototype = self.tree.node(fn_decl.lhs);
+                    match prototype.tag {
+                        Tag::ParametricPrototype => {
+                            // let type_parameters = self.tree.lchild(prototype);
+                            // let inner_prototype = self.tree.rchild(prototype);
+                            // let parameters = self.tree.lchild(inner_prototype);
+                            // let returns = self.tree.rchild(inner_prototype);
+                            // let mut arg_types = Vec::new();
+                            // // let mut ret_types = Vec::new();
+                            // for (i, it) in (parameters.lhs..parameters.rhs).enumerate() {
+                            //     let arg_id = self.tree.node_index(i as u32 + expressions.lhs);
+                            //     let arg_type = self.node_types[arg_id as usize];
+                            //     arg_types.push(arg_type);
+                            // }
+                            // // for (i, it) in (returns.lhs..returns.rhs).enumerate() {
+                            // //     let ret_id = self.tree.node_index(i as u32 + expressions.lhs);
+                            // //     let t = self.node_types[arg_id as usize];
+                            // //     ret_types.push(t);
+                            // // }
+                            // self.types.push(Type::Function {
+                            //     parameters: arg_types.clone(),
+                            //     returns: arg_types.clone(),
+                            // });
+                            // if let Err(mut error) = self
+                            //     .type_parameters
+                            //     .try_insert(definition_id, HashSet::from([arg_types.clone()]))
+                            // {
+                            //     error.entry.get_mut().insert(arg_types);
+                            // }
+                        }
+                        Tag::Prototype => {
+                            // Non-parametric procedure: just type-check the arguments.
+                            let mut argument_types = vec![];
+                            for i in expressions.lhs..expressions.rhs {
+                                let arg_id = self.tree.node_index(i);
+                                let arg_type = self.node_types[arg_id as usize];
+                                argument_types.push(arg_type);
+                            }
+
+                            let parameters = self.tree.lchild(prototype);
+                            assert_eq!(parameters.tag, Tag::Parameters);
+
+                            if (parameters.rhs - parameters.lhs) as usize != argument_types.len() {
+                                return Err(eyre!(
+                                    "invalid function call: expected {:?} arguments, got {:?}",
+                                    parameters.rhs - parameters.lhs,
+                                    argument_types.len()
+                                ));
+                            }
+
+                            for i in parameters.lhs..parameters.rhs {
+                                let param_id = self.tree.node_index(i);
+                                let param_type = self.node_types[param_id as usize];
+                                let arg_type = argument_types[(i - parameters.lhs) as usize];
+                                if arg_type != param_type {
+                                    return Err(eyre!(
+                                        "mismatched types in function call: expected {:?} argument, got {:?}",
+                                        self.types[param_type],
+                                        self.types[arg_type]
+                                    ));
+                                }
+                            }
+                        }
+                        _ => {
+                            println!(
+                                "{}",
+                                crate::format_red!("TODO: skipped typechecking of builtin fn")
+                            );
+                        }
+                    }
+                }
+
+                let ltype = self.infer_node(callee_id)?[0];
+
                 if let Type::Function {
                     parameters: _,
                     returns,
@@ -309,8 +449,11 @@ impl<'a> Typechecker<'a> {
                 let decl = self.definitions.get(&node_id);
                 if let Some(lookup) = decl {
                     match lookup {
-                        Definition::User(decl_index) => self.infer_node(*decl_index)?[0],
-                        Definition::BuiltIn(type_index) => *type_index as TypeId,
+                        Definition::User(decl_id) | Definition::Resolved(decl_id) => {
+                            self.infer_node(*decl_id)?[0]
+                        }
+                        Definition::BuiltIn(type_id) => *type_id as TypeId,
+                        Definition::Overload(_) => unreachable!(),
                         _ => 0,
                     }
                 } else {

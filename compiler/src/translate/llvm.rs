@@ -134,7 +134,8 @@ impl<'ctx> Generator<'ctx> {
                     {
                         continue;
                     }
-                    let name = self.data.mangle_function_declaration(ni, false);
+                    let is_overloaded = self.data.definitions.contains_key(&ni);
+                    let name = self.data.mangle_function_declaration(ni, is_overloaded);
                     self.compile_function_signature(node.lhs, &name);
                 };
             }
@@ -185,7 +186,10 @@ impl<'ctx> Generator<'ctx> {
         node_id: NodeId,
     ) -> FunctionValue<'ctx> {
         let node = self.data.node(node_id);
-        let name = self.data.mangle_function_declaration(node_id, false);
+        let is_overloaded = self.data.definitions.contains_key(&node_id);
+        let name = self
+            .data
+            .mangle_function_declaration(node_id, is_overloaded);
 
         let fn_value = self.module.get_function(&name).unwrap();
 
@@ -584,9 +588,9 @@ impl<'ctx> Generator<'ctx> {
             Tag::True => self.context.bool_type().const_int(1, false).into(),
             Tag::False => self.context.bool_type().const_int(0, false).into(),
             Tag::Call => {
-                let function_id = data
+                let (function_id, is_resolved_overload) = data
                     .definitions
-                    .get_definition_id(node.lhs, "failed to get function decl");
+                    .get_definition_info(node.lhs, "failed to get function decl");
 
                 // println!("name:    {}", data.tree.name(node.lhs));
                 // println!(
@@ -594,7 +598,7 @@ impl<'ctx> Generator<'ctx> {
                 //     data.mangle_function_declaration(function_id, false)
                 // );
 
-                let name = data.mangle_function_declaration(function_id, false);
+                let name = data.mangle_function_declaration(function_id, is_resolved_overload);
 
                 // self.module.print_to_stderr();
 

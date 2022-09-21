@@ -13,6 +13,7 @@ use std::{collections::HashMap, fmt};
 pub struct Analyzer<'a> {
     tree: &'a Tree,
     pub definitions: HashMap<NodeId, Definition>,
+    pub overload_sets: HashMap<NodeId, Vec<NodeId>>,
     struct_scopes: HashMap<u32, Scope<'a>>,
     scopes: Vec<Scope<'a>>,
     builtins: Scope<'a>,
@@ -25,7 +26,8 @@ pub enum Definition {
     BuiltIn(u32),
     User(NodeId),
     Foreign(u32),
-    // Overload(u32),
+    Overload(u32),
+    Resolved(u32),
     NotFound,
 }
 
@@ -56,6 +58,7 @@ pub const _ASSERT_LOOKUP_SIZE: () = assert_size::<Definition>(8);
 #[derive(Debug, Clone)]
 pub struct Scope<'a> {
     symbols: HashMap<&'a str, u32>,
+    fn_symbols: HashMap<&'a str, Vec<u32>>,
     parent: usize,
     named_imports: Vec<usize>,
     unnamed_imports: Vec<usize>,
@@ -65,6 +68,7 @@ impl<'a> Scope<'a> {
     pub fn new(parent: usize) -> Self {
         Scope {
             symbols: HashMap::new(),
+            fn_symbols: HashMap::new(),
             parent,
             named_imports: Vec::new(),
             unnamed_imports: Vec::new(),
@@ -74,6 +78,7 @@ impl<'a> Scope<'a> {
     pub fn from<const N: usize>(arr: [(&'a str, u32); N], parent: usize) -> Self {
         Self {
             symbols: HashMap::from(arr),
+            fn_symbols: HashMap::new(),
             parent,
             named_imports: Vec::new(),
             unnamed_imports: Vec::new(),
@@ -82,6 +87,10 @@ impl<'a> Scope<'a> {
 
     pub fn get(&self, name: &str) -> Option<&u32> {
         self.symbols.get(name)
+    }
+
+    pub fn get_fn(&self, name: &str) -> Option<&Vec<u32>> {
+        self.fn_symbols.get(name)
     }
 
     pub fn parent(&self) -> usize {
@@ -141,6 +150,7 @@ impl<'a> Analyzer<'a> {
         Self {
             tree,
             definitions: HashMap::new(),
+            overload_sets: HashMap::new(),
             builtins,
             foreign,
             scopes: Vec::new(),
@@ -175,6 +185,9 @@ impl<'a> Analyzer<'a> {
                 for (name, id) in self.scopes[import_scope_index].symbols.clone().iter() {
                     Self::define_symbol(&mut self.scopes[i], name, *id)?;
                 }
+                for (name, ids) in self.scopes[import_scope_index].fn_symbols.clone().iter() {
+                    Self::define_function(&mut self.scopes[i], name, ids)?;
+                }
             }
         }
         // Resolve module contents
@@ -196,7 +209,7 @@ impl<'a> Analyzer<'a> {
                 Tag::FunctionDecl => {
                     let name = self.tree.name(node_id);
                     let current_scope = &mut self.scopes[self.current];
-                    Self::define_symbol(current_scope, name, node_id)?;
+                    Self::define_function(current_scope, name, &[node_id])?;
                 }
                 Tag::Import => {
                     // let module_name = self.tree.node_lexeme_offset(&node, 1).trim_matches('"');
@@ -321,8 +334,8 @@ impl<'a> Analyzer<'a> {
                                 } else {
                                     Definition::NotFound
                                 };
-                            self.set_node_definition(id, name, definition.clone());
-                            self.set_node_definition(node.rhs, name, definition);
+                            self.set_node_definition(id, definition.clone());
+                            self.set_node_definition(node.rhs, definition);
                             return Ok(());
                         }
                     }
@@ -391,9 +404,8 @@ impl<'a> Analyzer<'a> {
                 self.exit_scope();
             }
             Tag::Identifier => {
-                let name = self.tree.node_lexeme(id);
-                let definition = self.lookup(name);
-                self.set_node_definition(id, name, definition);
+                let definition = self.lookup(id);
+                self.set_node_definition(id, definition);
             }
             Tag::Import => {}
             Tag::Parameters => {
@@ -407,9 +419,8 @@ impl<'a> Analyzer<'a> {
                 }
             }
             Tag::Type => {
-                let name = self.tree.node_lexeme(id);
-                let definition = self.lookup(name);
-                self.set_node_definition(id, name, definition);
+                let definition = self.lookup(id);
+                self.set_node_definition(id, definition);
                 self.resolve_range(node)?;
             }
             Tag::TypeParameters => {
@@ -448,16 +459,17 @@ impl<'a> Analyzer<'a> {
         Ok(())
     }
 
-    fn set_node_definition(&mut self, node_id: NodeId, name: &str, definition: Definition) {
+    fn set_node_definition(&mut self, node_id: NodeId, definition: Definition) {
         match definition {
-            Definition::User(_) => {
-                self.definitions.insert(node_id, definition);
-            }
-            Definition::BuiltIn(_) => {
+            Definition::User(_)
+            | Definition::Overload(_)
+            | Definition::BuiltIn(_)
+            | Definition::Resolved(_) => {
                 self.definitions.insert(node_id, definition);
             }
             Definition::Foreign(_) => {}
             Definition::NotFound => {
+                let name = self.tree.name(node_id);
                 println!("{}", &self);
                 panic!("cannot find `{}` in this scope", name);
             }
@@ -497,15 +509,27 @@ impl<'a> Analyzer<'a> {
         Ok(())
     }
 
-    fn lookup(&self, name: &str) -> Definition {
+    fn define_function(scope: &mut Scope<'a>, name: &'a str, ids: &[u32]) -> Result<()> {
+        if let Err(mut error) = scope.fn_symbols.try_insert(name, Vec::from(ids)) {
+            error.entry.get_mut().extend(ids);
+        }
+        Ok(())
+    }
+
+    fn lookup(&mut self, id: NodeId) -> Definition {
+        let name = self.tree.node_lexeme(id);
         if self.scopes.is_empty() {
             return Definition::NotFound;
         }
         let mut scope_index = self.current;
+        let mut overload_set = vec![];
         loop {
             // Check if the name is defined in the current scope.
             if let Some(&index) = self.scopes[scope_index].get(name) {
                 return Definition::User(index);
+            }
+            if let Some(ids) = self.scopes[scope_index].get_fn(name) {
+                overload_set.extend(ids);
             }
             // Check if the name is defined in imported scopes.
             // for &import_scope_index in &self.scopes[scope_index].unnamed_imports {
@@ -521,7 +545,14 @@ impl<'a> Analyzer<'a> {
                 if let Some(&index) = self.foreign.get(name) {
                     return Definition::Foreign(index);
                 }
-                return Definition::NotFound;
+                return match overload_set.len() {
+                    0 => Definition::NotFound,
+                    1 => Definition::User(overload_set[0]),
+                    _ => {
+                        self.overload_sets.insert(id, overload_set);
+                        Definition::Overload(id)
+                    }
+                };
             }
             // Look in the parent scope.
             scope_index = self.scopes[scope_index].parent();
@@ -559,6 +590,7 @@ impl<'a> Analyzer<'a> {
 
 pub trait Lookup {
     fn get_definition_id(&self, node_id: NodeId, msg: &str) -> NodeId;
+    fn get_definition_info(&self, node_id: NodeId, msg: &str) -> (NodeId, bool);
 }
 
 impl Lookup for HashMap<NodeId, Definition> {
@@ -567,9 +599,24 @@ impl Lookup for HashMap<NodeId, Definition> {
             .get(&node_id)
             .unwrap_or_else(|| panic!("Definition not found: {}", msg));
         match definition {
-            Definition::User(id) => *id,
-            Definition::BuiltIn(id) => *id,
-            Definition::Foreign(id) => *id,
+            Definition::User(id)
+            | Definition::BuiltIn(id)
+            | Definition::Foreign(id)
+            | Definition::Overload(id)
+            | Definition::Resolved(id) => *id,
+            Definition::NotFound => unreachable!("Definition not found: {}", msg),
+        }
+    }
+    fn get_definition_info(&self, node_id: NodeId, msg: &str) -> (NodeId, bool) {
+        let definition = self
+            .get(&node_id)
+            .unwrap_or_else(|| panic!("Definition not found: {}", msg));
+        match definition {
+            Definition::User(id)
+            | Definition::BuiltIn(id)
+            | Definition::Foreign(id)
+            | Definition::Overload(id) => (*id, false),
+            Definition::Resolved(id) => (*id, true),
             Definition::NotFound => unreachable!("Definition not found: {}", msg),
         }
     }
@@ -595,6 +642,9 @@ impl<'a> fmt::Display for Analyzer<'a> {
                 value.len(),
                 value,
             )?;
+        }
+        for (i, set) in &self.overload_sets {
+            writeln!(f, "Set [{}]: {:?}", i, set)?;
         }
         Ok(())
     }

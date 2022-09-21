@@ -69,11 +69,12 @@ fn main() -> Result<()> {
     let t_analyze = start.elapsed();
     print!("{}", analyzer);
     let mut definitions = analyzer.definitions;
+    let overload_sets = analyzer.overload_sets;
     println!("--- END ANALYZE\n");
 
     println!("--- BEGIN TYPECHECK");
     let start = Instant::now();
-    let mut typechecker = typecheck::Typechecker::new(&tree, &mut definitions);
+    let mut typechecker = typecheck::Typechecker::new(&tree, &mut definitions, &overload_sets);
     typechecker.check().wrap_err("Type error")?;
     let t_typecheck = start.elapsed();
     typechecker.print();

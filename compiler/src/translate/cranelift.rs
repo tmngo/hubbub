@@ -191,7 +191,8 @@ impl<'a> Generator<'a> {
         Self::compile_function_body(state, data, &mut c, node.rhs);
 
         c.b.finalize();
-        let name = data.mangle_function_declaration(node_id, false);
+        let is_overloaded = data.definitions.contains_key(&node_id);
+        let name = data.mangle_function_declaration(node_id, is_overloaded);
         println!("{} :: {}", name, c.b.func.display());
         let fn_id = state
             .module
@@ -498,17 +499,16 @@ impl State {
             Tag::Call => {
                 let mut sig = self.module.make_signature();
 
-                let function_id = data
+                let (function_id, is_resolved_overload) = data
                     .definitions
-                    .get_definition_id(node.lhs, "failed to get function decl");
+                    .get_definition_info(node.lhs, "failed to get function decl");
 
-                println!("name:         {}", data.tree.name(node.lhs));
-                println!(
-                    "mangled call: {}",
-                    data.mangle_function_declaration(function_id, false)
-                );
+                // println!(
+                //     "mangled call: {}",
+                //     data.mangle_function_declaration(function_id, is_resolved_overload)
+                // );
 
-                let name = data.mangle_function_declaration(function_id, false);
+                let name = data.mangle_function_declaration(function_id, is_resolved_overload);
 
                 // Arguments
                 let arguments = data.node(node.rhs);

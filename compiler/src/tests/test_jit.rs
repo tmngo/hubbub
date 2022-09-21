@@ -44,6 +44,7 @@ pub fn test(
     let mut analyzer = Analyzer::new(&tree);
     analyzer.resolve().expect("Name resolution error");
     let mut definitions = analyzer.definitions;
+    let overload_sets = analyzer.overload_sets;
 
     if expected_definitions != 0 {
         assert_eq!(
@@ -55,7 +56,7 @@ pub fn test(
         );
     }
 
-    let mut typechecker = Typechecker::new(&tree, &mut definitions);
+    let mut typechecker = Typechecker::new(&tree, &mut definitions, &overload_sets);
     typechecker.check().expect("Type error");
     let (types, node_types, type_parameters) = typechecker.results();
     let input = Input::new(&tree, &definitions, &types, &node_types, type_parameters);
@@ -149,6 +150,10 @@ fn if_else() {
 #[test]
 fn multiple() {
     test("multiple", Test::AotAndJit, "", 0, 10);
+}
+#[test]
+fn overload() {
+    test("overload", Test::AotAndJit, "", 0, 3);
 }
 #[test]
 fn pointer() {
