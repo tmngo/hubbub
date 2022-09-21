@@ -11,4 +11,7 @@ cargo run <filename> -r
 # Run all tests
 cargo test
 cargo test -- --nocapture
+
+# "cargo run" uses target/debug/modules/
+# "cargo test" uses target/debug/deps/modules/
 ```

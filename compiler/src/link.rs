@@ -24,11 +24,18 @@ pub fn link(object_filename: &str, output_filename: &str, base_dir: &str) {
 
     let mut command = tool.to_command();
 
+    let lib_path = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join(base_dir)
+        .join("hubbub_runtime.lib");
+
     if tool.is_like_msvc() {
         command.args([
             &format!("-Fe{}", output_filename),
             object_filename,
-            &format!("{}target/debug/hubbub_runtime.lib", base_dir),
+            lib_path.to_str().unwrap(),
             "advapi32.lib",
             "bcrypt.lib",
             "kernel32.lib",
@@ -40,7 +47,7 @@ pub fn link(object_filename: &str, output_filename: &str, base_dir: &str) {
         command.args([
             &format!("-o{}", output_filename),
             object_filename,
-            &format!("{}target/debug/hubbub_runtime.lib", base_dir),
+            lib_path.to_str().unwrap(),
             "-ladvapi32",
             "-lbcrypt",
             "-lkernel32",
