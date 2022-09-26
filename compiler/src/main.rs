@@ -1,7 +1,7 @@
 #![feature(map_try_insert)]
 #![feature(option_result_contains)]
 
-use color_eyre::eyre::{eyre, Result, WrapErr};
+use crate::workspace::Workspace;
 use std::{collections::HashSet, path::Path, time::Instant};
 
 pub mod analyze;
@@ -16,26 +16,28 @@ mod tests;
 mod tokenize;
 mod typecheck;
 mod utils;
+mod workspace;
 
-fn main() -> Result<()> {
+fn main() {
     color_eyre::config::HookBuilder::new()
         .display_env_section(false)
-        // .theme(color_eyre::config::Theme::new())
-        // .display_location_section(false)
-        // .capture_span_trace_by_default(true)
-        .install()?;
+        .install()
+        .ok();
     let args: Vec<String> = std::env::args().collect();
     let flags: HashSet<&String> = HashSet::from_iter(args.iter().skip(2));
     if args.len() == 1 {
         println!("USAGE: hubbub.exe file");
-        return Err(eyre!("USAGE: hubbub.exe file"));
+        return;
     }
     let filename = &args[1];
     let src_filename = format!("{}.hb", filename);
-    dbg!(&src_filename);
     let obj_filename = format!("{}.obj", filename);
     let exe_filename = format!("{}.exe", filename);
-    let source = std::fs::read_to_string(src_filename)?;
+    let source = std::fs::read_to_string(&src_filename).unwrap();
+
+    let mut workspace = Workspace::new();
+
+    workspace.files.add(src_filename, source.clone());
 
     println!("--- BEGIN TOKENIZE");
     let start = Instant::now();
@@ -46,20 +48,24 @@ fn main() -> Result<()> {
     println!("--- END TOKENIZE\n");
 
     if args.len() == 3 && args[2] == "-t" {
-        return Ok(());
+        return;
     }
 
     println!("--- BEGIN PARSE");
     let start = Instant::now();
-    let mut parser = parse::Parser::new(&source, tokens);
-    parser.parse().wrap_err("Parsing error")?;
-    let tree = parser.tree();
+    let mut parser = parse::Parser::new(&mut workspace, &source, tokens);
+    parser.parse();
     let t_parse = start.elapsed();
+    let tree = parser.tree();
     println!("{}", tree);
+    if workspace.has_errors() {
+        workspace.print_errors();
+        return;
+    }
     println!("--- END PARSE\n");
 
     if args.len() == 3 && args[2] == "-p" {
-        return Ok(());
+        return;
     }
 
     println!("--- BEGIN ANALYZE");
@@ -123,6 +129,4 @@ fn main() -> Result<()> {
     println!("Generate {:>9.1?} ms", t_generate.as_secs_f64() * 1000.0);
     let t_total = t_tokenize + t_parse + t_analyze + t_typecheck + t_generate;
     println!("Total    {:>9.1?} ms", t_total.as_secs_f64() * 1000.0);
-
-    Ok(())
 }

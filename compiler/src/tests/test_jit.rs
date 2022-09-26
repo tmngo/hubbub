@@ -6,6 +6,7 @@ use crate::{
     tokenize::Tokenizer,
     translate::{cranelift::Generator, input::Input, llvm},
     typecheck::Typechecker,
+    workspace::Workspace,
 };
 use std::{path::Path, process::Command};
 
@@ -33,8 +34,11 @@ pub fn test(
 
     let mut tokenizer = Tokenizer::new(&source);
     let tokens = tokenizer.tokenize();
-    let mut parser = Parser::new(&source, tokens);
-    parser.parse().expect("Parse error");
+
+    let mut workspace = Workspace::new();
+
+    let mut parser = Parser::new(&mut workspace, &source, tokens);
+    parser.parse();
     let tree = parser.tree();
 
     if !expected_tree.is_empty() {

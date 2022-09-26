@@ -1,5 +1,5 @@
 use phf::phf_map;
-use std::{iter::Peekable, str::CharIndices};
+use std::{iter::Peekable, ops::Range, str::CharIndices};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Tag {
@@ -140,6 +140,10 @@ impl Token {
             return "EOF";
         }
         &source[self.start as usize..self.end as usize]
+    }
+
+    pub fn range(&self) -> Range<usize> {
+        self.start as usize..self.end as usize
     }
 }
 

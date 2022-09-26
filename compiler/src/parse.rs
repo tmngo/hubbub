@@ -1,8 +1,9 @@
 use crate::{
     tokenize::{Tag as TokenTag, Token, Tokenizer},
     utils::assert_size,
+    workspace::{Result, Workspace},
 };
-use color_eyre::eyre::{eyre, Result, WrapErr};
+use codespan_reporting::diagnostic::{Diagnostic, Label};
 use std::{
     fmt::{self, Debug},
     ops::Range,
@@ -273,8 +274,9 @@ impl Operator {
     }
 }
 
-pub struct Parser {
+pub struct Parser<'w> {
     /// Current token index.
+    workspace: &'w mut Workspace,
     index: usize,
     /// Stores node indices temporarily.
     stack: Vec<u32>,
@@ -313,7 +315,7 @@ fn token_to_operator(tag: TokenTag) -> Operator {
 macro_rules! parse_while {
     ($self:expr, $cond:expr, $body:block) => {{
         let stack_top = $self.stack.len();
-        while $self.index < $self.tree.tokens.len() - 1 && !$self.token_is(TokenTag::Eof) && $cond {
+        while !$self.is_at_end() && $cond {
             let node: NodeId = $body;
             $self.stack.push(node);
         }
@@ -321,9 +323,10 @@ macro_rules! parse_while {
     }};
 }
 
-impl Parser {
-    pub fn new(source: &str, tokens: Vec<Token>) -> Self {
+impl<'w> Parser<'w> {
+    pub fn new(workspace: &'w mut Workspace, source: &str, tokens: Vec<Token>) -> Self {
         Self {
+            workspace,
             stack: Vec::new(),
             index: 0,
             tree: Tree {
@@ -341,9 +344,8 @@ impl Parser {
         }
     }
 
-    pub fn parse(&mut self) -> Result<()> {
-        self.parse_modules()?;
-        Ok(())
+    pub fn parse(&mut self) {
+        self.parse_modules().ok();
     }
 
     pub fn tree(self) -> Tree {
@@ -355,9 +357,7 @@ impl Parser {
 
     /// program = module*
     fn parse_modules(&mut self) -> Result<Range<NodeId>> {
-        let range = parse_while!(self, self.index < self.tree.tokens.len() - 1, {
-            self.parse_module()?
-        });
+        let range = parse_while!(self, true, { self.parse_module()? });
         self.tree.nodes[0] = Node {
             tag: Tag::Root,
             token: 0,
@@ -371,9 +371,7 @@ impl Parser {
     fn parse_module(&mut self) -> Result<NodeId> {
         let first_module_token = self.index as TokenId;
         self.match_token(TokenTag::Newline);
-        let range = parse_while!(self, self.token_isnt(TokenTag::Eof), {
-            self.parse_root_declaration()?
-        });
+        let range = parse_while!(self, true, { self.parse_root_declaration()? });
         self.expect_token(TokenTag::Eof)?;
         self.add_node(Tag::Module, first_module_token, range.start, range.end)
     }
@@ -384,27 +382,19 @@ impl Parser {
         self.assert_tokens(&[TokenTag::Identifier, TokenTag::Import], 0)?;
         // self.assert_tokens(&[TokenTag::Colon, TokenTag::ColonColon], 1);
         // Look at the token after the '::' or ':'.
-        if self.current_token_tag() == TokenTag::Import {
+        if self.current_tag() == TokenTag::Import {
             return self.parse_module_import();
         }
-        match self.next_token_tag(2) {
-            TokenTag::BraceL => self
-                .parse_decl_function()
-                .wrap_err("Error parsing function declaration"),
+        match self.next_tag(2) {
+            TokenTag::BraceL => self.parse_decl_function(),
             TokenTag::ParenL => {
                 // identifier :: ()
-                if self.next_token_tag(3) == TokenTag::ParenR {
-                    return self
-                        .parse_decl_function()
-                        .wrap_err("Error parsing function declaration");
+                if self.next_tag(3) == TokenTag::ParenR {
+                    return self.parse_decl_function();
                 }
                 // identifier :: (parameter: ...
-                if self.next_token_tag(3) == TokenTag::Identifier
-                    && self.next_token_tag(4) == TokenTag::Colon
-                {
-                    return self
-                        .parse_decl_function()
-                        .wrap_err("Error parsing function declaration");
+                if self.next_tag(3) == TokenTag::Identifier && self.next_tag(4) == TokenTag::Colon {
+                    return self.parse_decl_function();
                 }
                 // identifier :: ( ...
                 self.parse_decl_variable()
@@ -412,9 +402,7 @@ impl Parser {
             // TokenTag::Function => return self.parse_decl_function(),
             // identifier :: struct ...
             TokenTag::Import => self.parse_module_import(),
-            TokenTag::Struct => self
-                .parse_decl_struct()
-                .wrap_err("Error parsing struct definition"),
+            TokenTag::Struct => self.parse_decl_struct(),
             // identifier :: ...
             _ => self.parse_decl_variable(),
         }
@@ -422,7 +410,7 @@ impl Parser {
 
     /// module-import = identifier '::' 'module' string-literal
     fn parse_module_import(&mut self) -> Result<NodeId> {
-        let (lhs, alias) = if self.current_token_tag() == TokenTag::Identifier {
+        let (lhs, alias) = if self.current_tag() == TokenTag::Identifier {
             let alias_token = self.expect_token(TokenTag::Identifier)?;
             self.expect_token(TokenTag::ColonColon)?;
             let lhs = self.add_leaf(Tag::Identifier, alias_token)?;
@@ -456,16 +444,19 @@ impl Parser {
                     alias,
                     first_token_id: self.tree.tokens.len() as TokenId,
                 });
-                let source = std::fs::read_to_string(path).unwrap();
+                let source = std::fs::read_to_string(&path).unwrap();
                 let mut tokenizer = Tokenizer::new(&source);
                 tokenizer.append_tokens(&mut self.tree.tokens);
-                self.tree.sources.push(source);
+                self.tree.sources.push(source.clone());
+                self.workspace.files.add(
+                    path.file_name().unwrap().to_owned().into_string().unwrap(),
+                    source,
+                );
             } else {
-                return Err(eyre!(
+                return Err(Diagnostic::error().with_message(format!(
                     "Failed to find module \"{}\" at path {:?}",
-                    module_name,
-                    path
-                ));
+                    module_name, path
+                )));
             }
         }
         self.match_token(TokenTag::Newline);
@@ -476,23 +467,20 @@ impl Parser {
     fn parse_decl_function(&mut self) -> Result<NodeId> {
         self.expect_token(TokenTag::Identifier)?; // identifier
         let token_index = self.expect_token(TokenTag::ColonColon)?; // '::'
-        let prototype = self
-            .parse_parametric_prototype()
-            .wrap_err("Error parsing function prototype")?;
-        let body = if self.current_token_tag() == TokenTag::End {
+        let prototype = self.parse_parametric_prototype()?;
+        let body = if self.current_tag() == TokenTag::End {
             self.expect_token_and_newline(TokenTag::End)?; // 'end'
             0
         } else {
             self.expect_tokens(&[TokenTag::Newline, TokenTag::Semicolon])?;
-            self.parse_stmt_body(0)
-                .wrap_err("Error parsing function body")?
+            self.parse_stmt_body(0)?
         };
         self.add_node(Tag::FunctionDecl, token_index, prototype, body)
     }
 
     fn parse_parametric_prototype(&mut self) -> Result<NodeId> {
         let token = self.index as TokenId;
-        if self.current_token_tag() == TokenTag::BraceL {
+        if self.current_tag() == TokenTag::BraceL {
             let type_parameters = self.parse_type_parameters()?;
             let prototype = self.parse_prototype()?;
             self.add_node(Tag::ParametricPrototype, token, type_parameters, prototype)
@@ -555,9 +543,7 @@ impl Parser {
 
     /// identifier-list = identifier (',' identifier)* ','?
     fn parse_identifier_list(&mut self) -> Result<NodeId> {
-        if self.next_token_tag(1) == TokenTag::Comma
-            && self.next_token_tag(2) == TokenTag::Identifier
-        {
+        if self.next_tag(1) == TokenTag::Comma && self.next_tag(2) == TokenTag::Identifier {
             let range = parse_while!(
                 self,
                 self.token_isnt(TokenTag::Colon) && !self.token_is(TokenTag::ColonEqual),
@@ -588,8 +574,7 @@ impl Parser {
             self.token_isnt(TokenTag::Newline) && self.token_isnt(TokenTag::Semicolon),
             {
                 let expr = self.parse_expr()?;
-                println!("{:?}", format!("{}", TreeNode(&self.tree, expr)));
-
+                // println!("{:?}", format!("{}", TreeNode(&self.tree, expr)));
                 self.match_token(TokenTag::Comma);
                 expr
             }
@@ -612,9 +597,7 @@ impl Parser {
     // lhs: type_expr
     // rhs: init_expr
     fn parse_decl_variable(&mut self) -> Result<NodeId> {
-        let identifier_list = self
-            .parse_identifier_list()
-            .wrap_err("Error parsing identifier list")?;
+        let identifier_list = self.parse_identifier_list()?;
         let token = self.shift_token(); // : or ::
         let mut type_expr = 0;
         let mut init_expr = 0;
@@ -634,6 +617,7 @@ impl Parser {
         let variable_decl =
             self.add_node(Tag::VariableDecl, identifier_list, type_expr, init_expr)?;
         let identifier_node = self.tree.node_mut(identifier_list);
+        // Link identifier nodes back to variable declaration.
         match identifier_node.tag {
             Tag::Identifier => identifier_node.lhs = variable_decl,
             Tag::Expressions => {
@@ -681,7 +665,7 @@ impl Parser {
     /// stmt    = block | break | continue | if | return | while
     ///         | var-decl | assign-stmt
     pub fn parse_stmt(&mut self) -> Result<NodeId> {
-        match self.current_token_tag() {
+        let result = match self.current_tag() {
             TokenTag::Block => self.parse_stmt_block(),
             TokenTag::Break => {
                 let token = self.shift_token();
@@ -708,14 +692,21 @@ impl Parser {
                 node
             }
             TokenTag::While => self.parse_stmt_while(),
-            _ => match self.next_token_tag(1) {
+            _ => match self.next_tag(1) {
                 TokenTag::Colon | TokenTag::ColonEqual | TokenTag::Comma => {
                     // self.shift_token();
                     self.parse_decl_variable()
-                        .wrap_err("Error parsing variable declaration")
                 }
                 _ => self.parse_stmt_assign(),
             },
+        };
+        match result {
+            Ok(node_id) => Ok(node_id),
+            Err(diagnostic) => {
+                self.workspace.diagnostics.push(diagnostic);
+                self.skip_to_next_statement();
+                Ok(1)
+            }
         }
     }
 
@@ -725,7 +716,13 @@ impl Parser {
         if lhs == 0 {
             return Ok(0);
         }
-        match self.current_token_tag() {
+        let lhs_node = self.tree.node(lhs);
+        if lhs_node.tag == Tag::IntegerLiteral {
+            return Err(Diagnostic::error()
+                .with_message("invalid left-hand side of assignment")
+                .with_labels(vec![self.tree.label(lhs_node.token)]));
+        }
+        match self.current_tag() {
             TokenTag::Equal => {
                 // expr '=' expr
                 let op_token = self.shift_token();
@@ -757,14 +754,16 @@ impl Parser {
 
     /// body = stmt* 'end'
     fn parse_stmt_body(&mut self, token: TokenId) -> Result<NodeId> {
-        let range = parse_while!(self, self.token_isnt(TokenTag::End), { self.parse_stmt()? });
+        let range = parse_while!(self, self.token_isnt(TokenTag::End), {
+            self.parse_stmt().unwrap()
+        });
         self.expect_token_and_newline(TokenTag::End)?; // 'end'
         self.add_node(Tag::Block, token, range.start, range.end)
     }
 
     /// stmt-if
     fn parse_stmt_if(&mut self) -> Result<NodeId> {
-        let if_token = self.current_token();
+        let if_token = self.current_id();
 
         let range = parse_while!(self, self.token_isnt(TokenTag::End), {
             // Parse condition
@@ -773,7 +772,7 @@ impl Parser {
             let condition = if else_if_token == if_token {
                 // 'if'
                 self.parse_expr()?
-            } else if self.current_token_tag() == TokenTag::If {
+            } else if self.current_tag() == TokenTag::If {
                 // 'else if'
                 else_if_token = self.shift_token();
                 self.parse_expr()?
@@ -831,7 +830,7 @@ impl Parser {
         }
         let mut invalid = -1;
         loop {
-            let token_tag = self.current_token_tag();
+            let token_tag = self.current_tag();
             let op = token_to_operator(token_tag);
 
             // Infix operators
@@ -878,7 +877,7 @@ impl Parser {
 
     /// expr-prefix = prefix-op* expr-operand
     fn parse_expr_prefix(&mut self) -> Result<NodeId> {
-        let tag = match self.current_token_tag() {
+        let tag = match self.current_tag() {
             TokenTag::Ampersand => Tag::Address,
             TokenTag::Bang => Tag::Not,
             TokenTag::Minus => Tag::Negation,
@@ -900,7 +899,7 @@ impl Parser {
     fn parse_expr_postfix(&mut self) -> Result<NodeId> {
         let mut lhs = self.parse_expr_base()?;
         loop {
-            match self.current_token_tag() {
+            match self.current_tag() {
                 TokenTag::At => {
                     let token = self.shift_token();
                     lhs = self.add_node(Tag::Dereference, token, lhs, 0)?;
@@ -962,10 +961,9 @@ impl Parser {
             }
             TokenTag::ParenL => {
                 //
-                if self.next_token_tag(1) == TokenTag::ParenR
-                    && self.next_token_tag(2) == TokenTag::Arrow
-                    || self.next_token_tag(1) == TokenTag::Identifier
-                        && self.next_token_tag(2) == TokenTag::Colon
+                if self.next_tag(1) == TokenTag::ParenR && self.next_tag(2) == TokenTag::Arrow
+                    || self.next_tag(1) == TokenTag::Identifier
+                        && self.next_tag(2) == TokenTag::Colon
                 {
                     return self.parse_prototype();
                 }
@@ -978,7 +976,12 @@ impl Parser {
             TokenTag::True => self.add_leaf(Tag::True, token),
             TokenTag::False => self.add_leaf(Tag::False, token),
             TokenTag::StringLiteral => self.add_leaf(Tag::StringLiteral, token),
-            _ => self.add_leaf(Tag::Identifier, token),
+            _ => Err(Diagnostic::error()
+                .with_message(format!(
+                    "expected expression, got {:?}.",
+                    self.tree.token_str(token)
+                ))
+                .with_labels(vec![self.tree.label(token)])),
         }
     }
 
@@ -1029,38 +1032,38 @@ impl Parser {
         start
     }
 
-    // fn add_indices3(&mut self, a: u32, b: u32, c: u32) -> u32 {
-    //     let start = self.indices.len() as u32;
-    //     self.indices.push(a);
-    //     self.indices.push(b);
-    //     self.indices.push(c);
-    //     start
-    // }
-
     /**************************************************************************/
     // Tokens
 
+    fn current_id(&self) -> TokenId {
+        self.index as TokenId
+    }
+
+    fn current_token(&self) -> &Token {
+        self.tree.token(self.index as TokenId)
+    }
+
     /// Gets the current token tag.
-    fn current_token_tag(&self) -> TokenTag {
+    fn current_tag(&self) -> TokenTag {
         self.tree.tokens[self.index].tag
     }
 
+    fn previous_tag(&self) -> Option<TokenTag> {
+        if self.index == 0 {
+            None
+        } else {
+            Some(self.tree.tokens[self.index - 1].tag)
+        }
+    }
+
     /// Gets the token tag at the given offset ahead.
-    fn next_token_tag(&self, offset: usize) -> TokenTag {
+    fn next_tag(&self, offset: usize) -> TokenTag {
         assert!(
             self.index + offset < self.tree.tokens.len(),
             "unexpected end-of-file while parsing"
         );
         self.tree.tokens[self.index + offset].tag
     }
-
-    fn current_token(&self) -> TokenId {
-        self.index as TokenId
-    }
-
-    // fn previous_token(&self) -> TokenId {
-    //     (self.index - 1) as TokenId
-    // }
 
     /// Consumes and returns the token at the current index.
     fn shift_token(&mut self) -> TokenId {
@@ -1078,25 +1081,74 @@ impl Parser {
         false
     }
 
+    fn skip_to_next_root_declaration(&mut self) {
+        while !self.is_at_end() {
+            if self.current_tag() == TokenTag::Newline
+                && self.next_tag(1) == TokenTag::Identifier
+                && self.next_tag(2) == TokenTag::ColonColon
+            {
+                let token_id = self.current_id() + 1;
+                let token = self.tree.tokens[token_id as usize];
+                let source = self.tree.token_source(token_id).0;
+                let byte_before_identifier = source.as_bytes()[token.start as usize - 1];
+                if byte_before_identifier == b'\n' {
+                    self.shift_token();
+                    return;
+                }
+            }
+            self.shift_token();
+        }
+    }
+
+    fn skip_to_next_statement(&mut self) {
+        while !self.is_at_end() {
+            match self.current_tag() {
+                TokenTag::Block
+                | TokenTag::Break
+                | TokenTag::Continue
+                | TokenTag::If
+                | TokenTag::Return
+                | TokenTag::While => return,
+                TokenTag::Identifier
+                    if self.previous_tag().expect("cannot get previous token tag")
+                        == TokenTag::Newline =>
+                {
+                    return;
+                }
+                _ => match self.next_tag(1) {
+                    TokenTag::Colon | TokenTag::ColonEqual | TokenTag::Comma | TokenTag::Equal => {
+                        dbg!(self.current_tag());
+                        return;
+                    }
+                    _ => self.shift_token(),
+                },
+            };
+        }
+    }
+
+    fn is_at_end(&self) -> bool {
+        self.index >= self.tree.tokens.len() - 1 || self.token_is(TokenTag::Eof)
+    }
+
     fn assert_token(&mut self, tag: TokenTag) -> Result<()> {
         if self.token_is(tag) {
             return Ok(());
         }
-        Err(eyre!(
-            "Error: expected token {:?}, got {:?}. Token index: {:?}.",
-            tag,
-            self.current_token_tag(),
-            self.index
-        ))
+        let token_id = self.current_id();
+        let token = self.tree.token(token_id);
+        Err(Diagnostic::error().with_labels(vec![self
+            .tree
+            .label(token_id)
+            .with_message(format!("expected token {:?}, got {:?}.", tag, token.tag))]))
     }
 
     fn assert_token_order(&mut self, tags: &[TokenTag]) {
         for i in 0..tags.len() {
             assert!(
-                self.next_token_tag(i) == tags[i],
+                self.next_tag(i) == tags[i],
                 "Error: expected tokens {:?}, got {:?}. Token index: {:?}.",
                 tags,
-                self.next_token_tag(i),
+                self.next_tag(i),
                 self.index + i
             );
         }
@@ -1104,16 +1156,16 @@ impl Parser {
 
     fn assert_tokens(&mut self, tags: &[TokenTag], offset: usize) -> Result<()> {
         for tag in tags {
-            if self.next_token_tag(offset) == *tag {
+            if self.next_tag(offset) == *tag {
                 return Ok(());
             }
         }
-        Err(eyre!(
-            "Expected one of {:?}, got {:?}. Token index: {:?}.",
-            tags,
-            self.current_token_tag(),
-            self.index
-        ))
+        let token_id = self.current_id();
+        let token = self.current_token();
+        Err(Diagnostic::error().with_labels(vec![self
+            .tree
+            .label(token_id)
+            .with_message(format!("expected one of {:?}, got {:?}.", tags, token.tag))]))
     }
 
     fn expect_token(&mut self, tag: TokenTag) -> Result<TokenId> {
@@ -1216,9 +1268,16 @@ impl Tree {
         token.to_str(source)
     }
 
+    pub fn token_str(&self, token_id: TokenId) -> &str {
+        let token = self.tokens[token_id as usize];
+        let source = self.token_source(token_id).0;
+        token.to_str(source)
+    }
+
     pub fn name(&self, id: NodeId) -> &str {
         let node = self.node(id);
         let token_index = match node.tag {
+            Tag::Access => node.token as i32 + 1,
             Tag::Field => node.token as i32 - 1,
             Tag::FunctionDecl => node.token as i32 - 1,
             Tag::Module => node.token as i32 + 1,
@@ -1272,6 +1331,21 @@ impl Tree {
             &self.sources[source_index],
             last_module_token_index as TokenId,
         )
+    }
+
+    pub fn source_id(&self, token_id: TokenId) -> usize {
+        let mut source_id = 0;
+        for m in &self.modules {
+            if (token_id) < m.first_token_id {
+                break;
+            }
+            source_id += 1;
+        }
+        source_id
+    }
+
+    pub fn label(&self, token_id: TokenId) -> Label<usize> {
+        Label::primary(self.source_id(token_id), self.token(token_id).range())
     }
 
     /**************************************************************************/

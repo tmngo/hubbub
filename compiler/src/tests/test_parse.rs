@@ -1,4 +1,4 @@
-use crate::{analyze::Analyzer, parse::Parser, tokenize::Tokenizer};
+use crate::{analyze::Analyzer, parse::Parser, tokenize::Tokenizer, workspace::Workspace};
 
 pub enum Test {
     File,
@@ -10,11 +10,13 @@ pub fn test_parse(test: Test, source: &str, expected: &str) {
     let mut tokenizer = Tokenizer::new(source);
     let tokens = tokenizer.tokenize();
 
-    let mut parser = Parser::new(source, tokens);
+    let mut workspace = Workspace::new();
+
+    let mut parser = Parser::new(&mut workspace, source, tokens);
 
     match test {
         Test::File => {
-            parser.parse().ok();
+            parser.parse();
         }
         Test::Expr => {
             parser.parse_expr().ok();
@@ -35,8 +37,10 @@ pub fn test_analyze(source: &str, def_count: usize) {
     let mut tokenizer = Tokenizer::new(source);
     let tokens = tokenizer.tokenize();
 
-    let mut parser = Parser::new(source, tokens);
-    parser.parse().ok();
+    let mut workspace = Workspace::new();
+
+    let mut parser = Parser::new(&mut workspace, source, tokens);
+    parser.parse();
     let tree = parser.tree();
     println!("{}", tree);
 
