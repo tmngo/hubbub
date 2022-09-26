@@ -2,15 +2,17 @@ use crate::{
     parse::{Node, NodeId, Tag, Tree},
     typecheck::TypeIndex,
     utils::assert_size,
+    workspace::{Result, Workspace},
 };
-use color_eyre::eyre::{eyre, Result, WrapErr};
-use std::{collections::HashMap, fmt};
+use codespan_reporting::diagnostic::Diagnostic;
+use std::{collections::HashMap, fmt, hash::Hash};
 
 /**
  * This associates identifiers
  * Names are stored in a stack of maps.
  */
 pub struct Analyzer<'a> {
+    workspace: &'a mut Workspace,
     tree: &'a Tree,
     pub definitions: HashMap<NodeId, Definition>,
     pub overload_sets: HashMap<NodeId, Vec<NodeId>>,
@@ -75,23 +77,6 @@ impl<'a> Scope<'a> {
     pub fn parent(&self) -> usize {
         self.parent
     }
-
-    // pub fn try_insert(
-    //     &mut self,
-    //     name: &'a str,
-    //     id: u32,
-    // ) -> Result<&mut u32, OccupiedError<'a, &str, u32>> {
-    //     self.symbols.try_insert(name, id)
-    // }
-
-    // pub fn define(sym: Symbol) {}
-    // pub fn find() -> Symbol {
-    //     Symbol {
-    //         node: 0,
-    //         state: State::Unresolved,
-    //         kind: Kind::Global,
-    //     }
-    // }
 }
 
 pub trait Resolve {
@@ -99,7 +84,7 @@ pub trait Resolve {
 }
 
 impl<'a> Analyzer<'a> {
-    pub fn new(tree: &'a Tree) -> Self {
+    pub fn new(workspace: &'a mut Workspace, tree: &'a Tree) -> Self {
         let builtins = Scope::from(
             [
                 ("Bool", TypeIndex::Boolean as u32),
@@ -127,6 +112,7 @@ impl<'a> Analyzer<'a> {
             0,
         );
         Self {
+            workspace,
             tree,
             definitions: HashMap::new(),
             overload_sets: HashMap::new(),
@@ -151,8 +137,7 @@ impl<'a> Analyzer<'a> {
             // }
             self.enter_scope();
             module_scopes.push(self.current);
-            self.collect_module_decls(module)
-                .wrap_err("Failed to collect module declarations")?;
+            self.collect_module_decls(module)?;
             self.exit_scope();
         }
         // Copy symbols from unnamed imports
@@ -160,7 +145,7 @@ impl<'a> Analyzer<'a> {
             self.current = i;
             for &import_scope_index in &scope.unnamed_imports.clone() {
                 for (name, id) in self.scopes[import_scope_index].symbols.clone().iter() {
-                    Self::define_symbol(&mut self.scopes[i], name, *id)?;
+                    Self::define_symbol(self.tree, &mut self.scopes[i], name, *id)?;
                 }
                 for (name, ids) in self.scopes[import_scope_index].fn_symbols.clone().iter() {
                     Self::define_function(&mut self.scopes[i], name, ids)?;
@@ -172,8 +157,7 @@ impl<'a> Analyzer<'a> {
             let ni = self.tree.node_index(i);
             let module = self.tree.node(ni);
             self.current = module_scopes[m];
-            self.resolve_range(module)
-                .wrap_err("Failed to resolve module definitions")?;
+            self.resolve_range(module)?;
         }
         Ok(())
     }
@@ -186,6 +170,8 @@ impl<'a> Analyzer<'a> {
                 Tag::FunctionDecl => {
                     let name = self.tree.name(node_id);
                     let current_scope = &mut self.scopes[self.current];
+                    // dbg!(self.current);
+                    // dbg!(name);
                     Self::define_function(current_scope, name, &[node_id])?;
                 }
                 Tag::Import => {
@@ -199,7 +185,7 @@ impl<'a> Analyzer<'a> {
                         // dbg!(module_alias);
                         current_scope.named_imports.push(module_scope_index);
                         // Map module_alias to Import node.
-                        Self::define_symbol(current_scope, module_alias, node_id)?;
+                        Self::define_symbol(self.tree, current_scope, module_alias, node_id)?;
                     } else {
                         // dbg!(module_scope_index);
                         // for (name, id) in self.scopes[module_scope_index].symbols.clone().iter()
@@ -212,13 +198,13 @@ impl<'a> Analyzer<'a> {
                 Tag::Struct => {
                     let name = self.tree.name(node_id);
                     let current_scope = &mut self.scopes[self.current];
-                    Self::define_symbol(current_scope, name, node_id)?;
+                    Self::define_symbol(self.tree, current_scope, name, node_id)?;
                     let mut scope = Scope::new(0);
                     // Collect field names
                     for i in node.lhs..node.rhs {
                         let field_id = self.tree.node_index(i);
                         let field_name = self.tree.name(field_id);
-                        Self::define_symbol(&mut scope, field_name, field_id)?;
+                        Self::define_symbol(self.tree, &mut scope, field_name, field_id)?;
                     }
                     self.struct_scopes.insert(node_id, scope);
                 }
@@ -246,7 +232,10 @@ impl<'a> Analyzer<'a> {
         }
         for i in node.lhs..node.rhs {
             let ni = self.tree.node_index(i);
-            self.resolve_node(ni)?;
+            let result = self.resolve_node(ni);
+            if let Err(diagnostic) = result {
+                self.workspace.diagnostics.push(diagnostic);
+            }
         }
         Ok(())
     }
@@ -277,7 +266,6 @@ impl<'a> Analyzer<'a> {
                         self.tree.node_lexeme(container_id)
                     ),
                 );
-
                 // Check if the container we're accessing is a module.
                 match container.tag {
                     Tag::Access | Tag::Identifier => {
@@ -291,7 +279,23 @@ impl<'a> Analyzer<'a> {
                             // Check if the name is defined in the current scope.
                             let definition =
                                 self.lookup_in_scope(module_scope_index, node.rhs, name);
-
+                            if let Definition::NotFound = definition {
+                                let module_name = if node.lhs == 0 {
+                                    self.tree.name(node.lhs)
+                                } else {
+                                    self.tree
+                                        .node_lexeme_offset(container_def, 1)
+                                        .trim_matches('"')
+                                };
+                                let name = self.tree.name(node.rhs);
+                                let token_id = self.tree.node(node.rhs).token;
+                                return Err(Diagnostic::error()
+                                    .with_message(format!(
+                                        "cannot find \"{}\" in module \"{}\".",
+                                        name, module_name
+                                    ))
+                                    .with_labels(vec![self.tree.label(token_id)]));
+                            }
                             self.set_node_definition(id, definition.clone())?;
                             self.set_node_definition(node.rhs, definition)?;
                             return Ok(());
@@ -307,7 +311,6 @@ impl<'a> Analyzer<'a> {
                 // Resolve type
                 if struct_decl_id != 0 {
                     let field_name = self.tree.name(node.rhs);
-
                     let field_id = match self
                         .struct_scopes
                         .get(&struct_decl_id)
@@ -316,11 +319,14 @@ impl<'a> Analyzer<'a> {
                     {
                         Some(value) => value,
                         _ => {
-                            return Err(eyre!(
-                                "struct \"{}\" does not have member \"{}\".",
-                                self.tree.name(struct_decl_id),
-                                field_name
-                            ));
+                            let token_id = self.tree.node(node.rhs).token;
+                            return Err(Diagnostic::error()
+                                .with_message(format!(
+                                    "no field \"{}\" on type \"{}\".",
+                                    field_name,
+                                    self.tree.name(struct_decl_id)
+                                ))
+                                .with_labels(vec![self.tree.label(token_id)]));
                         }
                     };
 
@@ -363,7 +369,7 @@ impl<'a> Analyzer<'a> {
             }
             Tag::Identifier => {
                 let definition = self.lookup(id);
-                self.set_node_definition(id, definition);
+                self.set_node_definition(id, definition)?;
             }
             Tag::Import => {}
             Tag::Parameters => {
@@ -371,21 +377,26 @@ impl<'a> Analyzer<'a> {
                     let field_id = self.tree.node_index(i);
                     let field = self.tree.node(field_id);
                     let name = self.tree.node_lexeme(field.lhs);
-                    Self::define_symbol(&mut self.scopes[self.current], name, field_id)?;
+                    Self::define_symbol(self.tree, &mut self.scopes[self.current], name, field_id)?;
                     // Resolve type_expr
                     self.resolve_node(field_id)?;
                 }
             }
             Tag::Type => {
                 let definition = self.lookup(id);
-                self.set_node_definition(id, definition);
+                self.set_node_definition(id, definition)?;
                 self.resolve_range(node)?;
             }
             Tag::TypeParameters => {
                 for i in node.lhs..node.rhs {
                     let type_parameter_id = self.tree.node_index(i);
                     let name = self.tree.node_lexeme(type_parameter_id);
-                    Self::define_symbol(&mut self.scopes[self.current], name, type_parameter_id)?;
+                    Self::define_symbol(
+                        self.tree,
+                        &mut self.scopes[self.current],
+                        name,
+                        type_parameter_id,
+                    )?;
                 }
             }
             Tag::VariableDecl => {
@@ -396,13 +407,18 @@ impl<'a> Analyzer<'a> {
                         for i in lhs.lhs..lhs.rhs {
                             let ni = self.tree.node_index(i);
                             let name = self.tree.name(ni);
-                            Self::define_symbol(&mut self.scopes[self.current], name, ni)?;
+                            Self::define_symbol(
+                                self.tree,
+                                &mut self.scopes[self.current],
+                                name,
+                                ni,
+                            )?;
                         }
                     }
                     Tag::Identifier => {
                         let ni = node.token;
                         let name = self.tree.name(ni);
-                        Self::define_symbol(&mut self.scopes[self.current], name, ni)?;
+                        Self::define_symbol(self.tree, &mut self.scopes[self.current], name, ni)?;
                     }
                     _ => {}
                 }
@@ -417,7 +433,7 @@ impl<'a> Analyzer<'a> {
         Ok(())
     }
 
-    fn set_node_definition(&mut self, node_id: NodeId, definition: Definition) {
+    fn set_node_definition(&mut self, node_id: NodeId, definition: Definition) -> Result<()> {
         match definition {
             Definition::User(_)
             | Definition::Overload(_)
@@ -428,10 +444,13 @@ impl<'a> Analyzer<'a> {
             Definition::Foreign(_) => {}
             Definition::NotFound => {
                 let name = self.tree.name(node_id);
-                println!("{}", &self);
-                panic!("cannot find `{}` in this scope", name);
+                let token_id = self.tree.node(node_id).token;
+                return Err(Diagnostic::error()
+                    .with_message(format!("cannot find \"{}\" in this scope.", name))
+                    .with_labels(vec![self.tree.label(token_id)]));
             }
         }
+        Ok(())
     }
 
     /// Access: the lhs can be either another access or an identifier.
@@ -460,9 +479,17 @@ impl<'a> Analyzer<'a> {
         )
     }
 
-    fn define_symbol(scope: &mut Scope<'a>, name: &'a str, id: u32) -> Result<()> {
-        if scope.symbols.try_insert(name, id).is_err() {
-            return Err(eyre!(" - Name \"{}\" is already defined.", name));
+    fn define_symbol(tree: &Tree, scope: &mut Scope<'a>, name: &'a str, id: u32) -> Result<()> {
+        if let Err(err) = scope.symbols.try_insert(name, id) {
+            let node = tree.node(id);
+            let previous = tree.node(*err.entry.get());
+            return Err(Diagnostic::error()
+                .with_message(format!("The name \"{}\" is already defined.", name))
+                .with_labels(vec![
+                    tree.label(node.token),
+                    tree.label(previous.token)
+                        .with_message("previous definition"),
+                ]));
         }
         Ok(())
     }
@@ -557,16 +584,6 @@ impl<'a> Analyzer<'a> {
     fn exit_scope(&mut self) {
         self.current = self.scopes[self.current].parent();
     }
-
-    // fn scope_depth(&self) -> usize {
-    //     let mut depth = 0;
-    //     let mut index = self.current;
-    //     while index != 0 {
-    //         index = self.scopes[index].parent();
-    //         depth += 1;
-    //     }
-    //     depth
-    // }
 }
 
 pub trait Lookup {

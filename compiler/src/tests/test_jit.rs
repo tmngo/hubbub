@@ -45,7 +45,7 @@ pub fn test(
         assert_eq!(expected_tree, &format!("{}", tree));
     }
 
-    let mut analyzer = Analyzer::new(&tree);
+    let mut analyzer = Analyzer::new(&mut workspace, &tree);
     analyzer.resolve().expect("Name resolution error");
     let mut definitions = analyzer.definitions;
     let overload_sets = analyzer.overload_sets;
@@ -60,7 +60,7 @@ pub fn test(
         );
     }
 
-    let mut typechecker = Typechecker::new(&tree, &mut definitions, &overload_sets);
+    let mut typechecker = Typechecker::new(&mut workspace, &tree, &mut definitions, &overload_sets);
     typechecker.check().expect("Type error");
     let (types, node_types, type_parameters) = typechecker.results();
     let input = Input::new(&tree, &definitions, &types, &node_types, type_parameters);

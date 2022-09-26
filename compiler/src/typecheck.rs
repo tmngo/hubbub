@@ -1,11 +1,9 @@
 use crate::{
     analyze::Definition,
     parse::{Node, NodeId, Tag, Tree},
+    workspace::{Result, Workspace},
 };
-use color_eyre::{
-    eyre::{eyre, Result},
-    Section,
-};
+use codespan_reporting::diagnostic::Diagnostic;
 use smallvec::{smallvec, SmallVec};
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
@@ -69,6 +67,7 @@ pub enum TypeIndex {
 }
 
 pub struct Typechecker<'a> {
+    workspace: &'a mut Workspace,
     tree: &'a Tree,
     definitions: &'a mut HashMap<NodeId, Definition>,
     overload_sets: &'a HashMap<NodeId, Vec<NodeId>>,
@@ -83,6 +82,7 @@ pub struct Typechecker<'a> {
 
 impl<'a> Typechecker<'a> {
     pub fn new(
+        workspace: &'a mut Workspace,
         tree: &'a Tree,
         definitions: &'a mut HashMap<u32, Definition>,
         overload_sets: &'a HashMap<NodeId, Vec<NodeId>>,
@@ -104,6 +104,7 @@ impl<'a> Typechecker<'a> {
             // },
         ];
         Self {
+            workspace,
             tree,
             definitions,
             overload_sets,
@@ -138,18 +139,6 @@ impl<'a> Typechecker<'a> {
             crate::format_red!("Done inferring module declarations")
         );
         self.infer_range(root)?;
-        if !self.error_reports.is_empty() {
-            let err = eyre!(
-                "There were {} typechecking errors.",
-                self.error_reports.len()
-            );
-            let result = Err(err);
-            let mut type_errors = Vec::new();
-            type_errors.append(&mut self.error_reports);
-            return type_errors.into_iter().fold(result, |report, e| {
-                report.error(e).suggestion("Try doing ...")
-            });
-        }
         Ok(())
     }
 
@@ -176,11 +165,10 @@ impl<'a> Typechecker<'a> {
     ///
     fn infer_range(&mut self, node: &Node) -> Result<TypeId> {
         for i in node.lhs..node.rhs {
-            self.infer_node(self.tree.indices[i as usize])?;
-            // if let Err(report) = result {
-            //     self.error_reports
-            //         .push(TypeError(report.root_cause().to_string()));
-            // }
+            let result = self.infer_node(self.tree.indices[i as usize]);
+            if let Err(diagnostic) = result {
+                self.workspace.diagnostics.push(diagnostic);
+            }
         }
         Ok(0)
     }
@@ -230,7 +218,7 @@ impl<'a> Typechecker<'a> {
                 ) {
                     fields[*field_index as usize]
                 } else {
-                    return Err(eyre!("cannot access non-struct"));
+                    return Err(Diagnostic::error().with_message("cannot access non-struct"));
                 }
             }
             Tag::Address => {
@@ -249,16 +237,15 @@ impl<'a> Typechecker<'a> {
             | Tag::BitwiseOr
             | Tag::BitwiseShiftL
             | Tag::BitwiseShiftR
-            | Tag::BitwiseXor => self.infer_binary_node(node.lhs, node.rhs)?,
+            | Tag::BitwiseXor => self.infer_binary_node(node)?,
             Tag::Assign => {
                 let ltype = self.infer_node(node.lhs)?[0];
                 let rtype = self.infer_node(node.rhs)?[0];
                 if node.rhs != 0 && ltype != rtype {
-                    return Err(eyre!(
+                    return Err(Diagnostic::error().with_message(format!(
                         "mismatched types in assignment: expected {:?}, got {:?}",
-                        self.types[ltype],
-                        self.types[rtype]
-                    ));
+                        self.types[ltype], self.types[rtype]
+                    )));
                 }
                 0
             }
@@ -326,7 +313,9 @@ impl<'a> Typechecker<'a> {
                             .insert(fn_decl_id, Definition::Resolved(fn_decl_id));
                     }
                     if !match_found {
-                        return Err(eyre!("failed to find matching overload"));
+                        return Err(
+                            Diagnostic::error().with_message("failed to find matching overload")
+                        );
                     }
                 } else {
                     let fn_decl = self.tree.node(definition_id);
@@ -373,11 +362,11 @@ impl<'a> Typechecker<'a> {
                             assert_eq!(parameters.tag, Tag::Parameters);
 
                             if (parameters.rhs - parameters.lhs) as usize != argument_types.len() {
-                                return Err(eyre!(
+                                return Err(Diagnostic::error().with_message(format!(
                                     "invalid function call: expected {:?} arguments, got {:?}",
                                     parameters.rhs - parameters.lhs,
                                     argument_types.len()
-                                ));
+                                )));
                             }
 
                             for i in parameters.lhs..parameters.rhs {
@@ -385,10 +374,10 @@ impl<'a> Typechecker<'a> {
                                 let param_type = self.node_types[param_id as usize];
                                 let arg_type = argument_types[(i - parameters.lhs) as usize];
                                 if arg_type != param_type {
-                                    return Err(eyre!(
+                                    return Err(Diagnostic::error().with_message(format!(
                                         "mismatched types in function call: expected {:?} argument, got {:?}",
                                         self.types[param_type],
-                                        self.types[arg_type]
+                                        self.types[arg_type])
                                     ));
                                 }
                             }
@@ -423,11 +412,11 @@ impl<'a> Typechecker<'a> {
                 if let Type::Pointer { typ } = self.types[pointer_type] {
                     typ
                 } else {
-                    return Err(eyre!(
+                    return Err(Diagnostic::error().with_message(format!(
                         "[line {}] type \"{:?}\" cannot be dereferenced",
                         self.tree.node_token_line(node_id),
                         self.types[pointer_type]
-                    ));
+                    )));
                 }
             }
             Tag::Field => self.infer_node(self.tree.node_index(node.rhs))?[0],
@@ -441,7 +430,7 @@ impl<'a> Typechecker<'a> {
                 fn_type
             }
             Tag::Equality | Tag::Greater | Tag::Inequality | Tag::Less => {
-                self.infer_binary_node(node.lhs, node.rhs)?;
+                self.infer_binary_node(node)?;
                 TypeIndex::Boolean as TypeId
             }
             Tag::Identifier => {
@@ -507,11 +496,11 @@ impl<'a> Typechecker<'a> {
                 if let Type::Array { typ, .. } = self.types[array_type] {
                     typ
                 } else {
-                    return Err(eyre!(
+                    return Err(Diagnostic::error().with_message(format!(
                         "[line {}] type \"{:?}\" cannot be indexed",
                         self.tree.node_token_line(node_id),
                         self.types[array_type]
-                    ));
+                    )));
                 }
             }
             Tag::Type => {
@@ -523,7 +512,7 @@ impl<'a> Typechecker<'a> {
                         _ => 0,
                     }
                 } else {
-                    return Err(eyre!("Undefined type"));
+                    return Err(Diagnostic::error().with_message("Undefined type"));
                 };
                 println!("base type: {:?}", base_type);
                 match base_type {
@@ -532,10 +521,10 @@ impl<'a> Typechecker<'a> {
                         // Expect two type parameters.
                         assert_eq!(node.tag, Tag::Type);
                         if node.rhs - node.lhs != 2 {
-                            return Err(eyre!(
+                            return Err(Diagnostic::error().with_message(format!(
                                 "Expected 2 type parameters, got {}.",
                                 node.rhs - node.lhs
-                            ));
+                            )));
                         }
                         let ni = self.tree.node_index(node.lhs);
                         let value_type = self.infer_node(ni)?[0];
@@ -555,10 +544,10 @@ impl<'a> Typechecker<'a> {
                         println!("{}", crate::format_red!("Checking Pointer type"));
                         // Expect one type parameter
                         if node.rhs - node.lhs != 1 {
-                            return Err(eyre!(
+                            return Err(Diagnostic::error().with_message(format!(
                                 "Expected 1 type parameter, got {}.",
                                 node.rhs - node.lhs
-                            ));
+                            )));
                         }
                         let ni = self.tree.node_index(node.lhs);
                         let value_type = self.infer_node(ni)?[0];
@@ -569,7 +558,7 @@ impl<'a> Typechecker<'a> {
                         dbg!(ptr_type);
                         ptr_type
                     }
-                    _ => return Err(eyre!("Undefined type")),
+                    _ => return Err(Diagnostic::error().with_message("Undefined type")),
                 }
             }
             Tag::VariableDecl => {
@@ -636,15 +625,16 @@ impl<'a> Typechecker<'a> {
     }
 
     ///
-    fn infer_binary_node(&mut self, lhs: u32, rhs: u32) -> Result<TypeId> {
-        let ltype = self.infer_node(lhs)?[0];
-        let rtype = self.infer_node(rhs)?[0];
+    fn infer_binary_node(&mut self, node: &Node) -> Result<TypeId> {
+        let ltype = self.infer_node(node.lhs)?[0];
+        let rtype = self.infer_node(node.rhs)?[0];
         if ltype != rtype {
-            return Err(eyre!(
-                "mismatched types: lhs is {:?}, rhs is {:?}",
-                self.types[ltype],
-                self.types[rtype]
-            ));
+            return Err(Diagnostic::error()
+                .with_message(format!(
+                    "mismatched types: left is \"{:?}\", right is \"{:?}\"",
+                    self.types[ltype], self.types[rtype]
+                ))
+                .with_labels(vec![self.tree.label(node.token)]));
         }
         Ok(ltype)
     }
@@ -702,7 +692,7 @@ fn infer_type(annotation_type: TypeId, value_type: TypeId) -> Result<TypeId> {
         // Infer type based on rvalue.
         Ok(value_type)
     } else if annotation_type != value_type {
-        Err(eyre!("annotation type doesn't match"))
+        Err(Diagnostic::error().with_message("annotation type doesn't match"))
     } else {
         Ok(annotation_type)
     }

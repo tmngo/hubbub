@@ -1,4 +1,4 @@
-use crate::{analyze::Analyzer, parse::Parser, tokenize::Tokenizer, workspace::Workspace};
+use crate::{parse::Parser, tokenize::Tokenizer, workspace::Workspace};
 
 pub enum Test {
     File,
@@ -31,23 +31,6 @@ pub fn test_parse(test: Test, source: &str, expected: &str) {
     let result = format!("{}", tree);
     println!("{}", result);
     assert_eq!(&result, expected);
-}
-
-pub fn test_analyze(source: &str, def_count: usize) {
-    let mut tokenizer = Tokenizer::new(source);
-    let tokens = tokenizer.tokenize();
-
-    let mut workspace = Workspace::new();
-
-    let mut parser = Parser::new(&mut workspace, source, tokens);
-    parser.parse();
-    let tree = parser.tree();
-    println!("{}", tree);
-
-    let mut analyzer = Analyzer::new(&tree);
-    analyzer.resolve().ok();
-    assert_eq!(def_count, analyzer.definitions.len());
-    println!("{}", analyzer);
 }
 
 #[test]
@@ -377,31 +360,4 @@ end
   )
 )",
     )
-}
-
-#[test]
-fn analyze_simple() {
-    test_analyze(
-        "\
-    i: Int = 9
-    j: Int
-    // i: Int
-    f :: (x: Int, y: Float) -> Float
-        i: Float
-        block
-            z: Float = x + y
-            i = z
-        end
-        block
-            z: Float = i + 1
-            i = z
-        end
-        return i
-    end
-    g :: ()
-        f(1, 2)
-    end
-        ",
-        17,
-    );
 }

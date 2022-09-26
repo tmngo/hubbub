@@ -70,21 +70,30 @@ fn main() {
 
     println!("--- BEGIN ANALYZE");
     let start = Instant::now();
-    let mut analyzer = analyze::Analyzer::new(&tree);
-    analyzer.resolve().wrap_err("Name resolution error")?;
+    let mut analyzer = analyze::Analyzer::new(&mut workspace, &tree);
+    analyzer.resolve().ok();
     let t_analyze = start.elapsed();
     print!("{}", analyzer);
     let mut definitions = analyzer.definitions;
     let overload_sets = analyzer.overload_sets;
+    if workspace.has_errors() {
+        workspace.print_errors();
+        return;
+    }
     println!("--- END ANALYZE\n");
 
     println!("--- BEGIN TYPECHECK");
     let start = Instant::now();
-    let mut typechecker = typecheck::Typechecker::new(&tree, &mut definitions, &overload_sets);
-    typechecker.check().wrap_err("Type error")?;
+    let mut typechecker =
+        typecheck::Typechecker::new(&mut workspace, &tree, &mut definitions, &overload_sets);
+    typechecker.check().ok();
     let t_typecheck = start.elapsed();
     typechecker.print();
     let (types, node_types, type_parameters) = typechecker.results();
+    if workspace.has_errors() {
+        workspace.print_errors();
+        return;
+    }
     println!("--- END TYPECHECK\n");
 
     let input =
