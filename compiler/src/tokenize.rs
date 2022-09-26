@@ -368,6 +368,7 @@ impl<'a> Tokenizer<'a> {
                             self.start(Tag::Newline);
                         }
                     }
+                    '\0' => return self.token_fixed(Tag::Eof, 0),
                     _ => self.advance(),
                 },
                 Tag::StateIntegerLiteral10 => match c {
