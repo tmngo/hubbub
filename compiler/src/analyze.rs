@@ -290,13 +290,10 @@ impl<'a> Analyzer<'a> {
                             let name = self.tree.node_lexeme(node.rhs);
                             // Check if the name is defined in the current scope.
                             let definition =
-                                if let Some(&index) = self.scopes[module_scope_index].get(name) {
-                                    Definition::User(index)
-                                } else {
-                                    Definition::NotFound
-                                };
-                            self.set_node_definition(id, definition.clone());
-                            self.set_node_definition(node.rhs, definition);
+                                self.lookup_in_scope(module_scope_index, node.rhs, name);
+
+                            self.set_node_definition(id, definition.clone())?;
+                            self.set_node_definition(node.rhs, definition)?;
                             return Ok(());
                         }
                     }
@@ -520,13 +517,36 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    // fn lookup_current(&self, name: &str) -> u32 {
-    //     if self.scopes.len() == 0 {
-    //         return 0;
-    //     }
-    //     let top = self.scopes.len() - 1;
-    //     self.scopes[top].get(name)
-    // }
+    fn lookup_in_scope(&mut self, scope_index: usize, id: NodeId, name: &str) -> Definition {
+        if self.scopes.is_empty() {
+            return Definition::NotFound;
+        }
+        // Check if the name is defined in the current scope.
+        if let Some(&index) = self.scopes[scope_index].get(name) {
+            return Definition::User(index);
+        }
+        if let Some(ids) = self.scopes[scope_index].get_fn(name) {
+            let overload_set = ids.clone();
+            return match ids.len() {
+                0 => Definition::NotFound,
+                1 => Definition::User(overload_set[0]),
+                _ => {
+                    self.overload_sets.insert(id, overload_set);
+                    Definition::Overload(id)
+                }
+            };
+        }
+        // If the name isn't in the global scope, it's undefined.
+        if scope_index == 0 {
+            if let Some(&index) = self.builtins.get(name) {
+                return Definition::BuiltIn(index);
+            }
+            if let Some(&index) = self.foreign.get(name) {
+                return Definition::Foreign(index);
+            }
+        }
+        Definition::NotFound
+    }
 
     fn enter_scope(&mut self) {
         let parent = self.current;
@@ -587,7 +607,7 @@ impl<'a> fmt::Display for Analyzer<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         for (i, scope) in self.scopes.iter().enumerate() {
             writeln!(f, "Scope [{}]: parent: {}", i, scope.parent)?;
-            writeln!(f, "  {:?}", scope.symbols)?;
+            writeln!(f, "  {:?} {:?}", scope.symbols, scope.fn_symbols)?;
         }
         let mut references = HashMap::new();
         for (key, value) in &self.definitions {
