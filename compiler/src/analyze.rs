@@ -342,9 +342,6 @@ impl<'a> Analyzer<'a> {
                     self.definitions
                         .insert(node.rhs, Definition::User(field_index));
                 }
-                // else {
-                //     return Err(eyre!("failed to look up lhs"));
-                // }
             }
             Tag::Block | Tag::Module => {
                 self.enter_scope();

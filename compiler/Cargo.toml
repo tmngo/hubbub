@@ -8,7 +8,6 @@ edition = "2021"
 [dependencies]
 cc = "1.0"
 codespan-reporting = "0.11.1"
-color-eyre = { version = "0.6.2", features = ["track-caller"] }
 colored = "2.0.0"
 cranelift = "0.84.0"
 cranelift-jit = "0.84.0"

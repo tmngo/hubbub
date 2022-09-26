@@ -19,10 +19,6 @@ mod utils;
 mod workspace;
 
 fn main() {
-    color_eyre::config::HookBuilder::new()
-        .display_env_section(false)
-        .install()
-        .ok();
     let args: Vec<String> = std::env::args().collect();
     let flags: HashSet<&String> = HashSet::from_iter(args.iter().skip(2));
     if args.len() == 1 {
