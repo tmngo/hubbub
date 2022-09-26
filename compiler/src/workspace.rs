@@ -1,6 +1,6 @@
 use codespan_reporting::{
     diagnostic::Diagnostic,
-    files::{SimpleFile, SimpleFiles},
+    files::SimpleFiles,
     term::{
         emit,
         termcolor::{ColorChoice, StandardStream},
@@ -36,5 +36,11 @@ impl Workspace {
         for diagnostic in &self.diagnostics {
             emit(&mut writer.lock(), &config, &self.files, diagnostic).ok();
         }
+    }
+}
+
+impl Default for Workspace {
+    fn default() -> Self {
+        Self::new()
     }
 }
