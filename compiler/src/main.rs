@@ -6,21 +6,19 @@ use std::{collections::HashSet, path::Path, time::Instant};
 
 pub mod analyze;
 mod builtin;
-mod translate;
-// #[macro_use]
-// mod error;
 mod link;
 mod output;
 mod parse;
 mod tests;
 mod tokenize;
+mod translate;
 mod typecheck;
 mod utils;
 mod workspace;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let flags: HashSet<&String> = HashSet::from_iter(args.iter().skip(2));
+    let flags: HashSet<&str> = HashSet::from_iter(args.iter().skip(2).map(|s| s.as_str()));
     if args.len() == 1 {
         println!("USAGE: hubbub.exe file");
         return;
@@ -43,7 +41,7 @@ fn main() {
     tokenize::print(&source, &tokens);
     println!("--- END TOKENIZE\n");
 
-    if args.len() == 3 && args[2] == "-t" {
+    if args.len() == 3 && flags.contains("-t") {
         return;
     }
 
@@ -60,7 +58,7 @@ fn main() {
     }
     println!("--- END PARSE\n");
 
-    if args.len() == 3 && args[2] == "-p" {
+    if args.len() == 3 && flags.contains("-p") {
         return;
     }
 
@@ -97,8 +95,8 @@ fn main() {
 
     println!("--- BEGIN GENERATE");
     let start = Instant::now();
-    let use_jit = flags.contains(&"-j".to_string());
-    let use_llvm = !use_jit && flags.contains(&"-r".to_string());
+    let use_jit = flags.contains("-j");
+    let use_llvm = !use_jit && flags.contains("-r");
     if use_llvm {
         translate::llvm::compile(
             &input,
