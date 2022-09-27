@@ -681,7 +681,7 @@ impl<'ctx> Generator<'ctx> {
                     .into_pointer_value()
             }
             Tag::Subscript => {
-                let array_ptr = self.locate(state, node.lhs).base;
+                let array_ptr = self.compile_lvalue(state, node.lhs);
                 let index_value = self.compile_expr(state, node.rhs).into_int_value();
                 let zero = self.context.i64_type().const_int(0, false);
                 unsafe { builder.build_gep(array_ptr, &[zero, index_value], "gep") }
