@@ -184,7 +184,7 @@ impl<'a> Typechecker<'a> {
     ///
     fn infer_range(&mut self, node: &Node) -> Result<TypeId> {
         for i in node.lhs..node.rhs {
-            let result = self.infer_node(self.tree.indices[i as usize]);
+            let result = self.infer_node(self.tree.node_index(i));
             if let Err(diagnostic) = result {
                 self.workspace.diagnostics.push(diagnostic);
             }
@@ -215,11 +215,12 @@ impl<'a> Typechecker<'a> {
                 if let Some(&type_definition) = self.type_definitions.get(&ltype) {
                     let struct_decl = self.tree.node(type_definition);
                     assert_eq!(struct_decl.tag, Tag::Struct);
-                    for i in struct_decl.lhs..struct_decl.rhs {
+                    for i in self.tree.range(struct_decl) {
                         let field_id = self.tree.node_index(i);
                         if self.tree.name(field_id) == self.tree.name(node.rhs) {
                             self.definitions.insert(node_id, Definition::User(field_id));
                             let field = self.tree.node(field_id);
+                            assert_eq!(field.tag, Tag::Field);
                             let field_index = self.tree.node_index(field.rhs + 1);
                             self.definitions
                                 .insert(node.rhs, Definition::User(field_index));
