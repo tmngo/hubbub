@@ -34,7 +34,8 @@ impl Workspace {
             ..Default::default()
         };
         for diagnostic in &self.diagnostics {
-            emit(&mut writer.lock(), &config, &self.files, diagnostic).ok();
+            emit(&mut writer.lock(), &config, &self.files, diagnostic)
+                .expect("failed to emit diagnostics");
         }
     }
 }
