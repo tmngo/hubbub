@@ -3,7 +3,7 @@ use crate::{
     builtin,
     parse::{Node, NodeId, Tag},
     translate::input::{sizeof, Data, Input, Layout, Shape},
-    typecheck::{TypeId, TypeIndex},
+    typecheck::{BuiltInType, TypeId},
 };
 use cranelift::prelude::{
     codegen::{
@@ -524,7 +524,7 @@ impl State {
 
                 // Assume one return value.
                 let return_type = data.type_id(node_id);
-                if return_type != TypeIndex::Void as TypeId {
+                if return_type != BuiltInType::Void as TypeId {
                     sig.returns.push(AbiParam::new(ty));
                 }
 
@@ -534,7 +534,7 @@ impl State {
                     .unwrap();
                 let local_callee = self.module.declare_func_in_func(callee, c.b.func);
                 let call = c.b.ins().call(local_callee, &args);
-                if return_type != TypeIndex::Void as TypeId {
+                if return_type != BuiltInType::Void as TypeId {
                     Val::Scalar(c.b.inst_results(call)[0])
                 } else {
                     Val::Scalar(c.b.ins().iconst(ty, 0))

@@ -39,7 +39,7 @@ pub struct Data<'a> {
     pub definitions: &'a HashMap<u32, Definition>,
     pub types: &'a Vec<Typ>,
     pub node_types: &'a Vec<usize>,
-    pub type_parameters: HashMap<NodeId, HashSet<Vec<TypeId>>>,
+    pub type_parameters: &'a HashMap<NodeId, HashSet<Vec<TypeId>>>,
     pub layouts: Vec<Layout>,
 }
 
@@ -50,7 +50,7 @@ impl<'a> Data<'a> {
             definitions: input.definitions,
             types: input.types,
             node_types: input.node_types,
-            type_parameters: input.type_parameters,
+            type_parameters: &input.type_parameters,
             layouts,
         }
     }

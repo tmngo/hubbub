@@ -1,5 +1,5 @@
 use crate::{
-    analyze::{BuiltInType, Definition},
+    analyze::Definition,
     parse::{Node, NodeId, Tag, Tree},
     workspace::{Result, Workspace},
 };
@@ -63,37 +63,37 @@ pub type TypeId = usize;
 //     Poly(Vec<TypeId>),
 // }
 
-pub enum TypeIndex {
-    Void,     // 0
-    Boolean,  // 1
-    Integer,  // 2
-    Float,    // 3
-    String,   // 4
-    Type,     // 5
-    Array,    // 6
-    Function, // 7
-    Pointer,  // 8
-    Struct,   // 9
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum BuiltInType {
+    Void,    // 0
+    Boolean, // 1
+    Integer, // 2
+    Float,   // 3
+    String,  // 4
+    Array,   // 6
+    Pointer, // 8
 }
 
 type TypeMap<P = Vec<TypeId>> = HashMap<P, TypeId>;
+type TypeParameters = HashMap<NodeId, HashSet<Vec<TypeId>>>;
 
 pub struct Typechecker<'a> {
     workspace: &'a mut Workspace,
     tree: &'a Tree,
     definitions: &'a mut HashMap<NodeId, Definition>,
     overload_sets: &'a HashMap<NodeId, Vec<NodeId>>,
-    pub types: Vec<Type>,
-    type_definitions: HashMap<TypeId, NodeId>,
-    pub error_reports: Vec<TypeError>,
-    pub node_types: Vec<TypeId>,
+
     array_types: TypeMap<(TypeId, usize)>,
     pointer_types: TypeMap<TypeId>,
     polymorphic_types: HashMap<NodeId, TypeMap>,
-    type_parameters: HashMap<NodeId, HashSet<Vec<TypeId>>>,
+    type_definitions: HashMap<TypeId, NodeId>,
+    type_parameters: TypeParameters,
     current_parameters: Vec<TypeId>,
     // This will have to be updated for nested struct definitions.
     current_struct_id: NodeId,
+
+    pub types: Vec<Type>,
+    pub node_types: Vec<TypeId>,
 }
 
 impl<'a> Typechecker<'a> {
@@ -110,34 +110,25 @@ impl<'a> Typechecker<'a> {
             Type::Float,
             Type::String,
             Type::Type,
-            // Type::Pointer {
-            //     typ: TypeIndex::Integer as TypeId,
-            // },
-            // alloc
-            // Type::Function {
-            //     parameters: vec![TypeIndex::Integer as usize],
-            //     returns: vec![6],
-            // },
         ];
         Self {
             workspace,
             tree,
             definitions,
             overload_sets,
-            type_definitions: HashMap::new(),
-            types,
-            error_reports: vec![],
-            node_types: vec![0; tree.nodes.len()],
             array_types: HashMap::new(),
             pointer_types: HashMap::new(),
             polymorphic_types: HashMap::new(),
+            type_definitions: HashMap::new(),
             type_parameters: HashMap::new(),
             current_parameters: vec![],
             current_struct_id: 0,
+            types,
+            node_types: vec![0; tree.nodes.len()],
         }
     }
 
-    pub fn results(self) -> (Vec<Type>, Vec<usize>, HashMap<NodeId, HashSet<Vec<TypeId>>>) {
+    pub fn results(self) -> (Vec<Type>, Vec<TypeId>, TypeParameters) {
         (self.types, self.node_types, self.type_parameters)
     }
 
@@ -297,6 +288,7 @@ impl<'a> Typechecker<'a> {
                 };
 
                 if is_overload {
+                    // Search for matching function overload.
                     let overload_set = self.overload_sets.get(&definition_id).unwrap();
                     let mut match_found = false;
 
@@ -451,7 +443,7 @@ impl<'a> Typechecker<'a> {
             }
             Tag::Equality | Tag::Greater | Tag::Inequality | Tag::Less => {
                 self.infer_binary_node(node)?;
-                TypeIndex::Boolean as TypeId
+                BuiltInType::Boolean as TypeId
             }
             Tag::Identifier => {
                 // The type of an identifier is the type of its definition.
@@ -469,8 +461,8 @@ impl<'a> Typechecker<'a> {
                     0
                 }
             }
-            Tag::IntegerLiteral => TypeIndex::Integer as TypeId,
-            Tag::True | Tag::False => TypeIndex::Boolean as TypeId,
+            Tag::IntegerLiteral => BuiltInType::Integer as TypeId,
+            Tag::True | Tag::False => BuiltInType::Boolean as TypeId,
             Tag::ParametricPrototype => {
                 // Type parameters
                 let type_parameters = self.tree.node(node.lhs);

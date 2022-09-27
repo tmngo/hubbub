@@ -1,5 +1,6 @@
 use crate::{
     parse::{Node, NodeId, Tag, Tree},
+    typecheck::BuiltInType,
     utils::assert_size,
     workspace::{Result, Workspace},
 };
@@ -33,17 +34,6 @@ pub enum Definition {
     Overload(u32),
     Resolved(u32),
     NotFound,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum BuiltInType {
-    Void,    // 0
-    Boolean, // 1
-    Integer, // 2
-    Float,   // 3
-    String,  // 4
-    Array,   // 6
-    Pointer, // 8
 }
 
 // Assert that Tag size <= 1 byte
