@@ -480,11 +480,13 @@ impl<'a> Typechecker<'a> {
                 })
             }
             Tag::Struct => {
+                // Infer field types
                 let mut fields = Vec::new();
-                for i in node.lhs..node.rhs {
+                for i in self.tree.range(node) {
                     self.infer_node(self.tree.node_index(i))?;
                 }
-                for i in node.lhs..node.rhs {
+                // Set struct type based on field types
+                for i in self.tree.range(node) {
                     let ni = self.tree.node_index(i) as usize;
                     fields.push(self.node_types[ni]);
                 }

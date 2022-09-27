@@ -201,7 +201,7 @@ impl<'a> Analyzer<'a> {
                     Self::define_symbol(self.tree, current_scope, name, node_id)?;
                     let mut scope = Scope::new(0);
                     // Collect field names
-                    for i in node.lhs..node.rhs {
+                    for i in self.tree.range(node) {
                         let field_id = self.tree.node_index(i);
                         let field_name = self.tree.name(field_id);
                         Self::define_symbol(self.tree, &mut scope, field_name, field_id)?;
@@ -230,7 +230,7 @@ impl<'a> Analyzer<'a> {
         if node.tag == Tag::Root {
             return Ok(());
         }
-        for i in node.lhs..node.rhs {
+        for i in self.tree.range(node) {
             let ni = self.tree.node_index(i);
             let result = self.resolve_node(ni);
             if let Err(diagnostic) = result {
@@ -348,7 +348,7 @@ impl<'a> Analyzer<'a> {
                 self.resolve_range(node)?;
                 self.exit_scope();
             }
-            Tag::Expressions | Tag::IfElse | Tag::Return | Tag::Struct => {
+            Tag::Expressions | Tag::IfElse | Tag::Return => {
                 self.resolve_range(node)?;
             }
             Tag::Field => {

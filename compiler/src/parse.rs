@@ -637,6 +637,11 @@ impl<'w> Parser<'w> {
         self.expect_token(TokenTag::Identifier)?;
         self.expect_token(TokenTag::ColonColon)?;
         let token = self.expect_token(TokenTag::Struct)?;
+        let type_parameters = if self.current_tag() == TokenTag::BraceL {
+            self.parse_type_parameters()?
+        } else {
+            0
+        };
         self.match_token(TokenTag::Newline);
         let mut source_index = 0;
         let range = parse_while!(self, self.token_isnt(TokenTag::End), {
@@ -646,7 +651,8 @@ impl<'w> Parser<'w> {
             field
         });
         self.expect_token_and_newline(TokenTag::End)?;
-        self.add_node(Tag::Struct, token, range.start, range.end)
+        let fields = self.add_indices_fixed(&[range.start, range.end]);
+        self.add_node(Tag::Struct, token, type_parameters, fields)
     }
 
     // field = identifier ':' type ';'
@@ -1268,6 +1274,13 @@ impl Tree {
         token.to_str(source)
     }
 
+    pub fn range(&self, node: &Node) -> Range<u32> {
+        match node.tag {
+            Tag::Struct => self.node_index(node.rhs)..self.node_index(node.rhs + 1),
+            _ => node.lhs..node.rhs,
+        }
+    }
+
     pub fn token_str(&self, token_id: TokenId) -> &str {
         let token = self.tokens[token_id as usize];
         let source = self.token_source(token_id).0;
@@ -1383,7 +1396,7 @@ impl Tree {
                 //     }
                 // }
                 writeln!(f, "({:?}", tag)?;
-                for i in node.lhs..node.rhs {
+                for i in self.range(node) {
                     write_indent(f, indentation + 1)?;
                     self.print_node(f, self.node_index(i), indentation + 1)?;
                     writeln!(f)?;
