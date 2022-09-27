@@ -66,9 +66,9 @@ impl<'a> Data<'a> {
         self.node_types[node_id as usize]
     }
 
-    pub fn node_type(&self, node_id: NodeId) -> &Typ {
-        &self.types[self.node_types[node_id as usize]]
-    }
+    // pub fn node_type(&self, node_id: NodeId) -> &Typ {
+    //     &self.types[self.node_types[node_id as usize]]
+    // }
 
     pub fn layout(&self, node_id: NodeId) -> &Layout {
         &self.layouts[self.type_id(node_id)]
@@ -213,13 +213,13 @@ pub enum Shape {
 }
 
 impl Shape {
-    fn count(&self) -> usize {
-        match self {
-            Shape::Scalar => 0,
-            Shape::Array { count, .. } => *count as usize,
-            Shape::Struct { offsets, .. } => offsets.len(),
-        }
-    }
+    // fn count(&self) -> usize {
+    //     match self {
+    //         Shape::Scalar => 0,
+    //         Shape::Array { count, .. } => *count as usize,
+    //         Shape::Struct { offsets, .. } => offsets.len(),
+    //     }
+    // }
     pub fn offset(&self, i: usize) -> i32 {
         match self {
             Shape::Array { stride, .. } => (stride * i as u32) as i32,
@@ -228,11 +228,11 @@ impl Shape {
             _ => 0,
         }
     }
-    fn memory_index(&self, i: usize) -> usize {
-        match self {
-            Shape::Array { .. } => i,
-            Shape::Struct { memory_index, .. } => memory_index[i] as usize,
-            _ => unreachable!("Shape::offset: Scalars have no fields"),
-        }
-    }
+    // fn memory_index(&self, i: usize) -> usize {
+    //     match self {
+    //         Shape::Array { .. } => i,
+    //         Shape::Struct { memory_index, .. } => memory_index[i] as usize,
+    //         _ => unreachable!("Shape::offset: Scalars have no fields"),
+    //     }
+    // }
 }

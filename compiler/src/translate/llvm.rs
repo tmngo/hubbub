@@ -735,6 +735,23 @@ impl<'ctx> Generator<'ctx> {
             _ => unreachable!("cannot gep_struct for non-struct value"),
         }
     }
+
+    // fn gep_struct(&self, value: BasicValueEnum<'ctx>, field_index: u32) -> BasicValueEnum<'ctx> {
+    //     match value {
+    //         BasicValueEnum::PointerValue(pointer) => {
+    //             let gep = self
+    //                 .builder
+    //                 .build_struct_gep(pointer, field_index, "")
+    //                 .unwrap();
+    //             self.builder.build_load(gep, "")
+    //         }
+    //         BasicValueEnum::StructValue(value) => self
+    //             .builder
+    //             .build_extract_value(value, field_index, "")
+    //             .unwrap(),
+    //         _ => unreachable!("cannot gep_struct for non-struct value"),
+    //     }
+    // }
 }
 
 pub fn llvm_type<'ctx>(
@@ -774,10 +791,10 @@ impl<'ctx> Location<'ctx> {
     fn new(base: PointerValue<'ctx>, offset: i32) -> Self {
         Self { base, offset }
     }
-    fn offset(self, extra_offset: i32) -> Self {
-        Location {
-            base: self.base,
-            offset: self.offset + extra_offset,
-        }
-    }
+    // fn offset(self, extra_offset: i32) -> Self {
+    //     Location {
+    //         base: self.base,
+    //         offset: self.offset + extra_offset,
+    //     }
+    // }
 }

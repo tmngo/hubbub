@@ -7,8 +7,8 @@ use std::{collections::HashSet, path::Path, time::Instant};
 pub mod analyze;
 mod builtin;
 mod translate;
-#[macro_use]
-mod error;
+// #[macro_use]
+// mod error;
 mod link;
 mod output;
 mod parse;

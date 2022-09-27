@@ -148,59 +148,59 @@ pub enum Tag {
     While,               // condition, block
 }
 
-pub struct Node2 {
-    token: u32,
-    data: Data,
-}
+// pub struct Node2 {
+//     token: u32,
+//     data: Data,
+// }
 
-pub enum Data {
-    Add { lhs: u32, rhs: u32 },
-    And { lhs: u32, rhs: u32 },
-    Assign { lhs: u32, rhs: u32 },
-    Block { start: u32, end: u32 },
-    BlockDirect,
-    BitwiseAnd { lhs: u32, rhs: u32 },
-    BitwiseNot { expr: u32 },
-    BitwiseOr { lhs: u32, rhs: u32 },
-    BitwiseXor { lhs: u32, rhs: u32 },
-    Break,
-    Call { function: u32, arguments: u32 },
-    Continue,
-    Div { lhs: u32, rhs: u32 },
-    Expressions { start: u32, end: u32 },
-    Field { type_expr: u32 },
-    FunctionDecl { prototype: u32, block: u32 },
-    Greater { lhs: u32, rhs: u32 },
-    Grouping { expr: u32 },
-    Identifier,
-    If { condition: u32, block: u32 },
-    IfElse { start: u32, end: u32 },
-    IntegerLiteral,
-    Invalid,
-    Less { lhs: u32, rhs: u32 },
-    Mul { lhs: u32, rhs: u32 },
-    Negation { expr: u32 },
-    Not { expr: u32 },
-    Parameters { start: u32, end: u32 },
-    Prototype { parameters: u32, returns: u32 },
-    Return { expr: u32 },
-    Root { start: u32, end: u32 },
-    StringLiteral,
-    Struct { start: u32, end: u32 },
-    Sub { lhs: u32, rhs: u32 },
-    TypeBase { expr: u32 },
-    VariableDecl { type_expr: u32, init_expr: u32 },
-    While { condition: u32, block: u32 },
-}
+// pub enum Data {
+//     Add { lhs: u32, rhs: u32 },
+//     And { lhs: u32, rhs: u32 },
+//     Assign { lhs: u32, rhs: u32 },
+//     Block { start: u32, end: u32 },
+//     BlockDirect,
+//     BitwiseAnd { lhs: u32, rhs: u32 },
+//     BitwiseNot { expr: u32 },
+//     BitwiseOr { lhs: u32, rhs: u32 },
+//     BitwiseXor { lhs: u32, rhs: u32 },
+//     Break,
+//     Call { function: u32, arguments: u32 },
+//     Continue,
+//     Div { lhs: u32, rhs: u32 },
+//     Expressions { start: u32, end: u32 },
+//     Field { type_expr: u32 },
+//     FunctionDecl { prototype: u32, block: u32 },
+//     Greater { lhs: u32, rhs: u32 },
+//     Grouping { expr: u32 },
+//     Identifier,
+//     If { condition: u32, block: u32 },
+//     IfElse { start: u32, end: u32 },
+//     IntegerLiteral,
+//     Invalid,
+//     Less { lhs: u32, rhs: u32 },
+//     Mul { lhs: u32, rhs: u32 },
+//     Negation { expr: u32 },
+//     Not { expr: u32 },
+//     Parameters { start: u32, end: u32 },
+//     Prototype { parameters: u32, returns: u32 },
+//     Return { expr: u32 },
+//     Root { start: u32, end: u32 },
+//     StringLiteral,
+//     Struct { start: u32, end: u32 },
+//     Sub { lhs: u32, rhs: u32 },
+//     TypeBase { expr: u32 },
+//     VariableDecl { type_expr: u32, init_expr: u32 },
+//     While { condition: u32, block: u32 },
+// }
 
 // Assert that Node size <= 16 bytes
 pub const _ASSERT_NODE_SIZE: () = assert_size::<Node>(16);
-pub const _ASSERT_NODE_2_SIZE: () = assert_size::<Node2>(16);
-pub const _ASSERT_NODE_DATA_SIZE: () = assert_size::<Data>(12);
+// pub const _ASSERT_NODE_2_SIZE: () = assert_size::<Node2>(16);
+// pub const _ASSERT_NODE_DATA_SIZE: () = assert_size::<Data>(12);
 
 type TokenId = u32;
 pub type NodeId = u32;
-pub type Id = u32;
+// pub type Id = u32;
 
 #[derive(Copy, Clone, Debug)]
 pub struct Node1 {
@@ -1087,24 +1087,24 @@ impl<'w> Parser<'w> {
         false
     }
 
-    fn skip_to_next_root_declaration(&mut self) {
-        while !self.is_at_end() {
-            if self.current_tag() == TokenTag::Newline
-                && self.next_tag(1) == TokenTag::Identifier
-                && self.next_tag(2) == TokenTag::ColonColon
-            {
-                let token_id = self.current_id() + 1;
-                let token = self.tree.tokens[token_id as usize];
-                let source = self.tree.token_source(token_id).0;
-                let byte_before_identifier = source.as_bytes()[token.start as usize - 1];
-                if byte_before_identifier == b'\n' {
-                    self.shift_token();
-                    return;
-                }
-            }
-            self.shift_token();
-        }
-    }
+    // fn skip_to_next_root_declaration(&mut self) {
+    //     while !self.is_at_end() {
+    //         if self.current_tag() == TokenTag::Newline
+    //             && self.next_tag(1) == TokenTag::Identifier
+    //             && self.next_tag(2) == TokenTag::ColonColon
+    //         {
+    //             let token_id = self.current_id() + 1;
+    //             let token = self.tree.tokens[token_id as usize];
+    //             let source = self.tree.token_source(token_id).0;
+    //             let byte_before_identifier = source.as_bytes()[token.start as usize - 1];
+    //             if byte_before_identifier == b'\n' {
+    //                 self.shift_token();
+    //                 return;
+    //             }
+    //         }
+    //         self.shift_token();
+    //     }
+    // }
 
     fn skip_to_next_statement(&mut self) {
         while !self.is_at_end() {
@@ -1148,17 +1148,17 @@ impl<'w> Parser<'w> {
             .with_message(format!("expected token {:?}, got {:?}.", tag, token.tag))]))
     }
 
-    fn assert_token_order(&mut self, tags: &[TokenTag]) {
-        for i in 0..tags.len() {
-            assert!(
-                self.next_tag(i) == tags[i],
-                "Error: expected tokens {:?}, got {:?}. Token index: {:?}.",
-                tags,
-                self.next_tag(i),
-                self.index + i
-            );
-        }
-    }
+    // fn assert_token_order(&mut self, tags: &[TokenTag]) {
+    //     for i in 0..tags.len() {
+    //         assert!(
+    //             self.next_tag(i) == tags[i],
+    //             "Error: expected tokens {:?}, got {:?}. Token index: {:?}.",
+    //             tags,
+    //             self.next_tag(i),
+    //             self.index + i
+    //         );
+    //     }
+    // }
 
     fn assert_tokens(&mut self, tags: &[TokenTag], offset: usize) -> Result<()> {
         for tag in tags {
