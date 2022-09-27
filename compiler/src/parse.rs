@@ -339,7 +339,11 @@ impl<'w> Parser<'w> {
                     rhs: 0,
                 }],
                 indices: Vec::new(),
-                modules: Vec::new(),
+                modules: Vec::from([Module {
+                    name: String::new(),
+                    alias: None,
+                    first_token_id: 0,
+                }]),
             },
         }
     }
@@ -1333,7 +1337,7 @@ impl Tree {
     fn token_source(&self, token_id: TokenId) -> (&str, TokenId) {
         let mut source_index = 0;
         let mut last_module_token_index = 0;
-        for m in &self.modules {
+        for m in self.modules.iter().skip(1) {
             if (token_id) < m.first_token_id {
                 break;
             }
@@ -1348,7 +1352,7 @@ impl Tree {
 
     pub fn source_id(&self, token_id: TokenId) -> usize {
         let mut source_id = 0;
-        for m in &self.modules {
+        for m in self.modules.iter().skip(1) {
             if (token_id) < m.first_token_id {
                 break;
             }

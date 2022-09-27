@@ -237,7 +237,7 @@ impl<'a> Analyzer<'a> {
             .node_lexeme_offset(module_node, 1)
             .trim_matches('"');
         if let Some(module_index) = self.tree.get_module_index(module_name) {
-            self.module_scopes[module_index + 1]
+            self.module_scopes[module_index]
         } else {
             unreachable!("failed to get module scope index")
         }
