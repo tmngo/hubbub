@@ -140,6 +140,10 @@ pub fn test_backend(
 }
 
 #[test]
+fn array() {
+    test("array", Test::AotAndJit, "", 0, 0);
+}
+#[test]
 fn boolean() {
     test("boolean", Test::AotAndJit, "", 0, 6);
 }

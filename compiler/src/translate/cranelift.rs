@@ -114,7 +114,7 @@ impl<'a> Generator<'a> {
                     func.signature.returns.push(AbiParam::new(t));
                 }
             }
-            Tag::Identifier => {
+            Tag::Identifier | Tag::Type => {
                 func.signature.returns.push(AbiParam::new(t));
             }
             _ => {}

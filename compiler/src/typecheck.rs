@@ -711,7 +711,9 @@ impl<'a> Typechecker<'a> {
     fn is_generic(&self, type_id: TypeId) -> bool {
         match self.types[type_id] {
             Type::Parameter { .. } => true,
-            Type::Array { is_generic, .. } | Type::Struct { is_generic, .. } => is_generic,
+            Type::Array { is_generic, .. }
+            | Type::Pointer { is_generic, .. }
+            | Type::Struct { is_generic, .. } => is_generic,
             _ => false,
         }
     }
@@ -731,7 +733,9 @@ impl<'a> Typechecker<'a> {
         match type_map.try_insert(self.current_parameters.clone(), self.types.len()) {
             Ok(_) => {
                 let is_generic = fields.iter().any(|&type_id| self.is_generic(type_id));
-                self.add_type(Type::Struct { fields, is_generic })
+                let type_id = self.add_type(Type::Struct { fields, is_generic });
+                self.type_definitions.insert(type_id, struct_id);
+                type_id
             }
             Err(err) => *err.entry.get(),
         }
