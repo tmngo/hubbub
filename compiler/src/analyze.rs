@@ -1,6 +1,5 @@
 use crate::{
     parse::{Node, NodeId, Tag, Tree},
-    typecheck::TypeIndex,
     utils::assert_size,
     workspace::{Result, Workspace},
 };
@@ -14,23 +13,37 @@ use std::{collections::HashMap, fmt, hash::Hash};
 pub struct Analyzer<'a> {
     workspace: &'a mut Workspace,
     tree: &'a Tree,
+
+    builtins: HashMap<&'a str, BuiltInType>,
+    current: usize,
+    foreign: Scope<'a>,
+    module_scopes: Vec<usize>,
+    scopes: Vec<Scope<'a>>,
+    struct_scopes: HashMap<u32, usize>,
+
     pub definitions: HashMap<NodeId, Definition>,
     pub overload_sets: HashMap<NodeId, Vec<NodeId>>,
-    struct_scopes: HashMap<u32, Scope<'a>>,
-    scopes: Vec<Scope<'a>>,
-    builtins: Scope<'a>,
-    foreign: Scope<'a>,
-    current: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Definition {
-    BuiltIn(u32),
+    BuiltIn(BuiltInType),
     User(NodeId),
     Foreign(u32),
     Overload(u32),
     Resolved(u32),
     NotFound,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum BuiltInType {
+    Void,    // 0
+    Boolean, // 1
+    Integer, // 2
+    Float,   // 3
+    String,  // 4
+    Array,   // 6
+    Pointer, // 8
 }
 
 // Assert that Tag size <= 1 byte
@@ -85,23 +98,18 @@ pub trait Resolve {
 
 impl<'a> Analyzer<'a> {
     pub fn new(workspace: &'a mut Workspace, tree: &'a Tree) -> Self {
-        let builtins = Scope::from(
-            [
-                ("Bool", TypeIndex::Boolean as u32),
-                ("I64", TypeIndex::Integer as u32),
-                ("Int", TypeIndex::Integer as u32),
-                ("Int32", TypeIndex::Integer as u32),
-                ("Int64", TypeIndex::Integer as u32),
-                ("Float", TypeIndex::Float as u32),
-                ("F64", TypeIndex::Float as u32),
-                ("String", TypeIndex::String as u32),
-                ("Pointer", TypeIndex::Pointer as u32),
-                ("Array", TypeIndex::Array as u32),
-                // ("alloc", 7),
-                // ("print_int", 7),
-            ],
-            0,
-        );
+        let builtins = HashMap::from([
+            ("Bool", BuiltInType::Boolean),
+            ("I64", BuiltInType::Integer),
+            ("Int", BuiltInType::Integer),
+            ("Int32", BuiltInType::Integer),
+            ("Int64", BuiltInType::Integer),
+            ("Float", BuiltInType::Float),
+            ("F64", BuiltInType::Float),
+            ("String", BuiltInType::String),
+            ("Pointer", BuiltInType::Pointer),
+            ("Array", BuiltInType::Array),
+        ]);
         let foreign = Scope::from(
             [
                 // ("putchar", 1),
@@ -114,35 +122,34 @@ impl<'a> Analyzer<'a> {
         Self {
             workspace,
             tree,
-            definitions: HashMap::new(),
-            overload_sets: HashMap::new(),
             builtins,
+            current: 0,
             foreign,
+            module_scopes: vec![],
             scopes: Vec::new(),
             struct_scopes: HashMap::new(),
-            current: 0,
+            definitions: HashMap::new(),
+            overload_sets: HashMap::new(),
         }
     }
 
     pub fn resolve(&mut self) -> Result<()> {
         self.enter_scope();
         let root = &self.tree.node(0);
-        let mut module_scopes = Vec::new();
         // Collect module declarations
+        for _ in root.lhs..root.rhs {
+            self.enter_scope();
+            self.module_scopes.push(self.current);
+            self.exit_scope();
+        }
         for i in root.lhs..root.rhs {
             let ni = self.tree.node_index(i);
             let module = self.tree.node(ni);
-            // if let Some(module_info) = self.tree.token_module(module.token) {
-            //     dbg!(&module_info.name);
-            // }
-            self.enter_scope();
-            module_scopes.push(self.current);
+            self.current = self.module_scopes[(i - root.lhs) as usize];
             self.collect_module_decls(module)?;
-            self.exit_scope();
         }
         // Copy symbols from unnamed imports
         for (i, scope) in self.scopes.clone().iter().enumerate() {
-            self.current = i;
             for &import_scope_index in &scope.unnamed_imports.clone() {
                 for (name, id) in self.scopes[import_scope_index].symbols.clone().iter() {
                     Self::define_symbol(self.tree, &mut self.scopes[i], name, *id)?;
@@ -156,7 +163,7 @@ impl<'a> Analyzer<'a> {
         for (m, i) in (root.lhs..root.rhs).enumerate() {
             let ni = self.tree.node_index(i);
             let module = self.tree.node(ni);
-            self.current = module_scopes[m];
+            self.current = self.module_scopes[m];
             self.resolve_range(module)?;
         }
         Ok(())
@@ -199,14 +206,24 @@ impl<'a> Analyzer<'a> {
                     let name = self.tree.name(node_id);
                     let current_scope = &mut self.scopes[self.current];
                     Self::define_symbol(self.tree, current_scope, name, node_id)?;
-                    let mut scope = Scope::new(0);
+                    let mut scope = Scope::new(self.current);
+                    // Define type parameters
+                    if node.lhs != 0 {
+                        let type_parameters = self.tree.node(node.lhs);
+                        for i in self.tree.range(type_parameters) {
+                            let id = self.tree.node_index(i);
+                            let name = self.tree.node_lexeme(id);
+                            Self::define_symbol(self.tree, &mut scope, name, id)?;
+                        }
+                    }
                     // Collect field names
                     for i in self.tree.range(node) {
                         let field_id = self.tree.node_index(i);
                         let field_name = self.tree.name(field_id);
                         Self::define_symbol(self.tree, &mut scope, field_name, field_id)?;
                     }
-                    self.struct_scopes.insert(node_id, scope);
+                    self.scopes.push(scope.clone());
+                    self.struct_scopes.insert(node_id, self.scopes.len() - 1);
                 }
                 _ => {}
             };
@@ -220,7 +237,7 @@ impl<'a> Analyzer<'a> {
             .node_lexeme_offset(module_node, 1)
             .trim_matches('"');
         if let Some(module_index) = self.tree.get_module_index(module_name) {
-            module_index + 2
+            self.module_scopes[module_index + 1]
         } else {
             unreachable!("failed to get module scope index")
         }
@@ -311,12 +328,12 @@ impl<'a> Analyzer<'a> {
                 // Resolve type
                 if struct_decl_id != 0 {
                     let field_name = self.tree.name(node.rhs);
-                    let field_id = match self
+                    let struct_scope_index = self
                         .struct_scopes
                         .get(&struct_decl_id)
-                        .expect("failed to get struct scope")
-                        .get(field_name)
-                    {
+                        .expect("failed to get struct scope");
+                    let struct_scope = &self.scopes[*struct_scope_index];
+                    let field_id = match struct_scope.get(field_name) {
                         Some(value) => value,
                         _ => {
                             let token_id = self.tree.node(node.rhs).token;
@@ -378,6 +395,15 @@ impl<'a> Analyzer<'a> {
                     // Resolve type_expr
                     self.resolve_node(field_id)?;
                 }
+            }
+            Tag::Struct => {
+                let current_scope = self.current;
+                self.current = *self
+                    .struct_scopes
+                    .get(&id)
+                    .expect("failed to get struct scope");
+                self.resolve_range(node)?;
+                self.current = current_scope;
             }
             Tag::Type => {
                 let definition = self.lookup(id);
@@ -594,8 +620,8 @@ impl Lookup for HashMap<NodeId, Definition> {
             .get(&node_id)
             .unwrap_or_else(|| panic!("Definition not found: {}", msg));
         match definition {
+            Definition::BuiltIn(id) => *id as u32,
             Definition::User(id)
-            | Definition::BuiltIn(id)
             | Definition::Foreign(id)
             | Definition::Overload(id)
             | Definition::Resolved(id) => *id,
@@ -607,10 +633,10 @@ impl Lookup for HashMap<NodeId, Definition> {
             .get(&node_id)
             .unwrap_or_else(|| panic!("Definition not found: {}", msg));
         match definition {
-            Definition::User(id)
-            | Definition::BuiltIn(id)
-            | Definition::Foreign(id)
-            | Definition::Overload(id) => (*id, false),
+            Definition::BuiltIn(id) => (*id as u32, false),
+            Definition::User(id) | Definition::Foreign(id) | Definition::Overload(id) => {
+                (*id, false)
+            }
             Definition::Resolved(id) => (*id, true),
             Definition::NotFound => unreachable!("Definition not found: {}", msg),
         }

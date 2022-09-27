@@ -1,5 +1,5 @@
 use crate::{
-    analyze::Definition,
+    analyze::{BuiltInType, Definition},
     parse::{Node, NodeId, Tag, Tree},
     workspace::{Result, Workspace},
 };
@@ -24,7 +24,7 @@ use thiserror::Error;
 #[error("{0}")]
 pub struct TypeError(String);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Type {
     Void,
     Boolean,
@@ -35,6 +35,7 @@ pub enum Type {
     Array {
         typ: TypeId,
         length: usize,
+        is_generic: bool,
     },
     Function {
         parameters: Vec<TypeId>,
@@ -42,16 +43,25 @@ pub enum Type {
     },
     Pointer {
         typ: TypeId,
+        is_generic: bool,
     },
     Struct {
         fields: Vec<TypeId>,
+        is_generic: bool,
     },
-    TypeParameter,
+    Parameter {
+        index: usize,
+    },
 }
 
 impl Type {}
 
 pub type TypeId = usize;
+
+// pub enum TypeReference {
+//     Mono(TypeId),
+//     Poly(Vec<TypeId>),
+// }
 
 pub enum TypeIndex {
     Void,     // 0
@@ -66,6 +76,8 @@ pub enum TypeIndex {
     Struct,   // 9
 }
 
+type TypeMap<P = Vec<TypeId>> = HashMap<P, TypeId>;
+
 pub struct Typechecker<'a> {
     workspace: &'a mut Workspace,
     tree: &'a Tree,
@@ -75,9 +87,13 @@ pub struct Typechecker<'a> {
     type_definitions: HashMap<TypeId, NodeId>,
     pub error_reports: Vec<TypeError>,
     pub node_types: Vec<TypeId>,
-    array_types: HashMap<(TypeId, usize), TypeId>,
-    pointer_types: HashMap<TypeId, TypeId>,
+    array_types: TypeMap<(TypeId, usize)>,
+    pointer_types: TypeMap<TypeId>,
+    polymorphic_types: HashMap<NodeId, TypeMap>,
     type_parameters: HashMap<NodeId, HashSet<Vec<TypeId>>>,
+    current_parameters: Vec<TypeId>,
+    // This will have to be updated for nested struct definitions.
+    current_struct_id: NodeId,
 }
 
 impl<'a> Typechecker<'a> {
@@ -114,7 +130,10 @@ impl<'a> Typechecker<'a> {
             node_types: vec![0; tree.nodes.len()],
             array_types: HashMap::new(),
             pointer_types: HashMap::new(),
+            polymorphic_types: HashMap::new(),
             type_parameters: HashMap::new(),
+            current_parameters: vec![],
+            current_struct_id: 0,
         }
     }
 
@@ -210,7 +229,7 @@ impl<'a> Typechecker<'a> {
                 }
 
                 // Struct access.
-                if let (Type::Struct { fields }, Definition::User(field_index)) = (
+                if let (Type::Struct { fields, .. }, Definition::User(field_index)) = (
                     &self.types[ltype as usize],
                     self.definitions
                         .get(&node.rhs)
@@ -266,10 +285,10 @@ impl<'a> Typechecker<'a> {
                     panic!("Definition not found: {}", self.tree.name(callee_id))
                 });
                 let (definition_id, is_overload) = match definition {
-                    Definition::User(id)
-                    | Definition::BuiltIn(id)
-                    | Definition::Foreign(id)
-                    | Definition::Resolved(id) => (*id, false),
+                    Definition::BuiltIn(id) => (*id as u32, false),
+                    Definition::User(id) | Definition::Foreign(id) | Definition::Resolved(id) => {
+                        (*id, false)
+                    }
                     Definition::Overload(id) => (*id, true),
                     Definition::NotFound => {
                         unreachable!("Definition not found: {}", self.tree.name(callee_id))
@@ -409,7 +428,7 @@ impl<'a> Typechecker<'a> {
             }
             Tag::Dereference => {
                 let pointer_type = self.infer_node(node.lhs)?[0];
-                if let Type::Pointer { typ } = self.types[pointer_type] {
+                if let Type::Pointer { typ, .. } = self.types[pointer_type] {
                     typ
                 } else {
                     return Err(Diagnostic::error().with_message(format!(
@@ -452,6 +471,15 @@ impl<'a> Typechecker<'a> {
             Tag::IntegerLiteral => TypeIndex::Integer as TypeId,
             Tag::True | Tag::False => TypeIndex::Boolean as TypeId,
             Tag::ParametricPrototype => {
+                // Type parameters
+                let type_parameters = self.tree.node(node.lhs);
+                for i in type_parameters.lhs..type_parameters.rhs {
+                    let node_id = self.tree.node_index(i);
+                    self.add_type(Type::Parameter {
+                        index: (i - type_parameters.lhs) as usize,
+                    });
+                    self.set_node_type(node_id, self.types.len() - 1);
+                }
                 // Prototype
                 self.infer_node(node.rhs)?[0]
             }
@@ -480,6 +508,19 @@ impl<'a> Typechecker<'a> {
                 })
             }
             Tag::Struct => {
+                if node.lhs != 0 {
+                    let type_parameters = self.tree.node(node.lhs);
+                    for i in type_parameters.lhs..type_parameters.rhs {
+                        let node_id = self.tree.node_index(i);
+                        let param_type = self.add_type(Type::Parameter {
+                            index: (i - type_parameters.lhs) as usize,
+                        });
+                        self.set_node_type(node_id, param_type);
+                    }
+                    self.polymorphic_types
+                        .try_insert(node_id, HashMap::new())
+                        .expect("tried to insert duplicate polymorphic type map");
+                };
                 // Infer field types
                 let mut fields = Vec::new();
                 for i in self.tree.range(node) {
@@ -490,7 +531,8 @@ impl<'a> Typechecker<'a> {
                     let ni = self.tree.node_index(i) as usize;
                     fields.push(self.node_types[ni]);
                 }
-                self.add_type(Type::Struct { fields })
+                let is_generic = fields.iter().any(|&type_id| self.is_generic(type_id));
+                self.add_type(Type::Struct { fields, is_generic })
             }
             Tag::Subscript => {
                 let array_type = self.infer_node(node.lhs)?[0];
@@ -506,59 +548,64 @@ impl<'a> Typechecker<'a> {
                 }
             }
             Tag::Type => {
-                let definition = self.definitions.get(&node_id);
-                let base_type = if let Some(lookup) = definition {
-                    match lookup {
-                        Definition::User(definition_id) => self.infer_node(*definition_id)?[0],
-                        Definition::BuiltIn(type_index) => *type_index as TypeId,
-                        _ => 0,
-                    }
-                } else {
-                    return Err(Diagnostic::error().with_message("Undefined type"));
-                };
-                println!("base type: {:?}", base_type);
-                match base_type {
-                    6 => {
-                        println!("{}", crate::format_red!("Checking Array type"));
-                        // Expect two type parameters.
-                        assert_eq!(node.tag, Tag::Type);
-                        if node.rhs - node.lhs != 2 {
-                            return Err(Diagnostic::error().with_message(format!(
-                                "Expected 2 type parameters, got {}.",
-                                node.rhs - node.lhs
-                            )));
+                let definition = self.definitions.get(&node_id).unwrap();
+                match definition {
+                    Definition::BuiltIn(builtin) => match builtin {
+                        BuiltInType::Array => {
+                            // Map concrete type arguments to an array type.
+                            // Expect two type parameters.
+                            assert_eq!(node.tag, Tag::Type);
+                            if node.rhs - node.lhs != 2 {
+                                return Err(Diagnostic::error().with_message(format!(
+                                    "Expected 2 type parameters, got {}.",
+                                    node.rhs - node.lhs
+                                )));
+                            }
+                            let ni = self.tree.node_index(node.lhs);
+                            let value_type = self.infer_node(ni)?[0];
+                            let ni = self.tree.node_index(node.lhs + 1);
+                            let length_node = self.tree.node(ni);
+                            assert_eq!(
+                                length_node.tag,
+                                Tag::IntegerLiteral,
+                                "The length of an Array must be an integer literal."
+                            );
+                            let token_str = self.tree.node_lexeme(ni);
+                            let length = token_str.parse::<i64>().unwrap();
+                            self.add_array_type(value_type, length as usize)
                         }
-                        let ni = self.tree.node_index(node.lhs);
-                        let value_type = self.infer_node(ni)?[0];
-                        let ni = self.tree.node_index(node.lhs + 1);
-                        let length_node = self.tree.node(ni);
-                        assert_eq!(
-                            length_node.tag,
-                            Tag::IntegerLiteral,
-                            "The length of an Array must be an integer literal."
-                        );
-                        let token_str = self.tree.node_lexeme(ni);
-                        dbg!(token_str);
-                        let length = token_str.parse::<i64>().unwrap();
-                        self.add_array_type(value_type, length as usize)
-                    }
-                    8 => {
-                        println!("{}", crate::format_red!("Checking Pointer type"));
-                        // Expect one type parameter
-                        if node.rhs - node.lhs != 1 {
-                            return Err(Diagnostic::error().with_message(format!(
-                                "Expected 1 type parameter, got {}.",
-                                node.rhs - node.lhs
-                            )));
+                        BuiltInType::Pointer => {
+                            // Map concrete type argument to a pointer type.
+                            // Expect one type parameter
+                            if node.rhs - node.lhs != 1 {
+                                return Err(Diagnostic::error().with_message(format!(
+                                    "Expected 1 type parameter, got {}.",
+                                    node.rhs - node.lhs
+                                )));
+                            }
+                            let ni = self.tree.node_index(node.lhs);
+                            let value_type = self.infer_node(ni)?[0];
+                            self.add_pointer_type(value_type)
                         }
-                        let ni = self.tree.node_index(node.lhs);
-                        let value_type = self.infer_node(ni)?[0];
-                        println!("value type: {:?}", self.types[value_type]);
-
-                        // Map from type parameter T to Pointer{T}
-                        let ptr_type = self.add_pointer_type(value_type);
-                        dbg!(ptr_type);
-                        ptr_type
+                        _ => {
+                            return Err(Diagnostic::error().with_message("Undefined built-in type"))
+                        }
+                    },
+                    Definition::User(id) => {
+                        // Map concrete type arguments to a struct type.
+                        let struct_decl_id = *id;
+                        self.current_struct_id = *id;
+                        let current_parameter_count = self.current_parameters.len();
+                        for i in self.tree.range(node) {
+                            let ni = self.tree.node_index(i);
+                            let param_type = self.infer_node(ni)?[0];
+                            self.current_parameters.push(param_type);
+                        }
+                        let struct_type_id = self.node_types[struct_decl_id as usize];
+                        let specified_type = self.monomorphize_type(struct_type_id);
+                        self.current_parameters.truncate(current_parameter_count);
+                        self.current_struct_id = 0;
+                        specified_type
                     }
                     _ => return Err(Diagnostic::error().with_message("Undefined type")),
                 }
@@ -654,15 +701,78 @@ impl<'a> Typechecker<'a> {
             Ok(_) => self.add_type(Type::Array {
                 typ: value_type,
                 length,
+                is_generic: self.is_generic(value_type),
             }),
             Err(err) => *err.entry.get(),
         }
     }
 
+    fn is_generic(&self, type_id: TypeId) -> bool {
+        match self.types[type_id] {
+            Type::Parameter { .. } => true,
+            Type::Array { is_generic, .. } | Type::Struct { is_generic, .. } => is_generic,
+            _ => false,
+        }
+    }
+
     fn add_pointer_type(&mut self, value_type: TypeId) -> TypeId {
         match self.pointer_types.try_insert(value_type, self.types.len()) {
-            Ok(_) => self.add_type(Type::Pointer { typ: value_type }),
+            Ok(_) => self.add_type(Type::Pointer {
+                typ: value_type,
+                is_generic: self.is_generic(value_type),
+            }),
             Err(err) => *err.entry.get(),
+        }
+    }
+
+    fn add_polymorphic_type(&mut self, struct_id: NodeId, fields: Vec<TypeId>) -> TypeId {
+        let type_map = self.polymorphic_types.get_mut(&struct_id).unwrap();
+        match type_map.try_insert(self.current_parameters.clone(), self.types.len()) {
+            Ok(_) => {
+                let is_generic = fields.iter().any(|&type_id| self.is_generic(type_id));
+                self.add_type(Type::Struct { fields, is_generic })
+            }
+            Err(err) => *err.entry.get(),
+        }
+    }
+
+    /// Creates a type based on the provided type_id, with all type parameters replaced by concrete types.
+    fn monomorphize_type(&mut self, type_id: TypeId) -> TypeId {
+        let typ = self.types[type_id].clone();
+        match typ {
+            Type::Parameter { index } => self.current_parameters[index],
+            Type::Array {
+                typ,
+                length,
+                is_generic,
+            } => {
+                let specific_type = if is_generic {
+                    self.monomorphize_type(typ)
+                } else {
+                    typ
+                };
+                self.add_array_type(specific_type, length)
+            }
+            Type::Pointer { typ, is_generic } => {
+                let specific_type = if is_generic {
+                    self.monomorphize_type(typ)
+                } else {
+                    typ
+                };
+                self.add_pointer_type(specific_type)
+            }
+            Type::Struct { fields, is_generic } => {
+                let specific_types = if is_generic {
+                    fields
+                        .iter()
+                        .map(|&type_id| self.monomorphize_type(type_id))
+                        .collect()
+                } else {
+                    fields
+                };
+                self.add_polymorphic_type(self.current_struct_id, specific_types)
+            }
+            _ => type_id,
         }
     }
 

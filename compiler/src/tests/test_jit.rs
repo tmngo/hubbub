@@ -164,6 +164,10 @@ fn pointer() {
     test("pointer", Test::AotAndJit, "", 0, 158);
 }
 #[test]
+fn polystructs() {
+    test("polystructs", Test::AotAndJit, "", 0, 12);
+}
+#[test]
 fn structs() {
     test("struct", Test::AotAndJit, STRUCTS_TREE, 23, 7);
 }

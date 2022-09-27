@@ -141,7 +141,7 @@ pub struct Layout {
 impl Layout {
     pub fn new(types: &Vec<Typ>, typ: &Typ, bytes: u32) -> Self {
         match typ {
-            Typ::Struct { fields } => {
+            Typ::Struct { fields, .. } => {
                 let mut size = 0;
                 let mut offsets = Vec::new();
                 let mut memory_index = Vec::new();
@@ -152,7 +152,9 @@ impl Layout {
                 }
                 Layout::new_struct(offsets, memory_index, size, bytes)
             }
-            Typ::Array { typ, length } => Layout::new_array(sizeof(types, *typ), *length as u32),
+            Typ::Array { typ, length, .. } => {
+                Layout::new_array(sizeof(types, *typ), *length as u32)
+            }
             _ => Layout::new_scalar(bytes, bytes),
         }
     }
@@ -186,8 +188,8 @@ impl Layout {
 pub fn sizeof(types: &Vec<Typ>, type_id: usize) -> u32 {
     match &types[type_id] {
         Typ::Void => 0,
-        Typ::Array { typ, length } => (sizeof(types, *typ) as usize * *length) as u32,
-        Typ::Struct { fields } => {
+        Typ::Array { typ, length, .. } => (sizeof(types, *typ) as usize * *length) as u32,
+        Typ::Struct { fields, .. } => {
             let mut size = 0;
             for f in fields {
                 size += sizeof(types, *f);

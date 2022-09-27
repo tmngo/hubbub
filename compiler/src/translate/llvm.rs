@@ -703,36 +703,17 @@ impl<'ctx> Generator<'ctx> {
     fn locate(&self, state: &mut State<'ctx>, node_id: NodeId) -> Location<'ctx> {
         let node = self.data.node(node_id);
         match node.tag {
-            Tag::Identifier => self.locate_variable(state, node_id),
-            _ => unreachable!("Cannot locate node with tag {:?}", node.tag),
-        }
-    }
-
-    fn locate_variable(&self, state: &mut State<'ctx>, node_id: NodeId) -> Location<'ctx> {
-        let def_id = self
-            .data
-            .definitions
-            .get_definition_id(node_id, "failed to look up variable definition");
-        *state
-            .locations
-            .get(&def_id)
-            .expect("failed to get identifier location")
-    }
-
-    fn gep_struct(&self, value: BasicValueEnum<'ctx>, field_index: u32) -> BasicValueEnum<'ctx> {
-        match value {
-            BasicValueEnum::PointerValue(pointer) => {
-                let gep = self
-                    .builder
-                    .build_struct_gep(pointer, field_index, "")
-                    .unwrap();
-                self.builder.build_load(gep, "")
+            Tag::Identifier => {
+                let def_id = self
+                    .data
+                    .definitions
+                    .get_definition_id(node_id, "failed to look up variable definition");
+                *state
+                    .locations
+                    .get(&def_id)
+                    .expect("failed to get identifier location")
             }
-            BasicValueEnum::StructValue(value) => self
-                .builder
-                .build_extract_value(value, field_index, "")
-                .unwrap(),
-            _ => unreachable!("cannot gep_struct for non-struct value"),
+            _ => unreachable!("Cannot locate node with tag {:?}", node.tag),
         }
     }
 
@@ -759,15 +740,14 @@ pub fn llvm_type<'ctx>(
     types: &Vec<Typ>,
     type_id: usize,
 ) -> BasicTypeEnum<'ctx> {
-    dbg!(&types[type_id]);
     match &types[type_id] {
-        Typ::Array { typ, length } => llvm_type(context, types, *typ)
+        Typ::Array { typ, length, .. } => llvm_type(context, types, *typ)
             .array_type(*length as u32)
             .into(),
-        Typ::Pointer { typ } => llvm_type(context, types, *typ)
+        Typ::Pointer { typ, .. } => llvm_type(context, types, *typ)
             .ptr_type(AddressSpace::Generic)
             .into(),
-        Typ::Struct { fields } => {
+        Typ::Struct { fields, .. } => {
             let mut field_types = Vec::with_capacity(fields.len());
             for id in fields {
                 field_types.push(llvm_type(context, types, *id))
