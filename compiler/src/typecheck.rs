@@ -152,20 +152,20 @@ impl<'a> Typechecker<'a> {
         Ok(())
     }
 
-    fn infer_declaration_type(&mut self, index: u32) -> Result<()> {
-        if index == 0 || self.node_types[index as usize] != 0 {
+    fn infer_declaration_type(&mut self, node_id: NodeId) -> Result<()> {
+        if node_id == 0 || self.node_types[node_id as usize] != 0 {
             return Ok(());
         }
-        let node = self.tree.node(index);
+        let node = self.tree.node(node_id);
         match node.tag {
             Tag::FunctionDecl => {
                 // prototype
                 let type_id = self.infer_node(node.lhs)?[0];
-                self.type_definitions.insert(type_id, index);
+                self.type_definitions.insert(type_id, node_id);
             }
             Tag::Struct => {
-                let type_id = self.infer_node(index)?[0];
-                self.type_definitions.insert(type_id, index);
+                let type_id = self.infer_node(node_id)?[0];
+                self.type_definitions.insert(type_id, node_id);
             }
             _ => {}
         };
@@ -424,11 +424,12 @@ impl<'a> Typechecker<'a> {
                 if let Type::Pointer { typ, .. } = self.types[pointer_type] {
                     typ
                 } else {
-                    return Err(Diagnostic::error().with_message(format!(
-                        "[line {}] type \"{:?}\" cannot be dereferenced",
-                        self.tree.node_token_line(node_id),
-                        self.types[pointer_type]
-                    )));
+                    return Err(Diagnostic::error()
+                        .with_message(format!(
+                            "type \"{}\" cannot be dereferenced",
+                            self.format_type(pointer_type)
+                        ))
+                        .with_labels(vec![self.tree.label(self.tree.node(node.lhs).token)]));
                 }
             }
             Tag::Field => self.infer_node(self.tree.node_index(node.rhs))?[0],
@@ -525,7 +526,9 @@ impl<'a> Typechecker<'a> {
                     fields.push(self.node_types[ni]);
                 }
                 let is_generic = fields.iter().any(|&type_id| self.is_generic(type_id));
-                self.add_type(Type::Struct { fields, is_generic })
+                let type_id = self.add_type(Type::Struct { fields, is_generic });
+                self.type_definitions.insert(type_id, node_id);
+                type_id
             }
             Tag::Subscript => {
                 let array_type = self.infer_node(node.lhs)?[0];
@@ -533,11 +536,12 @@ impl<'a> Typechecker<'a> {
                 if let Type::Array { typ, .. } = self.types[array_type] {
                     typ
                 } else {
-                    return Err(Diagnostic::error().with_message(format!(
-                        "[line {}] type \"{:?}\" cannot be indexed",
-                        self.tree.node_token_line(node_id),
-                        self.types[array_type]
-                    )));
+                    return Err(Diagnostic::error()
+                        .with_message(format!(
+                            "cannot index into a value of type \"{}\"",
+                            self.format_type(array_type)
+                        ))
+                        .with_labels(vec![self.tree.label(self.tree.node(node.lhs).token)]));
                 }
             }
             Tag::Type => {
@@ -659,11 +663,15 @@ impl<'a> Typechecker<'a> {
                 0
             }
         };
+
+        // Set the types for any deferred nodes.
         for (&ni, &ti) in inferred_node_ids.iter().zip(inferred_type_ids.iter()) {
             self.set_node_type(ni, ti);
         }
+
+        // After recursively calling inferring the types of child nodes, set the type of the parent.
         self.set_node_type(node_id, result);
-        Ok(smallvec![self.node_types[node_id as usize]])
+        Ok(smallvec![result])
     }
 
     ///
@@ -781,7 +789,12 @@ impl<'a> Typechecker<'a> {
     ///
     pub fn print(&self) {
         for i in 0..self.types.len() {
-            println!("Type [{}]: {:?}", { i }, self.types[i]);
+            println!(
+                "{:>4} {:<24} {}",
+                format!("{}.", i),
+                self.format_type(i),
+                format_args!("{:?}", self.types[i]),
+            );
         }
         for i in 1..self.tree.nodes.len() {
             println!(
@@ -789,6 +802,22 @@ impl<'a> Typechecker<'a> {
                 self.tree.node(i as u32).tag,
                 self.types[self.node_types[i] as usize]
             );
+        }
+    }
+
+    pub fn format_type(&self, type_id: TypeId) -> String {
+        let typ = &self.types[type_id];
+        match typ {
+            Type::Pointer { typ, .. } => format!("Pointer{{{}}}", self.format_type(*typ)),
+            Type::Array { typ, length, .. } => {
+                format!("Array{{{}, {}}}", self.format_type(*typ), length)
+            }
+            Type::Parameter { .. } => "Parameter".to_string(),
+            Type::Function { .. } | Type::Struct { .. } => {
+                let decl_id = self.type_definitions.get(&type_id).unwrap();
+                self.tree.name(*decl_id).to_string()
+            }
+            _ => format!("{:?}", typ),
         }
     }
 }
