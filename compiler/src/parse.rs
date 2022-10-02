@@ -349,7 +349,10 @@ impl<'w> Parser<'w> {
     }
 
     pub fn parse(&mut self) {
-        self.parse_modules().ok();
+        let result = self.parse_modules();
+        if let Err(diagnostic) = result {
+            self.workspace.diagnostics.push(diagnostic);
+        }
     }
 
     pub fn tree(self) -> Tree {
