@@ -191,8 +191,8 @@ impl<'a> Generator<'a> {
         Self::compile_function_body(state, data, &mut c, node.rhs);
 
         c.b.finalize();
-        let is_overloaded = data.definitions.contains_key(&node_id);
-        let name = data.mangle_function_declaration(node_id, is_overloaded);
+        // let is_overloaded = data.definitions.contains_key(&node_id);
+        let name = data.mangle_function_declaration(node_id, true);
         println!("{} :: {}", name, c.b.func.display());
         let fn_id = state
             .module
@@ -601,7 +601,7 @@ impl State {
                 return self.compile_built_in_function(c, *id, args);
             }
             Definition::User(id) | Definition::Foreign(id) | Definition::Overload(id) => {
-                data.mangle_function_declaration(*id, false)
+                data.mangle_function_declaration(*id, true)
             }
             Definition::Resolved(id) => data.mangle_function_declaration(*id, true),
             _ => unreachable!("Definition not found: {}", "failed to get function decl id"),

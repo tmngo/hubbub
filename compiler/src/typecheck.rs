@@ -659,7 +659,7 @@ impl<'a> Typechecker<'a> {
                             }
                             match_found = true;
                             self.definitions.insert(callee_id, resolution);
-                            self.definitions.insert(fn_decl_id, resolution);
+                            // self.definitions.insert(fn_decl_id, resolution);
                             break 'outer;
                         }
                         Definition::BuiltInFunction(built_in_function) => {

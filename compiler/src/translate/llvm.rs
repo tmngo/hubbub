@@ -134,8 +134,8 @@ impl<'ctx> Generator<'ctx> {
                     {
                         continue;
                     }
-                    let is_overloaded = self.data.definitions.contains_key(&ni);
-                    let name = self.data.mangle_function_declaration(ni, is_overloaded);
+                    // let is_overloaded = self.data.definitions.contains_key(&ni);
+                    let name = self.data.mangle_function_declaration(ni, true);
                     self.compile_function_signature(node.lhs, &name);
                 };
             }
@@ -186,10 +186,8 @@ impl<'ctx> Generator<'ctx> {
         node_id: NodeId,
     ) -> FunctionValue<'ctx> {
         let node = self.data.node(node_id);
-        let is_overloaded = self.data.definitions.contains_key(&node_id);
-        let name = self
-            .data
-            .mangle_function_declaration(node_id, is_overloaded);
+        // let is_overloaded = self.data.definitions.contains_key(&node_id);
+        let name = self.data.mangle_function_declaration(node_id, true);
 
         let fn_value = self.module.get_function(&name).unwrap();
 
@@ -673,7 +671,7 @@ impl<'ctx> Generator<'ctx> {
                 return self.compile_built_in_function(*id, args);
             }
             Definition::User(id) | Definition::Foreign(id) | Definition::Overload(id) => {
-                data.mangle_function_declaration(*id, false)
+                data.mangle_function_declaration(*id, true)
             }
             Definition::Resolved(id) => data.mangle_function_declaration(*id, true),
             _ => unreachable!("Definition not found: {}", "failed to get function decl id"),
