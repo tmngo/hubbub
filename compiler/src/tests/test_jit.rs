@@ -161,7 +161,7 @@ fn multiple() {
 }
 #[test]
 fn overload() {
-    test("overload", Test::AotAndJit, "", 0, 3);
+    test("overload", Test::AotAndJit, "", 0, 10);
 }
 #[test]
 fn pointer() {
