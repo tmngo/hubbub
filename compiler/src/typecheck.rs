@@ -309,10 +309,12 @@ impl<'a> Typechecker<'a> {
                 let ltype = self.infer_node(node.lhs)?[0];
                 let rtype = self.infer_node(node.rhs)?[0];
                 if node.rhs != 0 && ltype != rtype {
-                    return Err(Diagnostic::error().with_message(format!(
-                        "mismatched types in assignment: expected {:?}, got {:?}",
-                        self.types[ltype], self.types[rtype]
-                    )));
+                    return Err(Diagnostic::error()
+                        .with_message(format!(
+                            "mismatched types in assignment: expected {:?}, got {:?}",
+                            self.types[ltype], self.types[rtype]
+                        ))
+                        .with_labels(vec![self.tree.label(node.token)]));
                 }
                 0
             }
@@ -495,20 +497,24 @@ impl<'a> Typechecker<'a> {
                             // Expect two type parameters.
                             assert_eq!(node.tag, Tag::Type);
                             if node.rhs - node.lhs != 2 {
-                                return Err(Diagnostic::error().with_message(format!(
-                                    "Expected 2 type parameters, got {}.",
-                                    node.rhs - node.lhs
-                                )));
+                                return Err(Diagnostic::error()
+                                    .with_message(format!(
+                                        "Expected 2 type parameters, got {}.",
+                                        node.rhs - node.lhs
+                                    ))
+                                    .with_labels(vec![self.tree.label(node.token)]));
                             }
                             let ni = self.tree.node_index(node.lhs);
                             let value_type = self.infer_node(ni)?[0];
                             let ni = self.tree.node_index(node.lhs + 1);
                             let length_node = self.tree.node(ni);
-                            assert_eq!(
-                                length_node.tag,
-                                Tag::IntegerLiteral,
-                                "The length of an Array must be an integer literal."
-                            );
+                            if length_node.tag != Tag::IntegerLiteral {
+                                return Err(Diagnostic::error()
+                                    .with_message(
+                                        "The length of an Array must be an integer literal.",
+                                    )
+                                    .with_labels(vec![self.tree.label(length_node.token)]));
+                            }
                             let token_str = self.tree.node_lexeme(ni);
                             let length = token_str.parse::<i64>().unwrap();
                             self.add_array_type(value_type, length as usize)
@@ -517,17 +523,21 @@ impl<'a> Typechecker<'a> {
                             // Map concrete type argument to a pointer type.
                             // Expect one type parameter
                             if node.rhs - node.lhs != 1 {
-                                return Err(Diagnostic::error().with_message(format!(
-                                    "Expected 1 type parameter, got {}.",
-                                    node.rhs - node.lhs
-                                )));
+                                return Err(Diagnostic::error()
+                                    .with_message(format!(
+                                        "Expected 1 type parameter, got {}.",
+                                        node.rhs - node.lhs
+                                    ))
+                                    .with_labels(vec![self.tree.label(node.token)]));
                             }
                             let ni = self.tree.node_index(node.lhs);
                             let value_type = self.infer_node(ni)?[0];
                             self.add_pointer_type(value_type)
                         }
                         _ => {
-                            return Err(Diagnostic::error().with_message("Undefined built-in type"))
+                            return Err(Diagnostic::error()
+                                .with_message("Undefined built-in type")
+                                .with_labels(vec![self.tree.label(node.token)]))
                         }
                     },
                     Definition::User(id) => {
