@@ -149,7 +149,7 @@ fn boolean() {
 }
 #[test]
 fn fibonacci() {
-    test("fibonacci", Test::AotAndJit, FIBONACCI_TREE, 11, 13)
+    test("fibonacci", Test::AotAndJit, FIBONACCI_TREE, 12, 13)
 }
 #[test]
 fn if_else() {
@@ -173,7 +173,7 @@ fn polystructs() {
 }
 #[test]
 fn structs() {
-    test("struct", Test::AotAndJit, STRUCTS_TREE, 23, 7);
+    test("struct", Test::AotAndJit, STRUCTS_TREE, 24, 7);
 }
 #[test]
 fn unicode() {

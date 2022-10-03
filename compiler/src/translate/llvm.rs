@@ -1,5 +1,5 @@
 use crate::{
-    analyze::Lookup,
+    analyze::{BuiltInFunction, Definition, Lookup},
     parse::{Node, NodeId, Tag},
     translate::input::{Data, Input, Layout},
     typecheck::{BuiltInType, Type as Typ, TypeId},
@@ -527,8 +527,14 @@ impl<'ctx> Generator<'ctx> {
                 builder.build_load(ptr, "deref")
             }
             Tag::Add => {
-                let (lhs, rhs) = self.compile_children(state, node);
-                builder.build_int_add(lhs, rhs, "int_add").into()
+                let definition = data.definitions.get(&node_id).unwrap_or_else(|| {
+                    panic!("Definition not found: {}", "failed to get function decl id")
+                });
+                let args = vec![
+                    self.compile_expr(state, node.lhs),
+                    self.compile_expr(state, node.rhs),
+                ];
+                self.compile_call(node_id, definition, args)
             }
             Tag::BitwiseShiftL => {
                 let (lhs, rhs) = self.compile_children(state, node);
@@ -588,60 +594,15 @@ impl<'ctx> Generator<'ctx> {
             Tag::True => self.context.bool_type().const_int(1, false).into(),
             Tag::False => self.context.bool_type().const_int(0, false).into(),
             Tag::Call => {
-                let (function_id, is_resolved_overload) = data
-                    .definitions
-                    .get_definition_info(node.lhs, "failed to get function decl");
-
-                // println!("name:    {}", data.tree.name(node.lhs));
-                // println!(
-                //     "mangled call: {}",
-                //     data.mangle_function_declaration(function_id, false)
-                // );
-
-                let name = data.mangle_function_declaration(function_id, is_resolved_overload);
-
-                // self.module.print_to_stderr();
-
-                // let names: Vec<String> = self
-                //     .module
-                //     .get_functions()
-                //     .map(|f| f.get_name().to_string_lossy().to_string())
-                //     .collect();
-                // dbg!(names);
-
-                let callee = self
-                    .module
-                    .get_function(&name)
-                    .unwrap_or_else(|| panic!("failed to get module function \"{}\"", name));
-
-                // Arguments
-                let arguments = data.node(node.rhs);
-                let mut args = Vec::new();
-
-                for i in arguments.lhs..arguments.rhs {
-                    let ni = data.node_index(i);
-                    let value = self.compile_expr(state, ni);
-                    args.push(value);
-                }
-
-                // Assume one return value.
-                let return_type = data.type_id(node_id);
-
-                let mut argiter = args.iter();
-                let argslice = argiter.by_ref();
-                let argslice = argslice
-                    .map(|&val| val.into())
-                    .collect::<Vec<BasicMetadataValueEnum>>();
-                let argslice = argslice.as_slice();
-                let call_site_value = builder.build_call(callee, argslice, &name);
-                if return_type != BuiltInType::Void as TypeId {
-                    call_site_value
-                        .try_as_basic_value()
-                        .left()
-                        .expect("basic value expected")
-                } else {
-                    self.context.const_struct(&[], false).as_basic_value_enum()
-                }
+                let definition = data.definitions.get(&node.lhs).unwrap_or_else(|| {
+                    panic!("Definition not found: {}", "failed to get function decl id")
+                });
+                let args: Vec<BasicValueEnum> = data
+                    .tree
+                    .range(data.node(node.rhs))
+                    .map(|i| self.compile_expr(state, data.node_index(i)))
+                    .collect();
+                self.compile_call(node_id, definition, args)
             }
             Tag::Identifier => {
                 let name = data.tree.name(node_id);
@@ -698,6 +659,66 @@ impl<'ctx> Generator<'ctx> {
         let lhs = self.compile_expr(state, node.lhs).into_int_value();
         let rhs = self.compile_expr(state, node.rhs).into_int_value();
         (lhs, rhs)
+    }
+
+    fn compile_call(
+        &self,
+        node_id: NodeId,
+        definition: &Definition,
+        args: Vec<BasicValueEnum<'ctx>>,
+    ) -> BasicValueEnum<'ctx> {
+        let (data, builder) = (&self.data, &self.builder);
+        let name = match &definition {
+            Definition::BuiltInFunction(id) => {
+                return self.compile_built_in_function(*id, args);
+            }
+            Definition::User(id) | Definition::Foreign(id) | Definition::Overload(id) => {
+                data.mangle_function_declaration(*id, false)
+            }
+            Definition::Resolved(id) => data.mangle_function_declaration(*id, true),
+            _ => unreachable!("Definition not found: {}", "failed to get function decl id"),
+        };
+
+        let callee = self
+            .module
+            .get_function(&name)
+            .unwrap_or_else(|| panic!("failed to get module function \"{}\"", name));
+
+        // Assume one return value.
+        let return_type = data.type_id(node_id);
+
+        let mut argiter = args.iter();
+        let argslice = argiter.by_ref();
+        let argslice = argslice
+            .map(|&val| val.into())
+            .collect::<Vec<BasicMetadataValueEnum>>();
+        let argslice = argslice.as_slice();
+        let call_site_value = builder.build_call(callee, argslice, &name);
+        if return_type != BuiltInType::Void as TypeId {
+            call_site_value
+                .try_as_basic_value()
+                .left()
+                .expect("basic value expected")
+        } else {
+            self.context.const_struct(&[], false).as_basic_value_enum()
+        }
+    }
+
+    fn compile_built_in_function(
+        &self,
+        built_in_function: BuiltInFunction,
+        args: Vec<BasicValueEnum<'ctx>>,
+    ) -> BasicValueEnum<'ctx> {
+        match built_in_function {
+            BuiltInFunction::Add => self
+                .builder
+                .build_int_add(
+                    args[0].into_int_value(),
+                    args[1].into_int_value(),
+                    "int_add",
+                )
+                .into(),
+        }
     }
 
     fn locate(&self, state: &mut State<'ctx>, node_id: NodeId) -> Location<'ctx> {

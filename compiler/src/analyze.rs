@@ -15,7 +15,7 @@ pub struct Analyzer<'a> {
     workspace: &'a mut Workspace,
     tree: &'a Tree,
 
-    builtins: HashMap<&'a str, BuiltInType>,
+    builtins: HashMap<&'a str, Definition>,
     current: usize,
     foreign: Scope<'a>,
     module_scopes: Vec<usize>,
@@ -23,17 +23,37 @@ pub struct Analyzer<'a> {
     struct_scopes: HashMap<u32, usize>,
 
     pub definitions: HashMap<NodeId, Definition>,
-    pub overload_sets: HashMap<NodeId, Vec<NodeId>>,
+    pub overload_sets: HashMap<NodeId, Vec<Definition>>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Definition {
     BuiltIn(BuiltInType),
+    BuiltInFunction(BuiltInFunction),
     User(NodeId),
     Foreign(u32),
     Overload(u32),
     Resolved(u32),
     NotFound,
+}
+
+impl Definition {
+    pub fn id(&self) -> NodeId {
+        match self {
+            Definition::BuiltIn(id) => *id as NodeId,
+            Definition::BuiltInFunction(id) => *id as NodeId,
+            Definition::User(id)
+            | Definition::Foreign(id)
+            | Definition::Overload(id)
+            | Definition::Resolved(id) => *id,
+            Definition::NotFound => unreachable!("definition not found"),
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum BuiltInFunction {
+    Add,
 }
 
 // Assert that Tag size <= 1 byte
@@ -42,7 +62,7 @@ pub const _ASSERT_LOOKUP_SIZE: () = assert_size::<Definition>(8);
 #[derive(Debug, Clone)]
 pub struct Scope<'a> {
     symbols: HashMap<&'a str, u32>,
-    fn_symbols: HashMap<&'a str, Vec<u32>>,
+    fn_symbols: HashMap<&'a str, Vec<Definition>>,
     parent: usize,
     named_imports: Vec<usize>,
     unnamed_imports: Vec<usize>,
@@ -73,7 +93,7 @@ impl<'a> Scope<'a> {
         self.symbols.get(name)
     }
 
-    pub fn get_fn(&self, name: &str) -> Option<&Vec<u32>> {
+    pub fn get_fn(&self, name: &str) -> Option<&Vec<Definition>> {
         self.fn_symbols.get(name)
     }
 
@@ -89,16 +109,17 @@ pub trait Resolve {
 impl<'a> Analyzer<'a> {
     pub fn new(workspace: &'a mut Workspace, tree: &'a Tree) -> Self {
         let builtins = HashMap::from([
-            ("Bool", BuiltInType::Boolean),
-            ("I64", BuiltInType::Integer),
-            ("Int", BuiltInType::Integer),
-            ("Int32", BuiltInType::Integer),
-            ("Int64", BuiltInType::Integer),
-            ("Float", BuiltInType::Float),
-            ("F64", BuiltInType::Float),
-            ("String", BuiltInType::String),
-            ("Pointer", BuiltInType::Pointer),
-            ("Array", BuiltInType::Array),
+            ("Bool", Definition::BuiltIn(BuiltInType::Boolean)),
+            ("I64", Definition::BuiltIn(BuiltInType::Integer)),
+            ("Int", Definition::BuiltIn(BuiltInType::Integer)),
+            ("Int32", Definition::BuiltIn(BuiltInType::Integer)),
+            ("Int64", Definition::BuiltIn(BuiltInType::Integer)),
+            ("Float", Definition::BuiltIn(BuiltInType::Float)),
+            ("F64", Definition::BuiltIn(BuiltInType::Float)),
+            ("String", Definition::BuiltIn(BuiltInType::String)),
+            ("Pointer", Definition::BuiltIn(BuiltInType::Pointer)),
+            ("Array", Definition::BuiltIn(BuiltInType::Array)),
+            ("+", Definition::BuiltInFunction(BuiltInFunction::Add)),
         ]);
         let foreign = Scope::from(
             [
@@ -169,7 +190,7 @@ impl<'a> Analyzer<'a> {
                     let current_scope = &mut self.scopes[self.current];
                     // dbg!(self.current);
                     // dbg!(name);
-                    Self::define_function(current_scope, name, &[node_id])?;
+                    Self::define_function(current_scope, name, &[Definition::User(node_id)])?;
                 }
                 Tag::Import => {
                     // let module_name = self.tree.node_lexeme_offset(&node, 1).trim_matches('"');
@@ -303,7 +324,7 @@ impl<'a> Analyzer<'a> {
                                     ))
                                     .with_labels(vec![self.tree.label(token_id)]));
                             }
-                            self.set_node_definition(id, definition.clone())?;
+                            self.set_node_definition(id, definition)?;
                             self.set_node_definition(node.rhs, definition)?;
                             return Ok(());
                         }
@@ -349,6 +370,12 @@ impl<'a> Analyzer<'a> {
                     self.definitions
                         .insert(node.rhs, Definition::User(field_index));
                 }
+            }
+            Tag::Add => {
+                let definition = self.lookup(id);
+                self.set_node_definition(id, definition)?;
+                self.resolve_node(node.lhs)?;
+                self.resolve_node(node.rhs)?;
             }
             Tag::Block | Tag::Module => {
                 self.enter_scope();
@@ -451,6 +478,7 @@ impl<'a> Analyzer<'a> {
             Definition::User(_)
             | Definition::Overload(_)
             | Definition::BuiltIn(_)
+            | Definition::BuiltInFunction(_)
             | Definition::Resolved(_) => {
                 self.definitions.insert(node_id, definition);
             }
@@ -507,7 +535,7 @@ impl<'a> Analyzer<'a> {
         Ok(())
     }
 
-    fn define_function(scope: &mut Scope<'a>, name: &'a str, ids: &[u32]) -> Result<()> {
+    fn define_function(scope: &mut Scope<'a>, name: &'a str, ids: &[Definition]) -> Result<()> {
         if let Err(mut error) = scope.fn_symbols.try_insert(name, Vec::from(ids)) {
             error.entry.get_mut().extend(ids);
         }
@@ -515,19 +543,19 @@ impl<'a> Analyzer<'a> {
     }
 
     fn lookup(&mut self, id: NodeId) -> Definition {
-        let name = self.tree.node_lexeme(id);
+        let name = self.tree.name(id);
         if self.scopes.is_empty() {
             return Definition::NotFound;
         }
         let mut scope_index = self.current;
-        let mut overload_set = vec![];
+        let mut overload_set = Vec::<Definition>::new();
         loop {
             // Check if the name is defined in the current scope.
             if let Some(&index) = self.scopes[scope_index].get(name) {
                 return Definition::User(index);
             }
-            if let Some(ids) = self.scopes[scope_index].get_fn(name) {
-                overload_set.extend(ids);
+            if let Some(definitions) = self.scopes[scope_index].get_fn(name) {
+                overload_set.extend(definitions);
             }
             // Check if the name is defined in imported scopes.
             // for &import_scope_index in &self.scopes[scope_index].unnamed_imports {
@@ -537,15 +565,19 @@ impl<'a> Analyzer<'a> {
             // }
             // If the name isn't in the global scope, it's undefined.
             if scope_index == 0 {
-                if let Some(&index) = self.builtins.get(name) {
-                    return Definition::BuiltIn(index);
+                if let Some(&definition) = self.builtins.get(name) {
+                    match definition {
+                        Definition::BuiltIn(_) => return definition,
+                        Definition::BuiltInFunction(_) => overload_set.push(definition),
+                        _ => unreachable!(),
+                    }
                 }
                 if let Some(&index) = self.foreign.get(name) {
                     return Definition::Foreign(index);
                 }
                 return match overload_set.len() {
                     0 => Definition::NotFound,
-                    1 => Definition::User(overload_set[0]),
+                    1 => overload_set[0],
                     _ => {
                         self.overload_sets.insert(id, overload_set);
                         Definition::Overload(id)
@@ -569,7 +601,7 @@ impl<'a> Analyzer<'a> {
             let overload_set = ids.clone();
             return match ids.len() {
                 0 => Definition::NotFound,
-                1 => Definition::User(overload_set[0]),
+                1 => Definition::User(overload_set[0].id()),
                 _ => {
                     self.overload_sets.insert(id, overload_set);
                     Definition::Overload(id)
@@ -578,8 +610,8 @@ impl<'a> Analyzer<'a> {
         }
         // If the name isn't in the global scope, it's undefined.
         if scope_index == 0 {
-            if let Some(&index) = self.builtins.get(name) {
-                return Definition::BuiltIn(index);
+            if let Some(&definition) = self.builtins.get(name) {
+                return definition;
             }
             if let Some(&index) = self.foreign.get(name) {
                 return Definition::Foreign(index);
@@ -601,7 +633,6 @@ impl<'a> Analyzer<'a> {
 
 pub trait Lookup {
     fn get_definition_id(&self, node_id: NodeId, msg: &str) -> NodeId;
-    fn get_definition_info(&self, node_id: NodeId, msg: &str) -> (NodeId, bool);
 }
 
 impl Lookup for HashMap<NodeId, Definition> {
@@ -609,27 +640,7 @@ impl Lookup for HashMap<NodeId, Definition> {
         let definition = self
             .get(&node_id)
             .unwrap_or_else(|| panic!("Definition not found: {}", msg));
-        match definition {
-            Definition::BuiltIn(id) => *id as u32,
-            Definition::User(id)
-            | Definition::Foreign(id)
-            | Definition::Overload(id)
-            | Definition::Resolved(id) => *id,
-            Definition::NotFound => unreachable!("Definition not found: {}", msg),
-        }
-    }
-    fn get_definition_info(&self, node_id: NodeId, msg: &str) -> (NodeId, bool) {
-        let definition = self
-            .get(&node_id)
-            .unwrap_or_else(|| panic!("Definition not found: {}", msg));
-        match definition {
-            Definition::BuiltIn(id) => (*id as u32, false),
-            Definition::User(id) | Definition::Foreign(id) | Definition::Overload(id) => {
-                (*id, false)
-            }
-            Definition::Resolved(id) => (*id, true),
-            Definition::NotFound => unreachable!("Definition not found: {}", msg),
-        }
+        definition.id()
     }
 }
 

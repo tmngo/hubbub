@@ -1,5 +1,5 @@
 use crate::{
-    analyze::Lookup,
+    analyze::{BuiltInFunction, Definition, Lookup},
     builtin,
     parse::{Node, NodeId, Tag},
     translate::input::{sizeof, Data, Input, Layout, Shape},
@@ -449,8 +449,14 @@ impl State {
                 Location::pointer(ptr, 0).to_val(c, layout)
             }
             Tag::Add => {
-                let (lhs, rhs) = self.compile_children(data, c, node);
-                Val::Scalar(c.b.ins().iadd(lhs, rhs))
+                let callee_id = node_id;
+                let args = vec![
+                    self.compile_expr(data, c, node.lhs)
+                        .cranelift_value(c, data.layout(node.lhs)),
+                    self.compile_expr(data, c, node.rhs)
+                        .cranelift_value(c, data.layout(node.rhs)),
+                ];
+                self.compile_call(data, c, node_id, callee_id, args)
             }
             Tag::BitwiseShiftL => {
                 let (lhs, rhs) = self.compile_children(data, c, node);
@@ -497,48 +503,17 @@ impl State {
             Tag::True => Val::Scalar(c.b.ins().iconst(ty, 1)),
             Tag::False => Val::Scalar(c.b.ins().iconst(ty, 0)),
             Tag::Call => {
-                let mut sig = self.module.make_signature();
-
-                let (function_id, is_resolved_overload) = data
-                    .definitions
-                    .get_definition_info(node.lhs, "failed to get function decl");
-
-                // println!(
-                //     "mangled call: {}",
-                //     data.mangle_function_declaration(function_id, is_resolved_overload)
-                // );
-
-                let name = data.mangle_function_declaration(function_id, is_resolved_overload);
-
-                // Arguments
-                let arguments = data.node(node.rhs);
-                let mut args = Vec::new();
-                for i in arguments.lhs..arguments.rhs {
-                    let ni = data.node_index(i);
-                    let layout = data.layout(ni);
-                    // For structs, this value is a struct pointer.
-                    let value = self.compile_expr(data, c, ni).cranelift_value(c, layout);
-                    sig.params.push(AbiParam::new(ty));
-                    args.push(value);
-                }
-
-                // Assume one return value.
-                let return_type = data.type_id(node_id);
-                if return_type != BuiltInType::Void as TypeId {
-                    sig.returns.push(AbiParam::new(ty));
-                }
-
-                let callee = self
-                    .module
-                    .declare_function(&name, Linkage::Import, &sig)
-                    .unwrap();
-                let local_callee = self.module.declare_func_in_func(callee, c.b.func);
-                let call = c.b.ins().call(local_callee, &args);
-                if return_type != BuiltInType::Void as TypeId {
-                    Val::Scalar(c.b.inst_results(call)[0])
-                } else {
-                    Val::Scalar(c.b.ins().iconst(ty, 0))
-                }
+                let callee_id = node.lhs;
+                let args = data
+                    .tree
+                    .range(data.node(node.rhs))
+                    .map(|i| {
+                        let ni = data.node_index(i);
+                        self.compile_expr(data, c, data.node_index(i))
+                            .cranelift_value(c, data.layout(ni))
+                    })
+                    .collect();
+                self.compile_call(data, c, node_id, callee_id, args)
             }
             Tag::Identifier => self.locate(data, node_id).to_val(c, layout),
             Tag::Subscript => {
@@ -604,6 +579,64 @@ impl State {
                 Location::pointer(addr, 0)
             }
             _ => unreachable!("Invalid lvalue {:?} for assignment", node.tag),
+        }
+    }
+
+    fn compile_call(
+        &mut self,
+        data: &Data,
+        c: &mut FnContext,
+        node_id: NodeId,
+        callee_id: NodeId,
+        args: Vec<Value>,
+    ) -> Val {
+        let ty = c.ptr_type;
+
+        let definition = data.definitions.get(&callee_id).unwrap_or_else(|| {
+            panic!("Definition not found: {}", "failed to get function decl id")
+        });
+
+        let name = match definition {
+            Definition::BuiltInFunction(id) => {
+                return self.compile_built_in_function(c, *id, args);
+            }
+            Definition::User(id) | Definition::Foreign(id) | Definition::Overload(id) => {
+                data.mangle_function_declaration(*id, false)
+            }
+            Definition::Resolved(id) => data.mangle_function_declaration(*id, true),
+            _ => unreachable!("Definition not found: {}", "failed to get function decl id"),
+        };
+
+        let mut sig = self.module.make_signature();
+        sig.params = args.iter().map(|_| AbiParam::new(ty)).collect();
+
+        // Assume one return value.
+        let return_type = data.type_id(node_id);
+        if return_type != BuiltInType::Void as TypeId {
+            sig.returns.push(AbiParam::new(ty));
+        }
+
+        let callee = self
+            .module
+            .declare_function(&name, Linkage::Import, &sig)
+            .unwrap();
+        let local_callee = self.module.declare_func_in_func(callee, c.b.func);
+        let call = c.b.ins().call(local_callee, &args);
+        if return_type != BuiltInType::Void as TypeId {
+            Val::Scalar(c.b.inst_results(call)[0])
+        } else {
+            Val::Scalar(c.b.ins().iconst(ty, 0))
+        }
+    }
+
+    fn compile_built_in_function(
+        &mut self,
+        c: &mut FnContext,
+        built_in_function: BuiltInFunction,
+        args: Vec<Value>,
+    ) -> Val {
+        match built_in_function {
+            BuiltInFunction::Add => Val::Scalar(c.b.ins().iadd(args[0], args[1])),
         }
     }
 

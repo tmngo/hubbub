@@ -386,8 +386,6 @@ impl<'w> Parser<'w> {
     /// root-decl = fn-decl | var-decl | struct-decl | module-decl
     fn parse_root_declaration(&mut self) -> Result<NodeId> {
         while self.match_token(TokenTag::Newline) {}
-        self.assert_tokens(&[TokenTag::Identifier, TokenTag::Import], 0)?;
-        // self.assert_tokens(&[TokenTag::Colon, TokenTag::ColonColon], 1);
         // Look at the token after the '::' or ':'.
         if self.current_tag() == TokenTag::Import {
             return self.parse_module_import();
@@ -409,6 +407,7 @@ impl<'w> Parser<'w> {
             // TokenTag::Function => return self.parse_decl_function(),
             // identifier :: struct ...
             TokenTag::Import => self.parse_module_import(),
+            TokenTag::Operator => self.parse_decl_function(),
             TokenTag::Struct => self.parse_decl_struct(),
             // identifier :: ...
             _ => self.parse_decl_variable(),
@@ -472,8 +471,9 @@ impl<'w> Parser<'w> {
 
     /// function-decl = ideentifier '::' '(' ')'
     fn parse_decl_function(&mut self) -> Result<NodeId> {
-        self.expect_token(TokenTag::Identifier)?; // identifier
+        self.shift_token(); // Identifier or operator
         let token_index = self.expect_token(TokenTag::ColonColon)?; // '::'
+        self.match_token(TokenTag::Operator);
         let prototype = self.parse_parametric_prototype()?;
         let body = if self.current_tag() == TokenTag::End {
             self.expect_token_and_newline(TokenTag::End)?; // 'end'
@@ -496,7 +496,7 @@ impl<'w> Parser<'w> {
         }
     }
 
-    /// type-parameters =
+    /// type-parameters = '{' type-parameter (',' type-parameter)* ','? '}'
     fn parse_type_parameters(&mut self) -> Result<NodeId> {
         let token = self.expect_token(TokenTag::BraceL)?;
         let range = parse_while!(self, self.token_isnt(TokenTag::BraceR), {
@@ -519,7 +519,7 @@ impl<'w> Parser<'w> {
         self.add_node(Tag::Prototype, 0, parameters, returns)
     }
 
-    /// parameters =
+    /// parameters = '(' field (',' field)* ')'
     fn parse_parameters(&mut self) -> Result<NodeId> {
         let token = self.expect_token(TokenTag::ParenL)?;
         let mut source_index = 0;

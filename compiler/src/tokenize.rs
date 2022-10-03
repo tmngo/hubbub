@@ -53,6 +53,7 @@ pub enum Tag {
     MinusMinus,
     Module,
     Newline,
+    Operator,
     ParenL,
     ParenR,
     Percent,
@@ -110,6 +111,7 @@ static KEYWORDS: phf::Map<&'static str, Tag> = phf_map! {
 
 static HASHTAGS: phf::Map<&'static str, Tag> = phf_map! {
     "import" => Tag::Import,
+    "operator" => Tag::Operator,
 };
 
 #[derive(Copy, Clone, Debug)]
