@@ -1258,9 +1258,9 @@ impl Tree {
         let node_name = self.name(id);
         let module_token_id = self.token_source(node.token).1;
         if let Some(module) = self.token_module(module_token_id) {
-            // if module.name == "Base" {
-            //     return format!("{}", node_name);
-            // }
+            if module.name == "GLFW" {
+                return node_name.to_string();
+            }
             format!("{}.{}", &module.name, node_name)
         } else {
             node_name.to_string()

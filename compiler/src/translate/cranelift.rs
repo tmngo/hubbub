@@ -17,6 +17,7 @@ use cranelift::prelude::{
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataContext, FuncId, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
+use dlopen::raw::Library;
 use std::{collections::HashMap, fs, path::Path};
 
 pub trait CraneliftModule: Module {
@@ -61,7 +62,7 @@ pub struct Generator<'a> {
 impl<'a> Generator<'a> {
     pub fn new(input: &'a Input<'a>, output_name: String, use_jit: bool) -> Self {
         let flag_builder = settings::builder();
-        // flag_builder.enable("is_pic").unwrap();
+        // flag_builder.set("is_pic", "true").unwrap();
         let isa_builder = lookup(target_lexicon::HOST).unwrap();
         let isa = isa_builder
             .finish(settings::Flags::new(flag_builder))
@@ -75,6 +76,25 @@ impl<'a> Generator<'a> {
                 ("Base.alloc", builtin::alloc as *const u8),
                 ("Base.dealloc", builtin::dealloc as *const u8),
             ]);
+
+            let dylib_paths = vec!["SimpleDLL.dll", "glfw3.dll"];
+            // Leak to prevent the libraries from being dropped and unloaded.
+            let dylibs = Box::leak(
+                dylib_paths
+                    .into_iter()
+                    .map(|path| Library::open(path).unwrap())
+                    .collect(),
+            );
+            let symbol_lookup_fn = Box::new(|name: &str| {
+                for lib in &*dylibs {
+                    if let Ok(symbol) = unsafe { lib.symbol::<*const u8>(name) } {
+                        return Some(symbol);
+                    }
+                }
+                None
+            });
+            jit_builder.symbol_lookup_fn(symbol_lookup_fn);
+
             Box::new(JITModule::new(jit_builder))
         } else {
             let object_builder =
@@ -600,9 +620,10 @@ impl State {
             Definition::BuiltInFunction(id) => {
                 return self.compile_built_in_function(c, *id, args);
             }
-            Definition::User(id) | Definition::Foreign(id) | Definition::Overload(id) => {
+            Definition::User(id) | Definition::Overload(id) => {
                 data.mangle_function_declaration(*id, true)
             }
+            Definition::Foreign(_) => data.tree.name(callee_id).to_string(),
             Definition::Resolved(id) => data.mangle_function_declaration(*id, true),
             _ => unreachable!("Definition not found: {}", "failed to get function decl id"),
         };

@@ -109,6 +109,7 @@ pub trait Resolve {
 impl<'a> Analyzer<'a> {
     pub fn new(workspace: &'a mut Workspace, tree: &'a Tree) -> Self {
         let builtins = HashMap::from([
+            ("Void", Definition::BuiltIn(BuiltInType::Void)),
             ("Bool", Definition::BuiltIn(BuiltInType::Boolean)),
             ("I64", Definition::BuiltIn(BuiltInType::Integer)),
             ("Int", Definition::BuiltIn(BuiltInType::Integer)),
@@ -123,7 +124,8 @@ impl<'a> Analyzer<'a> {
         ]);
         let foreign = Scope::from(
             [
-                // ("putchar", 1),
+                ("putchar", 1),
+                ("DisplayHelloFromMyDLL", 9),
                 // ("print_int", 2),
                 // ("alloc", 3),
                 // ("dealloc", 4),
@@ -482,7 +484,9 @@ impl<'a> Analyzer<'a> {
             | Definition::Resolved(_) => {
                 self.definitions.insert(node_id, definition);
             }
-            Definition::Foreign(_) => {}
+            Definition::Foreign(_) => {
+                self.definitions.insert(node_id, definition);
+            }
             Definition::NotFound => {
                 let name = self.tree.name(node_id);
                 let token_id = self.tree.node(node_id).token;

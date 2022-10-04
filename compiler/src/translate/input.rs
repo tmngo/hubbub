@@ -84,7 +84,7 @@ impl<'a> Data<'a> {
         } else {
             lhs
         };
-        if includes_types && !full_name.starts_with("Base.") {
+        if includes_types && !full_name.starts_with("Base.") && !full_name.starts_with("glfw") {
             let parameters = self.node(prototype.lhs);
             if parameters.rhs > parameters.lhs {
                 write!(full_name, "|").ok();

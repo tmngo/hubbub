@@ -31,6 +31,8 @@ pub fn link(object_filename: &str, output_filename: &str, base_dir: &str) {
         .join(base_dir)
         .join("hubbub_runtime.lib");
 
+    // Static libs are found via absolute path or in PATH.
+    // Dynamic libs are found next to the executable or in PATH.
     if tool.is_like_msvc() {
         command.args([
             &format!("-Fe{}", output_filename),
@@ -42,6 +44,8 @@ pub fn link(object_filename: &str, output_filename: &str, base_dir: &str) {
             "userenv.lib",
             "ws2_32.lib",
             "msvcrt.lib",
+            "C:\\Users\\Tim\\Projects\\hubbub\\target\\debug\\glfw3dll.lib",
+            "C:\\Users\\Tim\\Projects\\hubbub\\target\\debug\\SimpleDLL.lib",
         ]);
     } else if tool.is_like_clang() {
         command.args([
