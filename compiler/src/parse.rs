@@ -7,6 +7,7 @@ use codespan_reporting::diagnostic::{Diagnostic, Label};
 use std::{
     fmt::{self, Debug},
     ops::Range,
+    path::PathBuf,
 };
 
 /*
@@ -438,12 +439,16 @@ impl<'w> Parser<'w> {
 
         if self.tree.get_module_index(&module_name).is_none() {
             let filename = &format!("{}.hb", module_name);
-            let path = std::env::current_exe()
-                .unwrap()
-                .parent()
-                .unwrap()
-                .join("modules")
-                .join(filename);
+            let path = if let Ok(value) = std::env::var("ABSOLUTE_MODULE_PATH") {
+                PathBuf::from(value).join(filename)
+            } else {
+                std::env::current_exe()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .join("modules")
+                    .join(filename)
+            };
             if path.exists() {
                 self.tree.modules.push(Module {
                     name: module_name,
