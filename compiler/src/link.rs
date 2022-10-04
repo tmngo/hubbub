@@ -1,3 +1,4 @@
+use crate::workspace::Workspace;
 use std::io::{self, Write};
 use std::process::Command;
 use target_lexicon::Triple;
@@ -21,49 +22,51 @@ pub fn link(object_filename: &str, output_filename: &str, base_dir: &str) {
         .target(host)
         .opt_level(0)
         .get_compiler();
-
     let mut command = tool.to_command();
 
-    let lib_path = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
+    let compiler_path = std::env::current_exe().unwrap();
+    let compiler_dir = compiler_path.parent().unwrap().to_path_buf();
+    let runtime_path = compiler_dir
         .join(base_dir)
-        .join("hubbub_runtime.lib");
+        .join("hubbub_runtime.lib")
+        .into_os_string()
+        .into_string()
+        .unwrap();
+
+    let static_library_names = [
+        "advapi32", "bcrypt", "kernel32", "userenv", "ws2_32", "msvcrt",
+    ];
 
     // Static libs are found via absolute path or in PATH.
     // Dynamic libs are found next to the executable or in PATH.
+    let mut args = vec![];
     if tool.is_like_msvc() {
-        command.args([
-            &format!("-Fe{}", output_filename),
-            object_filename,
-            lib_path.to_str().unwrap(),
-            "advapi32.lib",
-            "bcrypt.lib",
-            "kernel32.lib",
-            "userenv.lib",
-            "ws2_32.lib",
-            "msvcrt.lib",
-            "C:\\Users\\Tim\\Projects\\hubbub\\target\\debug\\glfw3dll.lib",
-            "C:\\Users\\Tim\\Projects\\hubbub\\target\\debug\\SimpleDLL.lib",
+        args.extend([
+            format!("-Fe{}", output_filename),
+            object_filename.to_string(),
+            runtime_path,
         ]);
+        args.extend(
+            static_library_names
+                .iter()
+                .map(|name| format!("{}.lib", name)),
+        );
     } else if tool.is_like_clang() {
-        command.args([
-            &format!("-o{}", output_filename),
-            object_filename,
-            lib_path.to_str().unwrap(),
-            "-ladvapi32",
-            "-lbcrypt",
-            "-lkernel32",
-            "-luserenv",
-            "-lws2_32",
-            "-lmsvcrt",
-            "-nostdlib",
+        args.extend([
+            format!("-o{}", output_filename),
+            object_filename.to_string(),
+            runtime_path,
         ]);
+        args.extend(
+            static_library_names
+                .iter()
+                .map(|name| format!("-l{}", name)),
+        );
     } else {
         println!("Could not find clang or cl.");
         return;
     };
+    command.args(args);
 
     println!("Command: {:?}", command);
 
