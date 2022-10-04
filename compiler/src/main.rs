@@ -1,7 +1,10 @@
 #![feature(map_try_insert)]
 #![feature(option_result_contains)]
 
-use crate::workspace::Workspace;
+use crate::{
+    link::{link, set_default_absolute_module_path},
+    workspace::Workspace,
+};
 use std::{collections::HashSet, path::Path, time::Instant};
 
 pub mod analyze;
@@ -17,6 +20,7 @@ mod utils;
 mod workspace;
 
 fn main() {
+    set_default_absolute_module_path();
     let args: Vec<String> = std::env::args().collect();
     let flags: HashSet<&str> = HashSet::from_iter(args.iter().skip(2).map(|s| s.as_str()));
     if args.len() == 1 {
@@ -104,8 +108,12 @@ fn main() {
             Path::new(&format!("llvm{}", &obj_filename)),
         );
     } else {
-        let generator =
-            translate::cranelift::Generator::new(&input, "object_file".to_string(), use_jit);
+        let generator = translate::cranelift::Generator::new(
+            &workspace,
+            &input,
+            "object_file".to_string(),
+            use_jit,
+        );
         generator.compile_nodes(Path::new(&obj_filename));
     }
     let t_generate = start.elapsed();
@@ -114,13 +122,14 @@ fn main() {
     if !use_jit {
         println!("--- BEGIN LINK [host: {}]", target_lexicon::HOST);
         if use_llvm {
-            link::link(
+            link(
+                &workspace,
                 &format!("llvm{}", &obj_filename),
                 &format!("llvm{}", &exe_filename),
                 "",
             );
         } else {
-            link::link(&obj_filename, &exe_filename, "");
+            link(&workspace, &obj_filename, &exe_filename, "");
         }
         println!("--- END LINK\n");
     }

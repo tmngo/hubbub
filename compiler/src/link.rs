@@ -15,7 +15,7 @@ use target_lexicon::Triple;
  *
  */
 
-pub fn link(object_filename: &str, output_filename: &str, base_dir: &str) {
+pub fn link(workspace: &Workspace, object_filename: &str, output_filename: &str, base_dir: &str) {
     let host = &format!("{}", Triple::host());
     let tool = cc::Build::new()
         .host(host)
@@ -51,6 +51,14 @@ pub fn link(object_filename: &str, output_filename: &str, base_dir: &str) {
                 .iter()
                 .map(|name| format!("{}.lib", name)),
         );
+        args.extend(workspace.library_files.iter().map(|file| {
+            compiler_dir
+                .join(file.as_str())
+                .with_extension("lib")
+                .into_os_string()
+                .into_string()
+                .unwrap()
+        }));
     } else if tool.is_like_clang() {
         args.extend([
             format!("-o{}", output_filename),
@@ -95,4 +103,10 @@ pub fn link_gcc(object_filename: &str, output_filename: &str) {
     io::stdout().write_all(&output.stdout).unwrap();
     io::stderr().write_all(&output.stderr).unwrap();
     assert!(output.status.success());
+}
+
+pub fn set_default_absolute_module_path() {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let modules_path = std::path::Path::new(&manifest_dir).with_file_name("modules");
+    std::env::set_var("ABSOLUTE_MODULE_PATH", modules_path);
 }

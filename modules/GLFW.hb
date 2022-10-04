@@ -1,6 +1,13 @@
 // Window :: Pointer{Void}
 // Monitor :: Pointer{Int}
 
+#foreign-library "SimpleDLL"
+
+DisplayHelloFromMyDLL :: () end
+
+
+#foreign-library "glfw3"
+
 glfwInit :: () -> Int end
 
 glfwCreateWindow :: (width: Int, height: Int, title: Pointer{Int}, monitor: Int, share: Int) -> Pointer{Int} end

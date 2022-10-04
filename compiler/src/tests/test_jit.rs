@@ -1,6 +1,6 @@
 use crate::{
     analyze::Analyzer,
-    link,
+    link::{link, set_default_absolute_module_path},
     parse::Parser,
     tests::input::*,
     tokenize::Tokenizer,
@@ -27,6 +27,7 @@ pub fn test(
     expected_definitions: usize,
     expected_exit_code: i64,
 ) {
+    set_default_absolute_module_path();
     let path = Path::new("../examples/tests/")
         .join(filename)
         .with_extension("hb");
@@ -67,6 +68,7 @@ pub fn test(
 
     test_backend(
         Backend::Cranelift,
+        &workspace,
         filename,
         &input,
         true,
@@ -75,17 +77,26 @@ pub fn test(
     if matches!(test, Test::AotAndJit) {
         test_backend(
             Backend::Cranelift,
+            &workspace,
             filename,
             &input,
             false,
             expected_exit_code,
         );
-        test_backend(Backend::Llvm, filename, &input, false, expected_exit_code);
+        test_backend(
+            Backend::Llvm,
+            &workspace,
+            filename,
+            &input,
+            false,
+            expected_exit_code,
+        );
     }
 }
 
 pub fn test_backend(
     backend: Backend,
+    workspace: &Workspace,
     filename: &str,
     input: &Input,
     use_jit: bool,
@@ -100,7 +111,7 @@ pub fn test_backend(
     let obj_path = Path::new(&obj_filename);
     if use_jit {
         if let Backend::Cranelift = backend {
-            let generator = Generator::new(input, "".to_string(), use_jit);
+            let generator = Generator::new(workspace, input, "".to_string(), use_jit);
 
             let result = generator.compile_nodes(obj_path);
             assert!(
@@ -112,14 +123,14 @@ pub fn test_backend(
         }
     } else {
         if let Backend::Cranelift = backend {
-            let generator = Generator::new(input, "".to_string(), use_jit);
+            let generator = Generator::new(workspace, input, "".to_string(), use_jit);
             generator.compile_nodes(obj_path);
         } else {
             llvm::compile(input, use_jit, obj_path);
         }
         let exe_filename = format!("../test-{}-{}.exe", prefix, filename);
         let exe_path = Path::new(&exe_filename);
-        link::link(&obj_filename, &exe_filename, "../");
+        link(workspace, &obj_filename, &exe_filename, "../");
         let output = Command::new(&exe_filename)
             .output()
             .expect("failed to execute");

@@ -11,6 +11,7 @@ use codespan_reporting::{
 pub struct Workspace {
     pub files: SimpleFiles<String, String>,
     pub diagnostics: Vec<Diagnostic<usize>>,
+    pub library_files: Vec<String>,
 }
 
 pub type Result<T> = core::result::Result<T, Diagnostic<usize>>;
@@ -20,6 +21,7 @@ impl Workspace {
         Self {
             files: SimpleFiles::new(),
             diagnostics: vec![],
+            library_files: vec![],
         }
     }
 

@@ -36,6 +36,8 @@ pub enum Tag {
     Equal,
     EqualEqual,
     False,
+    Foreign,
+    ForeignLibrary,
     Greater,
     GreaterEqual,
     GreaterGreater,
@@ -110,6 +112,8 @@ static KEYWORDS: phf::Map<&'static str, Tag> = phf_map! {
 };
 
 static HASHTAGS: phf::Map<&'static str, Tag> = phf_map! {
+    "foreign" => Tag::Foreign,
+    "foreign-library" => Tag::ForeignLibrary,
     "import" => Tag::Import,
     "operator" => Tag::Operator,
 };

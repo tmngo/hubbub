@@ -400,6 +400,13 @@ impl<'a> Typechecker<'a> {
                                 .clone(),
                         ),
                         Definition::Overload(_) => unreachable!(),
+                        // Definition::Foreign(_) => {
+                        //     let ptr_type = self.add_pointer_type(2);
+                        //     self.add_function_type(Type::Function {
+                        //         parameters: vec![],
+                        //         returns: vec![ptr_type],
+                        //     })
+                        // }
                         _ => 0,
                     }
                 } else {
@@ -765,7 +772,7 @@ impl<'a> Typechecker<'a> {
                     }
                 }
             }
-            Definition::BuiltInFunction(_) => {}
+            Definition::BuiltInFunction(_) | Definition::Foreign(_) => {}
             _ => unreachable!("Definition not found: {}", self.tree.name(callee_id)),
         }
         Ok(())

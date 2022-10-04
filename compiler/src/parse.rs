@@ -388,6 +388,10 @@ impl<'w> Parser<'w> {
     fn parse_root_declaration(&mut self) -> Result<NodeId> {
         while self.match_token(TokenTag::Newline) {}
         // Look at the token after the '::' or ':'.
+        if self.current_tag() == TokenTag::ForeignLibrary {
+            self.parse_foreign_library()?;
+            return self.parse_root_declaration();
+        }
         if self.current_tag() == TokenTag::Import {
             return self.parse_module_import();
         }
@@ -472,6 +476,25 @@ impl<'w> Parser<'w> {
         }
         self.match_token(TokenTag::Newline);
         self.add_node(Tag::Import, module_token, lhs, rhs)
+    }
+
+    fn parse_foreign_library(&mut self) -> Result<()> {
+        self.expect_token(TokenTag::ForeignLibrary)?;
+        let name_token = self.expect_token(TokenTag::StringLiteral)?;
+        let current_source = self.tree.token_source(name_token).0;
+        let library_name = self
+            .tree
+            .token(name_token)
+            .to_str(current_source)
+            .trim_matches('"')
+            .to_string();
+        for name in &self.workspace.library_files {
+            if &library_name == name {
+                return Ok(());
+            }
+        }
+        self.workspace.library_files.push(library_name);
+        Ok(())
     }
 
     /// function-decl = ideentifier '::' '(' ')'

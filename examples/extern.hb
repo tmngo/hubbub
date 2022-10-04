@@ -13,7 +13,7 @@ main :: () -> Int
     while true
         glfwSwapBuffers(ptr)
         glfwPollEvents()
-        if glfwWindowShouldClose(ptr)
+        if glfwWindowShouldClose(ptr) > 0
             return 1
         end
     end

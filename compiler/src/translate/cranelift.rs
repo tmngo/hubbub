@@ -4,6 +4,7 @@ use crate::{
     parse::{Node, NodeId, Tag},
     translate::input::{sizeof, Data, Input, Layout, Shape},
     typecheck::{BuiltInType, TypeId},
+    workspace::Workspace,
 };
 use cranelift::prelude::{
     codegen::{
@@ -60,7 +61,12 @@ pub struct Generator<'a> {
 }
 
 impl<'a> Generator<'a> {
-    pub fn new(input: &'a Input<'a>, output_name: String, use_jit: bool) -> Self {
+    pub fn new(
+        workspace: &Workspace,
+        input: &'a Input<'a>,
+        output_name: String,
+        use_jit: bool,
+    ) -> Self {
         let flag_builder = settings::builder();
         // flag_builder.set("is_pic", "true").unwrap();
         let isa_builder = lookup(target_lexicon::HOST).unwrap();
@@ -77,11 +83,12 @@ impl<'a> Generator<'a> {
                 ("Base.dealloc", builtin::dealloc as *const u8),
             ]);
 
-            let dylib_paths = vec!["SimpleDLL.dll", "glfw3.dll"];
+            let dylib_paths = &workspace.library_files;
+
             // Leak to prevent the libraries from being dropped and unloaded.
             let dylibs = Box::leak(
                 dylib_paths
-                    .into_iter()
+                    .iter()
                     .map(|path| Library::open(path).unwrap())
                     .collect(),
             );

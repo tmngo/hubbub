@@ -1,4 +1,7 @@
-use crate::{parse::Parser, tokenize::Tokenizer, workspace::Workspace};
+use crate::{
+    link::set_default_absolute_module_path, parse::Parser, tokenize::Tokenizer,
+    workspace::Workspace,
+};
 
 pub enum Test {
     File,
@@ -7,6 +10,7 @@ pub enum Test {
 }
 
 pub fn test_parse(test: Test, source: &str, expected: &str) {
+    set_default_absolute_module_path();
     let mut tokenizer = Tokenizer::new(source);
     let tokens = tokenizer.tokenize();
 
