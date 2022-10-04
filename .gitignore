@@ -3,6 +3,8 @@ Cargo.lock
 target/
 
 /notes/
+*.dll
 *.exe
 *.lib
 *.obj
+*.so
