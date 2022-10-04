@@ -5,6 +5,7 @@ use crate::{
 };
 use codespan_reporting::diagnostic::{Diagnostic, Label};
 use std::{
+    collections::HashMap,
     fmt::{self, Debug},
     ops::Range,
     path::PathBuf,
@@ -242,6 +243,14 @@ impl Iterator for NodeIterator {
 
 pub type Node = Node1;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NodeInfo {
+    Prototype {
+        foreign: bool,
+        foreign_name: Option<String>,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub struct Module {
     pub name: String,
@@ -340,6 +349,7 @@ impl<'w> Parser<'w> {
                     rhs: 0,
                 }],
                 indices: Vec::new(),
+                info: HashMap::new(),
                 modules: Vec::from([Module {
                     name: String::new(),
                     alias: None,
@@ -433,11 +443,9 @@ impl<'w> Parser<'w> {
         let module_token = self.expect_token(TokenTag::Import)?;
         let name_token = self.expect_token(TokenTag::StringLiteral)?;
         let rhs = self.add_leaf(Tag::StringLiteral, name_token)?;
-        let current_source = self.tree.token_source(name_token).0;
         let module_name = self
             .tree
-            .token(name_token)
-            .to_str(current_source)
+            .token_str(name_token)
             .trim_matches('"')
             .to_string();
 
@@ -503,8 +511,17 @@ impl<'w> Parser<'w> {
         let token_index = self.expect_token(TokenTag::ColonColon)?; // '::'
         self.match_token(TokenTag::Operator);
         let prototype = self.parse_parametric_prototype()?;
+        let foreign = if let Some(info) = self.tree.info.get(&prototype) {
+            let NodeInfo::Prototype { foreign, .. } = info;
+            *foreign
+        } else {
+            false
+        };
         let body = if self.current_tag() == TokenTag::End {
             self.expect_token_and_newline(TokenTag::End)?; // 'end'
+            0
+        } else if self.current_tag() == TokenTag::Newline && foreign {
+            self.expect_token(TokenTag::Newline)?;
             0
         } else {
             self.expect_tokens(&[TokenTag::Newline, TokenTag::Semicolon])?;
@@ -544,7 +561,28 @@ impl<'w> Parser<'w> {
         } else {
             0
         };
-        self.add_node(Tag::Prototype, 0, parameters, returns)
+        let node_id = self.add_node(Tag::Prototype, 0, parameters, returns)?;
+        let (foreign, foreign_name) = if self.match_token(TokenTag::Foreign) {
+            if self.current_tag() == TokenTag::StringLiteral {
+                let token = self.shift_token();
+                (
+                    true,
+                    Some(self.tree.token_str(token).trim_matches('"').to_string()),
+                )
+            } else {
+                (true, None)
+            }
+        } else {
+            (false, None)
+        };
+        self.tree.info.insert(
+            node_id,
+            NodeInfo::Prototype {
+                foreign,
+                foreign_name,
+            },
+        );
+        Ok(node_id)
     }
 
     /// parameters = '(' field (',' field)* ')'
@@ -1245,6 +1283,7 @@ pub struct Tree {
     pub tokens: Vec<Token>,
     pub nodes: Vec<Node>,
     pub indices: Vec<u32>,
+    pub info: HashMap<NodeId, NodeInfo>,
     pub modules: Vec<Module>,
 }
 

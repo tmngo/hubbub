@@ -1,6 +1,6 @@
 use crate::{
     analyze::Definition,
-    parse::{Node, NodeId, Tag, Tree},
+    parse::{Node, NodeId, NodeInfo, Tag, Tree},
     typecheck::{Type as Typ, TypeId},
 };
 use std::{
@@ -76,15 +76,27 @@ impl<'a> Data<'a> {
 
     pub fn mangle_function_declaration(&self, node_id: NodeId, includes_types: bool) -> String {
         let node = self.node(node_id);
+        let NodeInfo::Prototype {
+            foreign,
+            foreign_name,
+        } = self.tree.info.get(&node.lhs).unwrap();
         assert_eq!(node.tag, Tag::FunctionDecl);
-        let mut full_name = self.tree.node_full_name(node_id);
+        let mut full_name = if *foreign {
+            if let Some(name) = foreign_name {
+                name.clone()
+            } else {
+                self.tree.name(node_id).to_string()
+            }
+        } else {
+            self.tree.node_full_name(node_id)
+        };
         let lhs = self.node(node.lhs);
         let prototype = if lhs.tag == Tag::ParametricPrototype {
             self.node(lhs.rhs)
         } else {
             lhs
         };
-        if includes_types && !full_name.starts_with("Base.") && !full_name.starts_with("glfw") {
+        if includes_types && !full_name.starts_with("Base.") && !foreign {
             let parameters = self.node(prototype.lhs);
             if parameters.rhs > parameters.lhs {
                 write!(full_name, "|").ok();

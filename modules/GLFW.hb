@@ -3,21 +3,21 @@
 
 #foreign-library "SimpleDLL"
 
-DisplayHelloFromMyDLL :: () end
+DisplayHelloFromMyDLL :: () #foreign
 
 
 #foreign-library "glfw3"
 
-glfwInit :: () -> Int end
+init :: () -> Int #foreign "glfwInit"
 
-glfwCreateWindow :: (width: Int, height: Int, title: Pointer{Int}, monitor: Int, share: Int) -> Pointer{Int} end
+create-window :: (width: Int, height: Int, title: Pointer{Int}, monitor: Int, share: Int) -> Pointer{Int} #foreign "glfwCreateWindow"
 
-glfwTerminate :: () end
+terminate :: () #foreign "glfwTerminate"
 
-glfwMakeContextCurrent :: (window: Pointer{Int}) end
+make-context-current :: (window: Pointer{Int}) #foreign "glfwMakeContextCurrent"
 
-glfwWindowShouldClose :: (window: Pointer{Int}) -> Int end
+window-should-close :: (window: Pointer{Int}) -> Int #foreign "glfwWindowShouldClose"
 
-glfwSwapBuffers :: (window: Pointer{Int}) -> Int end
+swap-buffers :: (window: Pointer{Int}) -> Int #foreign "glfwSwapBuffers"
 
-glfwPollEvents :: () end
+poll-events :: () #foreign "glfwPollEvents"

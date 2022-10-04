@@ -1,19 +1,18 @@
-#import "Base"
-#import "GLFW"
+GLFW :: #import "GLFW"
 
 main :: () -> Int
-    DisplayHelloFromMyDLL()
+    GLFW.DisplayHelloFromMyDLL()
 
-    x := glfwInit()
+    x := GLFW.init()
 
     name := 0
-    ptr := glfwCreateWindow(640, 480, &name, 0, 0)
+    ptr := GLFW.create-window(640, 480, &name, 0, 0)
 
-    glfwMakeContextCurrent(ptr)
+    GLFW.make-context-current(ptr)
     while true
-        glfwSwapBuffers(ptr)
-        glfwPollEvents()
-        if glfwWindowShouldClose(ptr) > 0
+        GLFW.swap-buffers(ptr)
+        GLFW.poll-events()
+        if GLFW.window-should-close(ptr) > 0
             return 1
         end
     end
