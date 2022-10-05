@@ -582,19 +582,7 @@ impl<'ctx> Generator<'ctx> {
             }
             Tag::Grouping => self.compile_expr(state, node.lhs),
             Tag::IntegerLiteral => {
-                let token_str = data.tree.node_lexeme(node_id);
-                let value = token_str.parse::<i64>().unwrap();
-                let type_id = data.type_id(node_id);
-                let typ = &data.types[type_id as usize];
-                let llvm_type = llvm_type(self.context, data.types, type_id);
-                llvm_type
-                    .into_int_type()
-                    .const_int(value as u64, typ.is_signed())
-                    .into()
-                // self.context
-                //     .i64_type()
-                //     .const_int(value as u64, false)
-                //     .into()
+                self.compile_integer_literal(node_id, data.type_id(node_id), false)
             }
             Tag::True => self.context.bool_type().const_int(1, false).into(),
             Tag::False => self.context.bool_type().const_int(0, false).into(),
@@ -613,6 +601,13 @@ impl<'ctx> Generator<'ctx> {
                 let name = data.tree.name(node_id);
                 let location = self.locate(state, node_id);
                 builder.build_load(location.base, name)
+            }
+            Tag::Negation => {
+                if data.tree.node(node.lhs).tag == Tag::IntegerLiteral {
+                    return self.compile_integer_literal(node.lhs, data.type_id(node_id), true);
+                }
+                let value = self.compile_expr(state, node.lhs).into_int_value();
+                builder.build_int_neg(value, "int_neg").into()
             }
             Tag::Subscript => {
                 let lvalue = self.compile_lvalue(state, node_id);
@@ -724,6 +719,26 @@ impl<'ctx> Generator<'ctx> {
                 )
                 .into(),
         }
+    }
+
+    fn compile_integer_literal(
+        &self,
+        node_id: NodeId,
+        type_id: TypeId,
+        negative: bool,
+    ) -> BasicValueEnum<'ctx> {
+        let data = &self.data;
+        let token_str = data.tree.node_lexeme(node_id);
+        let value = token_str.parse::<i64>().unwrap();
+        let typ = &data.types[type_id as usize];
+        let llvm_type = llvm_type(self.context, data.types, type_id);
+        llvm_type
+            .into_int_type()
+            .const_int(
+                if negative { -value } else { value } as u64,
+                typ.is_signed(),
+            )
+            .into()
     }
 
     fn locate(&self, state: &mut State<'ctx>, node_id: NodeId) -> Location<'ctx> {

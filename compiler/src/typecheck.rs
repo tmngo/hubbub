@@ -507,6 +507,7 @@ impl<'a> Typechecker<'a> {
                 _ => BuiltInType::IntegerLiteral as TypeId,
             },
             Tag::True | Tag::False => BuiltInType::Boolean as TypeId,
+            Tag::Negation => self.infer_node(node.lhs)?[0],
             Tag::ParametricPrototype => {
                 // Type parameters
                 let type_parameters = self.tree.node(node.lhs);
@@ -1063,7 +1064,8 @@ impl<'a> Typechecker<'a> {
         }
         // for i in 1..self.tree.nodes.len() {
         //     println!(
-        //         "[{i}] {:?}: {:?}",
+        //         "[{i}] {:?} {:?}: {:?}",
+        //         self.tree.name(i as u32),
         //         self.tree.node(i as u32).tag,
         //         self.types[self.node_types[i] as usize]
         //     );

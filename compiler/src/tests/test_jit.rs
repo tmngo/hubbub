@@ -171,6 +171,10 @@ fn multiple() {
     test("multiple", Test::AotAndJit, "", 0, 10);
 }
 #[test]
+fn negation() {
+    test("negation", Test::AotAndJit, "", 0, 0);
+}
+#[test]
 fn overload() {
     test("overload", Test::AotAndJit, "", 0, 10);
 }

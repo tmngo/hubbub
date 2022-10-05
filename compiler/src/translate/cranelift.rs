@@ -522,11 +522,7 @@ impl State {
                 Val::Scalar(c.b.ins().icmp(IntCC::SignedLessThan, lhs, rhs))
             }
             Tag::Grouping => self.compile_expr(data, c, node.lhs),
-            Tag::IntegerLiteral => {
-                let token_str = data.tree.node_lexeme(node_id);
-                let value = token_str.parse::<i64>().unwrap();
-                Val::Scalar(c.b.ins().iconst(ty, value))
-            }
+            Tag::IntegerLiteral => self.compile_integer_literal(data, c, node_id, false),
             Tag::True => Val::Scalar(c.b.ins().iconst(ty, 1)),
             Tag::False => Val::Scalar(c.b.ins().iconst(ty, 0)),
             Tag::Call => {
@@ -543,6 +539,15 @@ impl State {
                 self.compile_call(data, c, node_id, callee_id, args)
             }
             Tag::Identifier => self.locate(data, node_id).to_val(c, layout),
+            Tag::Negation => {
+                if data.tree.node(node.lhs).tag == Tag::IntegerLiteral {
+                    return self.compile_integer_literal(data, c, node.lhs, true);
+                }
+                let lhs = self
+                    .compile_expr(data, c, node.lhs)
+                    .cranelift_value(c, data.layout(node.lhs));
+                Val::Scalar(c.b.ins().ineg(lhs))
+            }
             Tag::Subscript => {
                 let flags = MemFlags::new();
                 let arr_layout = data.layout(node.lhs);
@@ -666,6 +671,19 @@ impl State {
         match built_in_function {
             BuiltInFunction::Add => Val::Scalar(c.b.ins().iadd(args[0], args[1])),
         }
+    }
+
+    fn compile_integer_literal(
+        &mut self,
+        data: &Data,
+        c: &mut FnContext,
+        node_id: NodeId,
+        negative: bool,
+    ) -> Val {
+        let ty = c.ptr_type;
+        let token_str = data.tree.node_lexeme(node_id);
+        let value = token_str.parse::<i64>().unwrap();
+        Val::Scalar(c.b.ins().iconst(ty, if negative { -value } else { value }))
     }
 
     fn locate(&self, data: &Data, node_id: NodeId) -> Location {
