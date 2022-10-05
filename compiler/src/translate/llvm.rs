@@ -584,10 +584,17 @@ impl<'ctx> Generator<'ctx> {
             Tag::IntegerLiteral => {
                 let token_str = data.tree.node_lexeme(node_id);
                 let value = token_str.parse::<i64>().unwrap();
-                self.context
-                    .i64_type()
-                    .const_int(value as u64, false)
+                let type_id = data.type_id(node_id);
+                let typ = &data.types[type_id as usize];
+                let llvm_type = llvm_type(self.context, data.types, type_id);
+                llvm_type
+                    .into_int_type()
+                    .const_int(value as u64, typ.is_signed())
                     .into()
+                // self.context
+                //     .i64_type()
+                //     .const_int(value as u64, false)
+                //     .into()
             }
             Tag::True => self.context.bool_type().const_int(1, false).into(),
             Tag::False => self.context.bool_type().const_int(0, false).into(),
@@ -775,6 +782,7 @@ pub fn llvm_type<'ctx>(
         }
         Typ::Void => context.struct_type(&[], false).into(),
         Typ::Integer => context.i64_type().into(),
+        Typ::Unsigned8 => context.i8_type().into(),
         Typ::Boolean => context.bool_type().into(),
         _ => unreachable!("Invalid type"),
     }

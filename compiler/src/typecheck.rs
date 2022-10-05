@@ -32,9 +32,12 @@ pub enum Type {
     Void,
     Boolean,
     Integer,
+    Unsigned8,
+    IntegerLiteral,
     Float,
     String,
     Type,
+
     Array {
         typ: TypeId,
         length: usize,
@@ -65,6 +68,20 @@ impl Type {
             unreachable!()
         }
     }
+    pub fn returns(&self) -> &Vec<TypeId> {
+        if let Type::Function { returns, .. } = self {
+            returns
+        } else {
+            unreachable!()
+        }
+    }
+    pub fn is_signed(&self) -> bool {
+        match self {
+            Self::Integer => true,
+            Self::Unsigned8 => false,
+            _ => unreachable!("is_signed is only valid for integer types"),
+        }
+    }
 }
 
 pub type TypeId = usize;
@@ -76,13 +93,27 @@ pub type TypeId = usize;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum BuiltInType {
-    Void,    // 0
-    Boolean, // 1
-    Integer, // 2
-    Float,   // 3
-    String,  // 4
-    Array,   // 5
-    Pointer, // 6
+    Void,
+    Boolean,
+
+    Integer,
+    Unsigned8,
+
+    IntegerLiteral,
+    Float,
+    String,
+    Type,
+
+    Count,
+
+    Array,
+    Pointer,
+}
+
+enum CallResult {
+    Ok,
+    WrongArgumentCount(usize),
+    WrongArgumentTypes(TypeId, TypeId),
 }
 
 type TypeMap<P = Vec<TypeId>> = HashMap<P, TypeId>;
@@ -103,6 +134,7 @@ pub struct Typechecker<'a> {
     type_parameters: TypeParameters,
     current_parameters: Vec<TypeId>,
     // This will have to be updated for nested struct definitions.
+    current_fn_type_id: Option<TypeId>,
     current_struct_id: NodeId,
 
     pub types: Vec<Type>,
@@ -116,13 +148,25 @@ impl<'a> Typechecker<'a> {
         definitions: &'a mut HashMap<u32, Definition>,
         overload_sets: &'a HashMap<NodeId, Vec<Definition>>,
     ) -> Self {
-        let types = vec![
-            Type::Void,
-            Type::Boolean,
-            Type::Integer,
-            Type::Float,
-            Type::String,
-            Type::Type,
+        let mut types = vec![Type::Void; BuiltInType::Count as usize];
+        types[BuiltInType::Void as TypeId] = Type::Void;
+        types[BuiltInType::Boolean as TypeId] = Type::Boolean;
+        types[BuiltInType::Integer as TypeId] = Type::Integer;
+        types[BuiltInType::Unsigned8 as TypeId] = Type::Unsigned8;
+        types[BuiltInType::Float as TypeId] = Type::Float;
+        types[BuiltInType::String as TypeId] = Type::String;
+        types[BuiltInType::Type as TypeId] = Type::Type;
+        // let mut types = vec![
+        //     Type::Void,
+        //     Type::Boolean,
+        //     Type::Integer,
+        //     Type::Float,
+        //     Type::String,
+        //     Type::Type,
+        // ];
+        let mut builtin_function_types = HashMap::new();
+        let fn_types = [(
+            BuiltInFunction::Add,
             Type::Function {
                 parameters: vec![
                     BuiltInType::Integer as TypeId,
@@ -130,20 +174,25 @@ impl<'a> Typechecker<'a> {
                 ],
                 returns: vec![BuiltInType::Integer as TypeId],
             },
-        ];
+        )];
+        for (tag, typ) in fn_types {
+            types.push(typ);
+            builtin_function_types.insert(tag, types.len() - 1);
+        }
         Self {
             workspace,
             tree,
             definitions,
             overload_sets,
             array_types: HashMap::new(),
-            builtin_function_types: HashMap::from([(BuiltInFunction::Add, 6)]),
+            builtin_function_types,
             function_types: HashMap::new(),
             pointer_types: HashMap::new(),
             polymorphic_types: HashMap::new(),
             type_definitions: HashMap::new(),
             type_parameters: HashMap::new(),
             current_parameters: vec![],
+            current_fn_type_id: None,
             current_struct_id: 0,
             types,
             node_types: vec![0; tree.nodes.len()],
@@ -196,17 +245,44 @@ impl<'a> Typechecker<'a> {
 
     ///
     fn infer_range(&mut self, node: &Node) -> Result<TypeId> {
-        for i in node.lhs..node.rhs {
-            let result = self.infer_node(self.tree.node_index(i));
-            if let Err(diagnostic) = result {
-                self.workspace.diagnostics.push(diagnostic);
+        self.infer_range_with_types(node, None)
+    }
+
+    ///
+    fn infer_range_with_types(
+        &mut self,
+        node: &Node,
+        parent_type_ids: Option<Vec<TypeId>>,
+    ) -> Result<TypeId> {
+        if let Some(type_ids) = parent_type_ids {
+            for (index, i) in (node.lhs..node.rhs).enumerate() {
+                let result =
+                    self.infer_node_with_type(self.tree.node_index(i), Some(type_ids[index]));
+                if let Err(diagnostic) = result {
+                    self.workspace.diagnostics.push(diagnostic);
+                }
+            }
+        } else {
+            for i in node.lhs..node.rhs {
+                let result = self.infer_node(self.tree.node_index(i));
+                if let Err(diagnostic) = result {
+                    self.workspace.diagnostics.push(diagnostic);
+                }
             }
         }
         Ok(0)
     }
 
-    ///
     fn infer_node(&mut self, node_id: NodeId) -> Result<SmallVec<[TypeId; 8]>> {
+        self.infer_node_with_type(node_id, None)
+    }
+
+    ///
+    fn infer_node_with_type(
+        &mut self,
+        node_id: NodeId,
+        parent_type_id: Option<TypeId>,
+    ) -> Result<SmallVec<[TypeId; 8]>> {
         if node_id == 0 {
             return Ok(smallvec![0]);
         }
@@ -264,11 +340,20 @@ impl<'a> Typechecker<'a> {
                     panic!("Definition not found: {}", self.tree.name(callee_id))
                 });
 
-                let argument_types =
-                    vec![self.infer_node(node.lhs)?[0], self.infer_node(node.rhs)?[0]];
+                let argument_types = vec![
+                    (
+                        node.lhs,
+                        self.infer_node_with_type(node.lhs, parent_type_id)?[0],
+                    ),
+                    (
+                        node.rhs,
+                        self.infer_node_with_type(node.rhs, parent_type_id)?[0],
+                    ),
+                ];
 
                 self.infer_call(callee_id, &definition, argument_types)?;
 
+                // Get the newly resolved definition and type.
                 let definition = *self.definitions.get(&callee_id).unwrap_or_else(|| {
                     panic!("Definition not found: {}", self.tree.name(callee_id))
                 });
@@ -307,7 +392,10 @@ impl<'a> Typechecker<'a> {
             | Tag::BitwiseXor => self.infer_binary_node(node)?,
             Tag::Assign => {
                 let ltype = self.infer_node(node.lhs)?[0];
-                let rtype = self.infer_node(node.rhs)?[0];
+                let rtype = self.infer_node_with_type(node.rhs, Some(ltype))?[0];
+                // if is_integer(ltype) && rtype == BuiltInType::IntegerLiteral as TypeId {
+                //     self.node_types[node.rhs as usize] = ltype;
+                // } else
                 if node.rhs != 0 && ltype != rtype {
                     return Err(Diagnostic::error()
                         .with_message(format!(
@@ -318,12 +406,9 @@ impl<'a> Typechecker<'a> {
                 }
                 0
             }
-            Tag::Block
-            | Tag::Expressions
-            | Tag::IfElse
-            | Tag::Module
-            | Tag::Parameters
-            | Tag::Return => self.infer_range(node)?,
+            Tag::Block | Tag::Expressions | Tag::IfElse | Tag::Module | Tag::Parameters => {
+                self.infer_range(node)?
+            }
             Tag::Call => {
                 // Argument expressions
                 self.infer_node(node.rhs)?;
@@ -335,10 +420,13 @@ impl<'a> Typechecker<'a> {
                     panic!("Definition not found: {}", self.tree.name(callee_id))
                 });
 
-                let argument_types: Vec<usize> = self
+                let argument_types: Vec<(NodeId, TypeId)> = self
                     .tree
                     .range(expressions)
-                    .map(|i| self.node_types[self.tree.node_index(i) as usize])
+                    .map(|i| {
+                        let ni = self.tree.node_index(i);
+                        (ni, self.node_types[ni as usize])
+                    })
                     .collect();
 
                 self.infer_call(callee_id, &definition, argument_types)?;
@@ -377,6 +465,7 @@ impl<'a> Typechecker<'a> {
                 // Prototype
                 let fn_type = self.infer_node(node.lhs)?[0];
                 // Immediately set the declaration's type to handle recursion.
+                self.current_fn_type_id = Some(fn_type);
                 self.set_node_type(node_id, fn_type);
                 // Body
                 self.infer_node(node.rhs)?;
@@ -413,7 +502,10 @@ impl<'a> Typechecker<'a> {
                     0
                 }
             }
-            Tag::IntegerLiteral => BuiltInType::Integer as TypeId,
+            Tag::IntegerLiteral => match parent_type_id {
+                Some(type_id) if is_integer(type_id) => type_id,
+                _ => BuiltInType::IntegerLiteral as TypeId,
+            },
             Tag::True | Tag::False => BuiltInType::Boolean as TypeId,
             Tag::ParametricPrototype => {
                 // Type parameters
@@ -452,6 +544,11 @@ impl<'a> Typechecker<'a> {
                     returns,
                 })
             }
+            Tag::Return => {
+                let fn_type = &self.types[self.current_fn_type_id.unwrap()];
+                let return_type_ids = fn_type.returns().clone();
+                self.infer_range_with_types(node, Some(return_type_ids))?
+            }
             Tag::Struct => {
                 if node.lhs != 0 {
                     let type_parameters = self.tree.node(node.lhs);
@@ -483,7 +580,7 @@ impl<'a> Typechecker<'a> {
             }
             Tag::Subscript => {
                 let array_type = self.infer_node(node.lhs)?[0];
-                self.infer_node(node.rhs)?;
+                self.infer_node_with_type(node.rhs, Some(BuiltInType::Integer as TypeId))?;
                 if let Type::Array { typ, .. } = self.types[array_type] {
                     typ
                 } else {
@@ -572,8 +669,16 @@ impl<'a> Typechecker<'a> {
                 let identifiers = self.tree.node(node.token);
 
                 let annotation = self.infer_node(node.lhs)?[0];
-                self.infer_node(node.rhs)?;
+                self.infer_node_with_type(
+                    node.rhs,
+                    if annotation == 0 {
+                        None
+                    } else {
+                        Some(annotation)
+                    },
+                )?;
 
+                let mut r_ids = SmallVec::<[NodeId; 8]>::new();
                 let mut rtypes = SmallVec::<[usize; 8]>::new();
                 let rvalues = self.tree.node(node.rhs);
                 match rvalues.tag {
@@ -581,12 +686,14 @@ impl<'a> Typechecker<'a> {
                         for i in rvalues.lhs..rvalues.rhs {
                             let ni = self.tree.node_index(i);
                             let ti = self.node_types[ni as usize];
+                            r_ids.push(ni);
                             rtypes.push(ti);
                         }
                     }
                     _ => {
                         let ni = node.rhs;
                         let ti = self.node_types[ni as usize];
+                        r_ids.push(ni);
                         rtypes.push(ti);
                     }
                 }
@@ -594,21 +701,27 @@ impl<'a> Typechecker<'a> {
                 // dbg!(&rtypes);
                 // dbg!(annotation);
 
+                let mut infer_expr_type = |ni, index| {
+                    inferred_node_ids.push(ni);
+                    let rtype = rtypes[index];
+                    let inferred_type = infer_type(annotation, rtype)?;
+                    if rtype == BuiltInType::IntegerLiteral as TypeId {
+                        self.node_types[r_ids[index] as usize] = inferred_type;
+                    }
+                    Ok(inferred_type)
+                };
+
                 match identifiers.tag {
                     Tag::Expressions => {
                         for i in identifiers.lhs..identifiers.rhs {
                             let ni = self.tree.node_index(i);
-                            inferred_node_ids.push(ni);
-                            let rtype = rtypes[(i - identifiers.lhs) as usize];
-                            let inferred_type = infer_type(annotation, rtype)?;
+                            let index = (i - identifiers.lhs) as usize;
+                            let inferred_type = infer_expr_type(ni, index)?;
                             inferred_type_ids.push(inferred_type);
                         }
                     }
                     Tag::Identifier => {
-                        let ni = node.token;
-                        inferred_node_ids.push(ni);
-                        let rtype = rtypes[0];
-                        let inferred_type = infer_type(annotation, rtype)?;
+                        let inferred_type = infer_expr_type(node.token, 0)?;
                         inferred_type_ids.push(inferred_type);
                     }
                     _ => unreachable!(),
@@ -638,6 +751,14 @@ impl<'a> Typechecker<'a> {
         let ltype = self.infer_node(node.lhs)?[0];
         let rtype = self.infer_node(node.rhs)?[0];
         if ltype != rtype {
+            if is_integer(ltype) && rtype == BuiltInType::IntegerLiteral as TypeId {
+                self.node_types[node.rhs as usize] = ltype;
+                return Ok(ltype);
+            } else if ltype == BuiltInType::IntegerLiteral as TypeId && is_integer(rtype) {
+                self.node_types[node.lhs as usize] = rtype;
+                return Ok(rtype);
+            }
+
             return Err(Diagnostic::error()
                 .with_message(format!(
                     "mismatched types: left is \"{:?}\", right is \"{:?}\"",
@@ -652,57 +773,45 @@ impl<'a> Typechecker<'a> {
         &mut self,
         callee_id: NodeId,
         definition: &Definition,
-        argument_types: Vec<TypeId>,
+        argument_types: Vec<(NodeId, TypeId)>,
     ) -> Result<()> {
         match definition {
             Definition::Overload(overload_set_id) => {
                 let overload_set = self.overload_sets.get(overload_set_id).unwrap();
-                let mut match_found = false;
 
                 'outer: for &definition in overload_set {
                     match definition {
                         Definition::User(fn_decl_id) => {
                             let resolution = Definition::Resolved(fn_decl_id);
                             let fn_decl = self.tree.node(fn_decl_id);
-                            let fn_type = &self.types[self.node_types[fn_decl.lhs as usize]];
-                            let parameter_types = fn_type.parameters();
-                            if parameter_types.len() != argument_types.len() {
+                            let fn_type_id = self.node_types[fn_decl.lhs as usize];
+                            if let CallResult::Ok =
+                                self.check_arguments(&argument_types, fn_type_id)
+                            {
+                                self.definitions.insert(callee_id, resolution);
+                                return Ok(());
+                            } else {
                                 continue 'outer;
                             }
-                            for (i, &param_type) in parameter_types.iter().enumerate() {
-                                if param_type != argument_types[i] {
-                                    continue 'outer;
-                                }
-                            }
-                            match_found = true;
-                            self.definitions.insert(callee_id, resolution);
-                            // self.definitions.insert(fn_decl_id, resolution);
-                            break 'outer;
                         }
                         Definition::BuiltInFunction(built_in_function) => {
-                            let fn_type = &self.types
-                                [*self.builtin_function_types.get(&built_in_function).unwrap()];
-                            let parameter_types = fn_type.parameters();
-                            if parameter_types.len() != argument_types.len() {
+                            let fn_type_id =
+                                *self.builtin_function_types.get(&built_in_function).unwrap();
+                            if let CallResult::Ok =
+                                self.check_arguments(&argument_types, fn_type_id)
+                            {
+                                self.definitions.insert(callee_id, definition);
+                                return Ok(());
+                            } else {
                                 continue 'outer;
                             }
-                            for (i, &param_type) in parameter_types.iter().enumerate() {
-                                if param_type != argument_types[i] {
-                                    continue 'outer;
-                                }
-                            }
-                            match_found = true;
-                            self.definitions.insert(callee_id, definition);
-                            break 'outer;
                         }
                         _ => unreachable!(),
                     }
                 }
-                if !match_found {
-                    return Err(Diagnostic::error()
-                        .with_message("failed to find matching overload")
-                        .with_labels(vec![self.tree.label(self.tree.node(callee_id).token)]));
-                }
+                return Err(Diagnostic::error()
+                    .with_message("failed to find matching overload")
+                    .with_labels(vec![self.tree.label(self.tree.node(callee_id).token)]));
             }
             Definition::User(definition_id) => {
                 let fn_decl = self.tree.node(*definition_id);
@@ -738,30 +847,29 @@ impl<'a> Typechecker<'a> {
                     }
                     Tag::Prototype => {
                         // Non-parametric procedure: just type-check the arguments.
-                        let fn_type = &self.types[self.node_types[fn_decl.lhs as usize]];
-                        let parameter_types = fn_type.parameters();
-                        if parameter_types.len() != argument_types.len() {
-                            return Err(Diagnostic::error()
-                                .with_message(format!(
-                                    "invalid function call: expected {:?} arguments, got {:?}",
-                                    parameter_types.len(),
-                                    argument_types.len()
-                                ))
-                                .with_labels(vec![self
-                                    .tree
-                                    .label(self.tree.node(callee_id).token)]));
-                        }
-                        for (i, &param_type) in parameter_types.iter().enumerate() {
-                            let arg_type = argument_types[i];
-                            if param_type != arg_type {
+                        let fn_type_id = self.node_types[fn_decl.lhs as usize];
+                        match self.check_arguments(&argument_types, fn_type_id) {
+                            CallResult::WrongArgumentCount(parameter_count) => {
+                                return Err(Diagnostic::error()
+                                    .with_message(format!(
+                                        "invalid function call: expected {:?} arguments, got {:?}",
+                                        parameter_count,
+                                        argument_types.len()
+                                    ))
+                                    .with_labels(vec![self
+                                        .tree
+                                        .label(self.tree.node(callee_id).token)]));
+                            }
+                            CallResult::WrongArgumentTypes(param_type_id, arg_type_id) => {
                                 return Err(Diagnostic::error().with_message(format!(
                                     "mismatched types in function call: expected {:?} argument, got {:?}",
-                                    self.types[param_type],
-                                    self.types[arg_type])
+                                    self.types[param_type_id],
+                                    self.types[arg_type_id])
                                 ).with_labels(vec![self
                                     .tree
                                     .label(self.tree.node(callee_id).token)]));
                             }
+                            _ => {}
                         }
                     }
                     _ => {
@@ -772,10 +880,64 @@ impl<'a> Typechecker<'a> {
                     }
                 }
             }
-            Definition::BuiltInFunction(_) | Definition::Foreign(_) => {}
+            Definition::BuiltInFunction(built_in_function) => {
+                let fn_type_id = *self.builtin_function_types.get(built_in_function).unwrap();
+                match self.check_arguments(&argument_types, fn_type_id) {
+                    CallResult::WrongArgumentCount(parameter_count) => {
+                        return Err(Diagnostic::error()
+                            .with_message(format!(
+                                "invalid function call: expected {:?} arguments, got {:?}",
+                                parameter_count,
+                                argument_types.len()
+                            ))
+                            .with_labels(vec![self.tree.label(self.tree.node(callee_id).token)]));
+                    }
+                    CallResult::WrongArgumentTypes(param_type_id, arg_type_id) => {
+                        return Err(Diagnostic::error().with_message(format!(
+                            "mismatched types in built-in function call: expected {:?} argument, got {:?}",
+                            self.types[param_type_id],
+                            self.types[arg_type_id])
+                        ).with_labels(vec![self
+                            .tree
+                            .label(self.tree.node(callee_id).token)]));
+                    }
+                    _ => {}
+                }
+            }
+            Definition::Foreign(_) => {}
             _ => unreachable!("Definition not found: {}", self.tree.name(callee_id)),
         }
         Ok(())
+    }
+
+    fn check_arguments(
+        &mut self,
+        argument_types: &Vec<(NodeId, TypeId)>,
+        fn_type_id: TypeId,
+    ) -> CallResult {
+        let fn_type = &self.types[fn_type_id];
+        let parameter_types = fn_type.parameters();
+        if parameter_types.len() != argument_types.len() {
+            return CallResult::WrongArgumentCount(parameter_types.len());
+        }
+        let mut untyped_arguments = vec![];
+        for (i, &param_type) in parameter_types.iter().enumerate() {
+            if param_type != argument_types[i].1 {
+                // Check if untyped argument is compatible with parameter.
+                if is_integer(param_type)
+                    && argument_types[i].1 == BuiltInType::IntegerLiteral as TypeId
+                {
+                    untyped_arguments.push((argument_types[i].0, param_type));
+                    continue;
+                }
+                return CallResult::WrongArgumentTypes(param_type, argument_types[i].1);
+            }
+        }
+        // Type untyped arguments based on parameters.
+        for (node_id, type_id) in untyped_arguments {
+            self.node_types[node_id as usize] = type_id;
+        }
+        CallResult::Ok
     }
 
     fn add_type(&mut self, typ: Type) -> TypeId {
@@ -928,10 +1090,18 @@ impl<'a> Typechecker<'a> {
     }
 }
 
+fn is_integer(type_id: TypeId) -> bool {
+    type_id == BuiltInType::Integer as TypeId || type_id == BuiltInType::Unsigned8 as TypeId
+}
+
 fn infer_type(annotation_type: TypeId, value_type: TypeId) -> Result<TypeId> {
-    if annotation_type != 0 && value_type == 0 {
+    if annotation_type != 0
+        && (value_type == 0 || value_type == BuiltInType::IntegerLiteral as TypeId)
+    {
         // Explicit type based on annotation.
         Ok(annotation_type)
+    } else if annotation_type == 0 && value_type == BuiltInType::IntegerLiteral as TypeId {
+        Ok(BuiltInType::Integer as TypeId)
     } else if annotation_type == 0 && value_type != 0 {
         // Infer type based on rvalue.
         Ok(value_type)
