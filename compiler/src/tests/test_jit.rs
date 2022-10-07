@@ -1,6 +1,6 @@
 use crate::{
     analyze::Analyzer,
-    link::{link, set_default_absolute_module_path},
+    link::{link, prepend_module, set_default_absolute_module_path},
     parse::Parser,
     tests::input::*,
     tokenize::Tokenizer,
@@ -12,7 +12,8 @@ use std::{path::Path, process::Command};
 
 pub enum Test {
     AotAndJit,
-    Jit,
+    // Jit,
+    WithPrelude,
 }
 
 pub enum Backend {
@@ -32,6 +33,11 @@ pub fn test(
         .join(filename)
         .with_extension("hb");
     let source = std::fs::read_to_string(path).unwrap();
+    let source = if matches!(test, Test::WithPrelude) {
+        prepend_module("Prelude.hb", &source)
+    } else {
+        source
+    };
 
     let mut tokenizer = Tokenizer::new(&source);
     let tokens = tokenizer.tokenize();
@@ -74,7 +80,7 @@ pub fn test(
         true,
         expected_exit_code,
     );
-    if matches!(test, Test::AotAndJit) {
+    if matches!(test, Test::AotAndJit | Test::WithPrelude) {
         test_backend(
             Backend::Cranelift,
             &workspace,
@@ -185,6 +191,10 @@ fn pointer() {
 #[test]
 fn polystructs() {
     test("polystructs", Test::AotAndJit, "", 0, 12);
+}
+#[test]
+fn string() {
+    test("string", Test::WithPrelude, "", 0, 11);
 }
 #[test]
 fn structs() {

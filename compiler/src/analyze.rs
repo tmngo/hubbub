@@ -119,14 +119,15 @@ impl<'a> Analyzer<'a> {
             ("u8", Definition::BuiltIn(BuiltInType::Unsigned8)),
             ("Float", Definition::BuiltIn(BuiltInType::Float)),
             ("F64", Definition::BuiltIn(BuiltInType::Float)),
-            ("String", Definition::BuiltIn(BuiltInType::String)),
+            // ("String", Definition::BuiltIn(BuiltInType::String)),
             ("Pointer", Definition::BuiltIn(BuiltInType::Pointer)),
             ("Array", Definition::BuiltIn(BuiltInType::Array)),
             ("+", Definition::BuiltInFunction(BuiltInFunction::Add)),
         ]);
         let foreign = Scope::from(
             [
-                // ("putchar", 1),
+                ("putchar", 1),
+                ("puts", 1),
                 // ("DisplayHelloFromMyDLL", 9),
                 // ("print_int", 2),
                 // ("alloc", 3),

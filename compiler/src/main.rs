@@ -2,10 +2,10 @@
 #![feature(option_result_contains)]
 
 use crate::{
-    link::{link, set_default_absolute_module_path},
+    link::{link, prepend_module, set_default_absolute_module_path},
     workspace::Workspace,
 };
-use std::{collections::HashSet, path::Path, time::Instant};
+use std::{collections::HashSet, env, fs, path::Path, time::Instant};
 
 pub mod analyze;
 mod builtin;
@@ -21,7 +21,7 @@ mod workspace;
 
 fn main() {
     set_default_absolute_module_path();
-    let args: Vec<String> = std::env::args().collect();
+    let args: Vec<String> = env::args().collect();
     let flags: HashSet<&str> = HashSet::from_iter(args.iter().skip(2).map(|s| s.as_str()));
     if args.len() == 1 {
         println!("USAGE: hubbub.exe file");
@@ -31,7 +31,7 @@ fn main() {
     let src_filename = format!("{}.hb", filename);
     let obj_filename = format!("{}.obj", filename);
     let exe_filename = format!("{}.exe", filename);
-    let source = std::fs::read_to_string(&src_filename).unwrap();
+    let source = prepend_module("Prelude.hb", &fs::read_to_string(&src_filename).unwrap());
 
     let mut workspace = Workspace::new();
 

@@ -1,6 +1,6 @@
 use crate::workspace::Workspace;
 use std::io::{self, Write};
-use std::process::Command;
+use std::{env, fs, path, process::Command};
 use target_lexicon::Triple;
 
 /**
@@ -24,7 +24,7 @@ pub fn link(workspace: &Workspace, object_filename: &str, output_filename: &str,
         .get_compiler();
     let mut command = tool.to_command();
 
-    let compiler_path = std::env::current_exe().unwrap();
+    let compiler_path = env::current_exe().unwrap();
     let compiler_dir = compiler_path.parent().unwrap().to_path_buf();
     let runtime_path = compiler_dir
         .join(base_dir)
@@ -106,7 +106,28 @@ pub fn link_gcc(object_filename: &str, output_filename: &str) {
 }
 
 pub fn set_default_absolute_module_path() {
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    let modules_path = std::path::Path::new(&manifest_dir).with_file_name("modules");
-    std::env::set_var("ABSOLUTE_MODULE_PATH", modules_path);
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+    let modules_path = path::Path::new(&manifest_dir).with_file_name("modules");
+    env::set_var("ABSOLUTE_MODULE_PATH", modules_path);
+}
+
+pub fn prepend_module(filename: &str, source: &str) -> String {
+    let path = if let Ok(value) = env::var("ABSOLUTE_MODULE_PATH") {
+        path::PathBuf::from(value).join(filename)
+    } else {
+        env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("modules")
+            .join(filename)
+    };
+
+    if path.exists() {
+        let mut prelude = fs::read_to_string(&path).unwrap();
+        prelude.push_str(source);
+        prelude
+    } else {
+        panic!("Failed to find Prelude.hb");
+    }
 }

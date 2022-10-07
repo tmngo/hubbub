@@ -48,6 +48,7 @@ impl CraneliftModule for ObjectModule {
 
 pub struct FnContext<'a> {
     b: FunctionBuilder<'a>,
+    data_ctx: &'a mut DataContext,
     ptr_type: Type,
     target_config: TargetFrontendConfig,
 }
@@ -180,6 +181,7 @@ impl<'a> Generator<'a> {
                         &self.data,
                         &mut self.ctx,
                         &mut self.builder_ctx,
+                        &mut self.data_ctx,
                         &mut self.state,
                         ni,
                     );
@@ -202,6 +204,7 @@ impl<'a> Generator<'a> {
         data: &Data,
         ctx: &mut Context,
         builder_ctx: &mut FunctionBuilderContext,
+        data_ctx: &mut DataContext,
         state: &mut State,
         node_id: NodeId,
     ) -> FuncId {
@@ -209,6 +212,7 @@ impl<'a> Generator<'a> {
         let ptr_type = target_config.pointer_type();
         let mut c = FnContext {
             b: FunctionBuilder::new(&mut ctx.func, builder_ctx),
+            data_ctx,
             ptr_type,
             target_config,
         };
@@ -564,6 +568,33 @@ impl State {
                 let offset = c.b.ins().imul_imm(index, stride as i64);
                 let addr = c.b.ins().iadd(base, offset);
                 Location::pointer(addr, 0).to_val(c, layout)
+            }
+            Tag::StringLiteral => {
+                let string = data
+                    .tree
+                    .token_str(node.token)
+                    .trim_matches('"')
+                    .to_string();
+                let length = string.len();
+
+                // Create pointer to stored data.
+                c.data_ctx.define(string.into_bytes().into_boxed_slice());
+                let data_id = self.module.declare_anonymous_data(true, false).unwrap();
+                self.module.define_data(data_id, c.data_ctx).unwrap();
+                c.data_ctx.clear();
+                let local_id = self.module.declare_data_in_func(data_id, c.b.func);
+                let data_ptr = c.b.ins().symbol_value(ty, local_id);
+
+                let slot = self.create_stack_slot(data, c, node_id);
+
+                // Build string struct on stack.
+                let length_value = c.b.ins().iconst(ty, length as i64);
+                let layout = &Layout::new_scalar(8, 0);
+                Location::stack(slot, 0).store(c, data_ptr, MemFlags::new(), layout);
+                Location::stack(slot, 8).store(c, length_value, MemFlags::new(), layout);
+
+                let layout = data.layout(node_id);
+                Location::stack(slot, 0).to_val(c, layout)
             }
             _ => unreachable!("Invalid expression tag: {:?}", node.tag),
         }

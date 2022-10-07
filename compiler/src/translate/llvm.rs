@@ -609,6 +609,18 @@ impl<'ctx> Generator<'ctx> {
                 let value = self.compile_expr(state, node.lhs).into_int_value();
                 builder.build_int_neg(value, "int_neg").into()
             }
+            Tag::StringLiteral => {
+                let string = data.tree.token_str(node.token).trim_matches('"');
+                let length = string.len();
+                let ptr = self.builder.build_global_string_ptr(string, "string_data");
+                let len = self.context.i64_type().const_int(length as u64, true);
+                self.context
+                    .const_struct(
+                        &[ptr.as_basic_value_enum(), len.as_basic_value_enum()],
+                        false,
+                    )
+                    .into()
+            }
             Tag::Subscript => {
                 let lvalue = self.compile_lvalue(state, node_id);
                 builder.build_load(lvalue, "subscript")

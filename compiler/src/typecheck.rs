@@ -101,13 +101,13 @@ pub enum BuiltInType {
 
     IntegerLiteral,
     Float,
-    String,
     Type,
+    Array,
+    Pointer,
 
     Count,
 
-    Array,
-    Pointer,
+    String = 11,
 }
 
 enum CallResult {
@@ -154,8 +154,23 @@ impl<'a> Typechecker<'a> {
         types[BuiltInType::Integer as TypeId] = Type::Integer;
         types[BuiltInType::Unsigned8 as TypeId] = Type::Unsigned8;
         types[BuiltInType::Float as TypeId] = Type::Float;
-        types[BuiltInType::String as TypeId] = Type::String;
         types[BuiltInType::Type as TypeId] = Type::Type;
+
+        // Set up string type.
+        // types.push(Type::Pointer {
+        //     typ: BuiltInType::Unsigned8 as TypeId,
+        //     is_generic: false,
+        // });
+        // let ptr_u8_type = types.len() - 1;
+
+        let pointer_types = HashMap::new();
+        // let pointer_types = HashMap::from([(BuiltInType::Unsigned8 as TypeId, ptr_u8_type)]);
+
+        // types[BuiltInType::String as TypeId] = Type::Struct {
+        //     fields: vec![ptr_u8_type, BuiltInType::Integer as TypeId],
+        //     is_generic: false,
+        // };
+
         // let mut types = vec![
         //     Type::Void,
         //     Type::Boolean,
@@ -187,7 +202,7 @@ impl<'a> Typechecker<'a> {
             array_types: HashMap::new(),
             builtin_function_types,
             function_types: HashMap::new(),
-            pointer_types: HashMap::new(),
+            pointer_types,
             polymorphic_types: HashMap::new(),
             type_definitions: HashMap::new(),
             type_parameters: HashMap::new(),
@@ -579,6 +594,7 @@ impl<'a> Typechecker<'a> {
                 self.type_definitions.insert(type_id, node_id);
                 type_id
             }
+            Tag::StringLiteral => BuiltInType::String as TypeId,
             Tag::Subscript => {
                 let array_type = self.infer_node(node.lhs)?[0];
                 self.infer_node_with_type(node.rhs, Some(BuiltInType::Integer as TypeId))?;
