@@ -107,6 +107,7 @@ pub enum BuiltInType {
 
     Count,
 
+    // Prelude types
     String = 11,
 }
 
@@ -180,19 +181,21 @@ impl<'a> Typechecker<'a> {
         //     Type::Type,
         // ];
         let mut builtin_function_types = HashMap::new();
-        let fn_types = [(
-            BuiltInFunction::Add,
-            Type::Function {
-                parameters: vec![
-                    BuiltInType::Integer as TypeId,
-                    BuiltInType::Integer as TypeId,
-                ],
-                returns: vec![BuiltInType::Integer as TypeId],
-            },
-        )];
-        for (tag, typ) in fn_types {
-            types.push(typ);
-            builtin_function_types.insert(tag, types.len() - 1);
+        let binary_int_op_type = Type::Function {
+            parameters: vec![
+                BuiltInType::Integer as TypeId,
+                BuiltInType::Integer as TypeId,
+            ],
+            returns: vec![BuiltInType::Integer as TypeId],
+        };
+        types.push(binary_int_op_type);
+        let binary_int_op_type_id = types.len() - 1;
+        let fn_types = [
+            (BuiltInFunction::Add, binary_int_op_type_id),
+            (BuiltInFunction::Mul, binary_int_op_type_id),
+        ];
+        for (tag, type_id) in fn_types {
+            builtin_function_types.insert(tag, type_id);
         }
         Self {
             workspace,
@@ -349,7 +352,7 @@ impl<'a> Typechecker<'a> {
                 let value_type = self.infer_node(node.lhs)?[0];
                 self.add_pointer_type(value_type)
             }
-            Tag::Add => {
+            Tag::Add | Tag::Mul => {
                 let callee_id = node_id;
                 let definition = *self.definitions.get(&callee_id).unwrap_or_else(|| {
                     panic!("Definition not found: {}", self.tree.name(callee_id))
@@ -398,7 +401,6 @@ impl<'a> Typechecker<'a> {
                 }
             }
             Tag::Div
-            | Tag::Mul
             | Tag::Sub
             | Tag::BitwiseAnd
             | Tag::BitwiseOr

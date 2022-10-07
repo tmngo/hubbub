@@ -54,6 +54,7 @@ impl Definition {
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum BuiltInFunction {
     Add,
+    Mul,
 }
 
 // Assert that Tag size <= 1 byte
@@ -123,6 +124,7 @@ impl<'a> Analyzer<'a> {
             ("Pointer", Definition::BuiltIn(BuiltInType::Pointer)),
             ("Array", Definition::BuiltIn(BuiltInType::Array)),
             ("+", Definition::BuiltInFunction(BuiltInFunction::Add)),
+            ("*", Definition::BuiltInFunction(BuiltInFunction::Mul)),
         ]);
         let foreign = Scope::from(
             [
@@ -376,7 +378,7 @@ impl<'a> Analyzer<'a> {
                         .insert(node.rhs, Definition::User(field_index));
                 }
             }
-            Tag::Add => {
+            Tag::Add | Tag::Mul => {
                 let definition = self.lookup(id);
                 self.set_node_definition(id, definition)?;
                 self.resolve_node(node.lhs)?;

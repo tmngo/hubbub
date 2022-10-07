@@ -524,7 +524,7 @@ impl<'ctx> Generator<'ctx> {
                     .into_pointer_value();
                 builder.build_load(ptr, "deref")
             }
-            Tag::Add => {
+            Tag::Add | Tag::Mul => {
                 let definition = data.definitions.get(&node_id).unwrap_or_else(|| {
                     panic!("Definition not found: {}", "failed to get function decl id")
                 });
@@ -557,10 +557,6 @@ impl<'ctx> Generator<'ctx> {
                 builder
                     .build_int_signed_div(lhs, rhs, "int_signed_div")
                     .into()
-            }
-            Tag::Mul => {
-                let (lhs, rhs) = self.compile_children(state, node);
-                builder.build_int_mul(lhs, rhs, "int_mul").into()
             }
             Tag::Equality => {
                 let (lhs, rhs) = self.compile_children(state, node);
@@ -722,15 +718,18 @@ impl<'ctx> Generator<'ctx> {
         args: Vec<BasicValueEnum<'ctx>>,
     ) -> BasicValueEnum<'ctx> {
         match built_in_function {
-            BuiltInFunction::Add => self
-                .builder
-                .build_int_add(
-                    args[0].into_int_value(),
-                    args[1].into_int_value(),
-                    "int_add",
-                )
-                .into(),
+            BuiltInFunction::Add => self.builder.build_int_add(
+                args[0].into_int_value(),
+                args[1].into_int_value(),
+                "int_add",
+            ),
+            BuiltInFunction::Mul => self.builder.build_int_mul(
+                args[0].into_int_value(),
+                args[1].into_int_value(),
+                "int_mul",
+            ),
         }
+        .into()
     }
 
     fn compile_integer_literal(

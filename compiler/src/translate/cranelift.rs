@@ -479,7 +479,7 @@ impl State {
                 let ptr = self.locate(data, node.lhs).load_value(c, flags, ptr_layout);
                 Location::pointer(ptr, 0).to_val(c, layout)
             }
-            Tag::Add => {
+            Tag::Add | Tag::Mul => {
                 let callee_id = node_id;
                 let args = vec![
                     self.compile_expr(data, c, node.lhs)
@@ -508,10 +508,6 @@ impl State {
             Tag::Div => {
                 let (lhs, rhs) = self.compile_children(data, c, node);
                 Val::Scalar(c.b.ins().sdiv(lhs, rhs))
-            }
-            Tag::Mul => {
-                let (lhs, rhs) = self.compile_children(data, c, node);
-                Val::Scalar(c.b.ins().imul(lhs, rhs))
             }
             Tag::Equality => {
                 let (lhs, rhs) = self.compile_children(data, c, node);
@@ -701,6 +697,7 @@ impl State {
     ) -> Val {
         match built_in_function {
             BuiltInFunction::Add => Val::Scalar(c.b.ins().iadd(args[0], args[1])),
+            BuiltInFunction::Mul => Val::Scalar(c.b.ins().imul(args[0], args[1])),
         }
     }
 
