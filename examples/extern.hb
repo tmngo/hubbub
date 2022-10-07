@@ -5,8 +5,8 @@ main :: () -> Int
 
     x := GLFW.init()
 
-    name := 0
-    ptr := GLFW.create-window(640, 480, &name, 0, 0)
+    name := "hello"
+    ptr := GLFW.create-window(640, 480, name.data, 0, 0)
 
     GLFW.make-context-current(ptr)
     while true

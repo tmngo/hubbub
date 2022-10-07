@@ -10,7 +10,7 @@ DisplayHelloFromMyDLL :: () #foreign
 
 init :: () -> Int #foreign "glfwInit"
 
-create-window :: (width: Int, height: Int, title: Pointer{Int}, monitor: Int, share: Int) -> Pointer{Int} #foreign "glfwCreateWindow"
+create-window :: (width: Int, height: Int, title: Pointer{u8}, monitor: Int, share: Int) -> Pointer{Int} #foreign "glfwCreateWindow"
 
 terminate :: () #foreign "glfwTerminate"
 
