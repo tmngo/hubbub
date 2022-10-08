@@ -522,6 +522,10 @@ impl State {
                 Val::Scalar(c.b.ins().icmp(IntCC::SignedLessThan, lhs, rhs))
             }
             Tag::Grouping => self.compile_expr(data, c, node.lhs),
+            Tag::Inequality => {
+                let (lhs, rhs) = self.compile_children(data, c, node);
+                Val::Scalar(c.b.ins().icmp(IntCC::NotEqual, lhs, rhs))
+            }
             Tag::IntegerLiteral => self.compile_integer_literal(data, c, node_id, false),
             Tag::True => Val::Scalar(c.b.ins().iconst(ty, 1)),
             Tag::False => Val::Scalar(c.b.ins().iconst(ty, 0)),

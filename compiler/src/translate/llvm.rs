@@ -577,6 +577,12 @@ impl<'ctx> Generator<'ctx> {
                     .into()
             }
             Tag::Grouping => self.compile_expr(state, node.lhs),
+            Tag::Inequality => {
+                let (lhs, rhs) = self.compile_children(state, node);
+                builder
+                    .build_int_compare(IntPredicate::NE, lhs, rhs, "int_compare_ne")
+                    .into()
+            }
             Tag::IntegerLiteral => {
                 self.compile_integer_literal(node_id, data.type_id(node_id), false)
             }
