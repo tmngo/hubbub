@@ -9,12 +9,9 @@ main :: () -> Int
     ptr := GLFW.create-window(640, 480, name.data, 0, 0)
 
     GLFW.make-context-current(ptr)
-    while true
+    while GLFW.window-should-close(ptr) == 0
         GLFW.swap-buffers(ptr)
         GLFW.poll-events()
-        if GLFW.window-should-close(ptr) > 0
-            return 1
-        end
     end
 
     return 0

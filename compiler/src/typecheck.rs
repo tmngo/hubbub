@@ -274,8 +274,14 @@ impl<'a> Typechecker<'a> {
     ) -> Result<TypeId> {
         if let Some(type_ids) = parent_type_ids {
             for (index, i) in (node.lhs..node.rhs).enumerate() {
-                let result =
-                    self.infer_node_with_type(self.tree.node_index(i), Some(type_ids[index]));
+                let result = self.infer_node_with_type(
+                    self.tree.node_index(i),
+                    if type_ids.is_empty() {
+                        None
+                    } else {
+                        Some(type_ids[index])
+                    },
+                );
                 if let Err(diagnostic) = result {
                     self.workspace.diagnostics.push(diagnostic);
                 }
@@ -304,13 +310,14 @@ impl<'a> Typechecker<'a> {
         if node_id == 0 {
             return Ok(smallvec![0]);
         }
-        if self.node_types[node_id as usize] != 0 {
-            return Ok(smallvec![self.node_types[node_id as usize]]);
-        }
         let node = self.tree.node(node_id);
+        // println!("[{}] - {:?}", node_id, node.tag);
+        let current_type_id = self.node_types[node_id as usize];
+        if current_type_id != 0 {
+            return Ok(smallvec![current_type_id]);
+        }
         let mut inferred_node_ids = vec![];
         let mut inferred_type_ids = vec![];
-        // println!("[{}] - {:?}", node_id, node.tag);
         let result = match node.tag {
             Tag::Access => {
                 let ltype = self.infer_node(node.lhs)?[0];
@@ -482,10 +489,13 @@ impl<'a> Typechecker<'a> {
                 // Prototype
                 let fn_type = self.infer_node(node.lhs)?[0];
                 // Immediately set the declaration's type to handle recursion.
-                self.current_fn_type_id = Some(fn_type);
                 self.set_node_type(node_id, fn_type);
                 // Body
+                if self.current_fn_type_id.is_none() {
+                    self.current_fn_type_id = Some(fn_type);
+                }
                 self.infer_node(node.rhs)?;
+                self.current_fn_type_id = None;
                 fn_type
             }
             Tag::Equality | Tag::Greater | Tag::Inequality | Tag::Less => {
@@ -498,7 +508,13 @@ impl<'a> Typechecker<'a> {
                 if let Some(lookup) = decl {
                     match lookup {
                         Definition::User(decl_id) | Definition::Resolved(decl_id) => {
-                            self.infer_node(*decl_id)?[0]
+                            let decl_node = self.tree.node(*decl_id);
+                            if decl_node.tag == Tag::FunctionDecl {
+                                // Grab the prototype type without checking the function body again.
+                                self.infer_node(decl_node.lhs)?[0]
+                            } else {
+                                self.infer_node(*decl_id)?[0]
+                            }
                         }
                         Definition::BuiltIn(type_id) => *type_id as TypeId,
                         Definition::BuiltInFunction(built_in_fn) => self.add_function_type(
@@ -554,7 +570,9 @@ impl<'a> Typechecker<'a> {
                         let ni = self.tree.node_index(i) as usize;
                         returns.push(self.node_types[ni]);
                     }
-                } else if rets.tag == Tag::Identifier || rets.tag == Tag::Type {
+                } else if rets.tag == Tag::Identifier
+                    || rets.tag == Tag::Type && return_type != BuiltInType::Void as TypeId
+                {
                     returns.push(return_type);
                 }
                 self.add_function_type(Type::Function {
