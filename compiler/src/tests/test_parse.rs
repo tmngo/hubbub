@@ -31,10 +31,12 @@ pub fn test_parse(test: Test, source: &str, expected: &str) {
     };
 
     let tree = parser.tree();
-    println!("Nodes: {}", tree.nodes.len());
-    let result = format!("{}", tree);
-    println!("{}", result);
-    assert_eq!(&result, expected);
+    let result = format!("{:?}", tree);
+    assert_eq!(
+        &result, expected,
+        "expected:\n{}\n\ngot:\n{}\n",
+        expected, &result
+    );
 }
 
 #[test]
@@ -47,18 +49,28 @@ f :: (a: Int, b: Int) -> Int
     return c
 end
         ",
-        "\
-(Root
-  (Module
-    (FunctionDecl (Prototype (Parameters
-      (Field a Int)
-      (Field b Int)
-    ) Int) (Block
-      (VariableDecl (Mul 2 (Add a b)))
-      (Return c)
-    ))
-  )
-)",
+        r#"
+Module
+  FunctionDecl
+    Prototype
+      Parameters
+        Field
+          Identifier "a"
+          Identifier "Int"
+        Field
+          Identifier "b"
+          Identifier "Int"
+      Identifier "Int"
+    Block
+      VariableDecl
+        Identifier "c"
+        Mul
+          IntegerLiteral "2"
+          Add
+            Identifier "a"
+            Identifier "b"
+      Return
+        Identifier "c""#,
     );
 }
 
@@ -78,41 +90,144 @@ main :: () -> Int
 end // End of line comment.
 // Comment 6.
 ",
-        "\
-(Root
-  (Module
-    (FunctionDecl (Prototype () Int) (Block
-      (VariableDecl 3)
-      (Return x)
-    ))
-  )
-)",
+        r#"
+Module
+  FunctionDecl
+    Prototype
+      Parameters
+      Identifier "Int"
+    Block
+      VariableDecl
+        Identifier "x"
+        IntegerLiteral "3"
+      Return
+        Identifier "x""#,
     );
 }
 
 #[test]
 fn parse_expressions() {
-    test_parse(Test::Expr, "a + b + c", "(Add (Add a b) c)");
-    test_parse(Test::Expr, "- - -x", "(Negation (Negation (Negation x)))");
-    test_parse(Test::Expr, "a + (b * 4) + 2", "(Add (Add a (Mul b 4)) 2)");
+    test_parse(
+        Test::Expr,
+        "a + b + c",
+        r#"
+Add
+  Add
+    Identifier "a"
+    Identifier "b"
+  Identifier "c""#,
+    );
+    test_parse(
+        Test::Expr,
+        "- - -x",
+        r#"
+Negation
+  Negation
+    Negation
+      Identifier "x""#,
+    );
+    test_parse(
+        Test::Expr,
+        "a + (b * 4) + 2",
+        r#"
+Add
+  Add
+    Identifier "a"
+    Mul
+      Identifier "b"
+      IntegerLiteral "4"
+  IntegerLiteral "2""#,
+    );
     test_parse(
         Test::Expr,
         "a > b || c < d",
-        "(LogicalOr (Greater a b) (Less c d))",
+        r#"
+LogicalOr
+  Greater
+    Identifier "a"
+    Identifier "b"
+  Less
+    Identifier "c"
+    Identifier "d""#,
     );
-    test_parse(Test::Expr, "a + b * (4 + 2)", "(Add a (Mul b (Add 4 2)))");
-    test_parse(Test::Expr, "- -1 * 2", "(Mul (Negation (Negation 1)) 2)");
-    test_parse(Test::Expr, "(((0)))", "0");
+    test_parse(
+        Test::Expr,
+        "a + b * (4 + 2)",
+        r#"
+Add
+  Identifier "a"
+  Mul
+    Identifier "b"
+    Add
+      IntegerLiteral "4"
+      IntegerLiteral "2""#,
+    );
+    test_parse(
+        Test::Expr,
+        "- -1 * 2",
+        r#"
+Mul
+  Negation
+    Negation
+      IntegerLiteral "1"
+  IntegerLiteral "2""#,
+    );
+    test_parse(
+        Test::Expr,
+        "(((0)))",
+        r#"
+IntegerLiteral "0""#,
+    );
 
-    test_parse(Test::Expr, "-9!!", "(Negation (Factorial (Factorial 9)))");
-    test_parse(Test::Expr, "(-9!)!", "(Factorial (Negation (Factorial 9)))");
-    test_parse(Test::Expr, "arr[0][1]", "(Subscript (Subscript arr 0) 1)");
+    test_parse(
+        Test::Expr,
+        "-9!!",
+        r#"
+Negation
+  Factorial
+    Factorial
+      IntegerLiteral "9""#,
+    );
+    test_parse(
+        Test::Expr,
+        "(-9!)!",
+        r#"
+Factorial
+  Negation
+    Factorial
+      IntegerLiteral "9""#,
+    );
+    test_parse(
+        Test::Expr,
+        "arr[0][1]",
+        r#"
+Subscript
+  Subscript
+    Identifier "arr"
+    IntegerLiteral "0"
+  IntegerLiteral "1""#,
+    );
     test_parse(
         Test::Expr,
         "x.y.arr[0]",
-        "(Subscript (Access (Access x y) arr) 0)",
+        r#"
+Subscript
+  Access
+    Access
+      Identifier "x"
+      Identifier "y"
+    Identifier "arr"
+  IntegerLiteral "0""#,
     );
-    test_parse(Test::Expr, "&p.x", "(Address (Access p x))");
+    test_parse(
+        Test::Expr,
+        "&p.x",
+        r#"
+Address
+  Access
+    Identifier "p"
+    Identifier "x""#,
+    );
 }
 
 #[test]
@@ -125,28 +240,46 @@ func :: (a: Int64, b: Pointer{Int64}) -> (Int64, Array{Int64})
     d: Array{Array{Int64}}
     return 0
 end",
-        "\
-(Root
-  (Module
-    (FunctionDecl (Prototype (Parameters
-      (Field a Int64)
-      (Field b (Type Int64))
-    ) (Expressions
-      Int64
-      (Type Int64)
-    )) (Block
-      (VariableDecl Flo64)
-      (VariableDecl (Type (Type Int64)))
-      (Return 0)
-    ))
-  )
-)",
+        r#"
+Module
+  FunctionDecl
+    Prototype
+      Parameters
+        Field
+          Identifier "a"
+          Identifier "Int64"
+        Field
+          Identifier "b"
+          Type "Pointer"
+            Identifier "Int64"
+      Expressions
+        Identifier "Int64"
+        Type "Array"
+          Identifier "Int64"
+    Block
+      VariableDecl
+        Identifier "c"
+        Identifier "Flo64"
+      VariableDecl
+        Identifier "d"
+        Type "Array"
+          Type "Array"
+            Identifier "Int64"
+      Return
+        IntegerLiteral "0""#,
     )
 }
 
 #[test]
 fn parse_assign() {
-    test_parse(Test::Stmt, "a := b;", "(VariableDecl b)");
+    test_parse(
+        Test::Stmt,
+        "a := b;",
+        r#"
+VariableDecl
+  Identifier "a"
+  Identifier "b""#,
+    );
 }
 
 #[test]
@@ -160,26 +293,41 @@ main :: () -> Int
     return 0
 end\
       ",
-        "\
-(Root
-  (Module
-    (Import Math \"Math\")
-    (FunctionDecl (Prototype () Int) (Block
-      (VariableDecl (Call (Access Math cube) (Expressions
-        3
-      )))
-      (Return 0)
-    ))
-  )
-  (Module
-    (FunctionDecl (Prototype (Parameters
-      (Field a Int)
-    ) Int) (Block
-      (Return (Mul (Mul a a) a))
-    ))
-  )
-)\
-      ",
+        r#"
+Module
+  Import
+    Identifier "Math"
+    StringLiteral ""Math""
+  FunctionDecl
+    Prototype
+      Parameters
+      Identifier "Int"
+    Block
+      VariableDecl
+        Identifier "x"
+        Call
+          Access
+            Identifier "Math"
+            Identifier "cube"
+          Expressions
+            IntegerLiteral "3"
+      Return
+        IntegerLiteral "0"
+Module
+  FunctionDecl
+    Prototype
+      Parameters
+        Field
+          Identifier "a"
+          Identifier "Int"
+      Identifier "Int"
+    Block
+      Return
+        Mul
+          Mul
+            Identifier "a"
+            Identifier "a"
+          Identifier "a""#,
     )
 }
 
@@ -195,18 +343,29 @@ main :: ()
     a = 0
     return 0
 end",
-        "\
-(Root
-  (Module
-    (FunctionDecl (Prototype ()) (Block
-      (VariableDecl Int8)
-      (VariableDecl (Add 1 2))
-      (VariableDecl Int64 b)
-      (Assign a 0)
-      (Return 0)
-    ))
-  )
-)",
+        r#"
+Module
+  FunctionDecl
+    Prototype
+      Parameters
+    Block
+      VariableDecl
+        Identifier "a"
+        Identifier "Int8"
+      VariableDecl
+        Identifier "b"
+        Add
+          IntegerLiteral "1"
+          IntegerLiteral "2"
+      VariableDecl
+        Identifier "c"
+        Identifier "Int64"
+        Identifier "b"
+      Assign
+        Identifier "a"
+        IntegerLiteral "0"
+      Return
+        IntegerLiteral "0""#,
     );
 }
 
@@ -224,21 +383,32 @@ main :: () -> Int64
     return k
 end
     ",
-        "\
-(Root
-  (Module
-    (FunctionDecl (Prototype () Int64) (Block
-      (VariableDecl 0)
-      (While (Less k 10) (Block
-        (Call putchar (Expressions
-          65
-        ))
-        (Assign k (Add k 1))
-      ))
-      (Return k)
-    ))
-  )
-)",
+        r#"
+Module
+  FunctionDecl
+    Prototype
+      Parameters
+      Identifier "Int64"
+    Block
+      VariableDecl
+        Identifier "k"
+        IntegerLiteral "0"
+      While
+        Less
+          Identifier "k"
+          IntegerLiteral "10"
+        Block
+          Call
+            Identifier "putchar"
+            Expressions
+              IntegerLiteral "65"
+          Assign
+            Identifier "k"
+            Add
+              Identifier "k"
+              IntegerLiteral "1"
+      Return
+        Identifier "k""#,
     )
 }
 
@@ -257,20 +427,25 @@ Vector3 :: struct
     y: Float
     z: Float
 end",
-        "\
-(Root
-  (Module
-    (Struct
-      (Field x Int)
-      (Field y Int)
-    )
-    (Struct
-      (Field x Float)
-      (Field y Float)
-      (Field z Float)
-    )
-  )
-)",
+        r#"
+Module
+  Struct
+    Field
+      Identifier "x"
+      Identifier "Int"
+    Field
+      Identifier "y"
+      Identifier "Int"
+  Struct
+    Field
+      Identifier "x"
+      Identifier "Float"
+    Field
+      Identifier "y"
+      Identifier "Float"
+    Field
+      Identifier "z"
+      Identifier "Float""#,
     );
 }
 
@@ -282,10 +457,13 @@ fn parse_if_stmt() {
 if x > 90
     a
 end",
-        "\
-(If (Greater x 90) (Block
-  a
-))",
+        r#"
+If
+  Greater
+    Identifier "x"
+    IntegerLiteral "90"
+  Block
+    Identifier "a""#,
     );
 }
 
@@ -308,27 +486,41 @@ else if x > 60
 else
     f
 end",
-        "\
-(IfElse
-  (If (Greater x 90) (Block
-    (If (Greater x 95) (Block
-      ap
-    ))
-    a
-  ))
-  (If (Greater x 80) (Block
-    b
-  ))
-  (If (Greater x 70) (Block
-    c
-  ))
-  (If (Greater x 60) (Block
-    d
-  ))
-  (If (Block
-    f
-  ))
-)",
+        r#"
+IfElse
+  If
+    Greater
+      Identifier "x"
+      IntegerLiteral "90"
+    Block
+      If
+        Greater
+          Identifier "x"
+          IntegerLiteral "95"
+        Block
+          Identifier "ap"
+      Identifier "a"
+  If
+    Greater
+      Identifier "x"
+      IntegerLiteral "80"
+    Block
+      Identifier "b"
+  If
+    Greater
+      Identifier "x"
+      IntegerLiteral "70"
+    Block
+      Identifier "c"
+  If
+    Greater
+      Identifier "x"
+      IntegerLiteral "60"
+    Block
+      Identifier "d"
+  If
+    Block
+      Identifier "f""#,
     );
 }
 
@@ -345,23 +537,32 @@ equals :: {T} (a: T, b: T) -> Int
     end
 end
     ",
-        "\
-(Root
-  (Module
-    (FunctionDecl (ParametricPrototype (TypeParameters T) (Prototype (Parameters
-      (Field a T)
-      (Field b T)
-    ) Int)) (Block
-      (IfElse
-        (If (Equality a b) (Block
-          (Return 1)
-        ))
-        (If (Block
-          (Return 0)
-        ))
-      )
-    ))
-  )
-)",
+        r#"
+Module
+  FunctionDecl
+    Prototype
+      TypeParameters
+        TypeParameter
+      Parameters
+        Field
+          Identifier "a"
+          Identifier "T"
+        Field
+          Identifier "b"
+          Identifier "T"
+      Identifier "Int"
+    Block
+      IfElse
+        If
+          Equality
+            Identifier "a"
+            Identifier "b"
+          Block
+            Return
+              IntegerLiteral "1"
+        If
+          Block
+            Return
+              IntegerLiteral "0""#,
     )
 }

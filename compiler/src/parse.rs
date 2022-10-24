@@ -1436,17 +1436,85 @@ impl Tree {
     /**************************************************************************/
     // Debug
 
+    pub fn pretty_print_root(&self, f: &mut fmt::Formatter, include_ids: bool) -> fmt::Result {
+        let root = self.node(0);
+        for i in self.range(root) {
+            self.pretty_print_node(f, self.node_index(i), 0, include_ids)?;
+        }
+        Ok(())
+    }
+
+    pub fn pretty_print_node(
+        &self,
+        f: &mut fmt::Formatter,
+        id: NodeId,
+        indentation: usize,
+        include_ids: bool,
+    ) -> fmt::Result {
+        if id == 0 {
+            return Ok(());
+        }
+        let node = self.node(id);
+        let tag = node.tag;
+        let tab_size = if include_ids { 4 } else { 2 };
+        writeln!(f)?;
+        write!(f, "{1:0$}", tab_size * indentation, "")?;
+        let indentation = indentation + 1;
+
+        if include_ids {
+            write!(f, "{id}. ")?;
+        }
+        write!(f, "{tag:?}")?;
+
+        match tag {
+            // Multiple children, multiple lines.
+            Tag::Block
+            | Tag::Expressions
+            | Tag::IfElse
+            | Tag::Module
+            | Tag::Parameters
+            | Tag::Struct
+            | Tag::Return
+            | Tag::TypeParameters => {
+                for i in self.range(node) {
+                    self.pretty_print_node(f, self.node_index(i), indentation, include_ids)?;
+                }
+            }
+            Tag::Identifier | Tag::IntegerLiteral | Tag::StringLiteral => {
+                write!(f, " \"{}\"", self.node_lexeme(id))?;
+            }
+            Tag::Prototype => {
+                self.pretty_print_node(f, node.lhs, indentation, include_ids)?;
+                self.pretty_print_node(f, self.node_extra(node, 0), indentation, include_ids)?;
+                self.pretty_print_node(f, self.node_extra(node, 1), indentation, include_ids)?;
+            }
+            Tag::Field => {
+                self.pretty_print_node(f, node.lhs, indentation, include_ids)?;
+                self.pretty_print_node(f, self.node_extra(node, 0), indentation, include_ids)?;
+            }
+            Tag::Type => {
+                write!(f, " \"{}\"", self.node_lexeme(id))?;
+                for i in self.range(node) {
+                    self.pretty_print_node(f, self.node_index(i), indentation, include_ids)?;
+                }
+            }
+            Tag::VariableDecl => {
+                self.pretty_print_node(f, node.token, indentation, include_ids)?;
+                self.pretty_print_node(f, node.lhs, indentation, include_ids)?;
+                self.pretty_print_node(f, node.rhs, indentation, include_ids)?;
+            }
+            // One or two children.
+            _ => {
+                self.pretty_print_node(f, node.lhs, indentation, include_ids)?;
+                self.pretty_print_node(f, node.rhs, indentation, include_ids)?;
+            }
+        }
+        Ok(())
+    }
+
     fn print_node(&self, f: &mut fmt::Formatter, id: NodeId, indentation: usize) -> fmt::Result {
         let node = self.node(id);
         let tag = node.tag;
-        if node.lhs == 0 && node.rhs == 0 {
-            if tag == Tag::Parameters {
-                write!(f, "()")?;
-            } else {
-                write!(f, "{}", self.node_lexeme(id))?;
-            }
-            return Ok(());
-        }
 
         match tag {
             // Multiple children, multiple lines.
@@ -1457,22 +1525,17 @@ impl Tree {
             | Tag::Parameters
             | Tag::Root
             | Tag::Struct => {
-                // if tag == Tag::Root {
-                //     for i in node.lhs..node.rhs {
-                //         let module_node = self.node(self.node_index(i));
-                //         write!(f, "Module {}: ", self.node_index(i));
-                //         for j in module_node.lhs..module_node.rhs {
-                //             write!(f, "{}, ", self.node_index(j));
-                //         }
-                //         writeln!(f);
-                //     }
-                // }
+                if tag == Tag::Parameters && self.range(node).is_empty() {
+                    write!(f, "()")?;
+                    return Ok(());
+                }
                 writeln!(f, "({:?}", tag)?;
                 for i in self.range(node) {
                     write_indent(f, indentation + 1)?;
                     self.print_node(f, self.node_index(i), indentation + 1)?;
                     writeln!(f)?;
                 }
+
                 write_indent(f, indentation)?;
                 write!(f, ")")?;
             }
@@ -1492,6 +1555,9 @@ impl Tree {
                 write!(f, " ")?;
                 self.print_node(f, self.node_extra(node, 1), indentation)?;
                 write!(f, ")")?;
+            }
+            Tag::Identifier | Tag::IntegerLiteral => {
+                write!(f, "{}", self.node_lexeme(id))?;
             }
             // One or two children.
             _ => {
@@ -1533,6 +1599,19 @@ impl fmt::Display for Tree {
             self.print_node(f, (self.nodes.len() - 1) as u32, 0)?;
         } else {
             self.print_node(f, 0_u32, 0)?;
+        };
+        Ok(())
+    }
+}
+
+impl fmt::Debug for Tree {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let root = self.node(0);
+        let include_ids = f.alternate();
+        if root.lhs == 0 && root.rhs == 0 {
+            self.pretty_print_node(f, (self.nodes.len() - 1) as u32, 0, include_ids)?;
+        } else {
+            self.pretty_print_root(f, include_ids)?;
         };
         Ok(())
     }

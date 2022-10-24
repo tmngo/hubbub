@@ -47,9 +47,13 @@ pub fn test(
     let mut parser = Parser::new(&mut workspace, &source, tokens);
     parser.parse();
     let tree = parser.tree();
-
+    let formatted_tree = &format!("{:?}", tree);
     if !expected_tree.is_empty() {
-        assert_eq!(expected_tree, &format!("{}", tree));
+        assert_eq!(
+            expected_tree, formatted_tree,
+            "expected:\n{}\n\ngot:\n{}\n",
+            expected_tree, formatted_tree
+        );
     }
 
     let mut analyzer = Analyzer::new(&mut workspace, &tree);

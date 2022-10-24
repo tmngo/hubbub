@@ -55,7 +55,7 @@ fn main() {
     parser.parse();
     let t_parse = start.elapsed();
     let tree = parser.tree();
-    println!("{}", tree);
+    println!("{:#?}", tree);
     if workspace.has_errors() {
         workspace.print_errors();
         return;
