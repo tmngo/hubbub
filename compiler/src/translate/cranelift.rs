@@ -168,7 +168,7 @@ impl<'a> Generator<'a> {
                 let node = self.data.node(ni);
                 if let Tag::FunctionDecl = node.tag {
                     // Skip generic functions with no specializations.
-                    if self.data.node(node.lhs).tag == Tag::ParametricPrototype
+                    if self.data.node(node.lhs).lhs != 0
                         && !self.data.type_parameters.contains_key(&ni)
                     {
                         continue;
@@ -241,8 +241,8 @@ impl<'a> Generator<'a> {
         node_id: NodeId,
     ) {
         let prototype = data.node(node_id);
-        let parameters = data.node(prototype.lhs);
-        let returns = data.node(prototype.rhs);
+        let parameters = data.node(data.tree.node_extra(prototype, 0));
+        let returns = data.node(data.tree.node_extra(prototype, 1));
         Self::init_signature(c.b.func, parameters, returns, c.ptr_type);
 
         let entry_block = c.b.create_block();

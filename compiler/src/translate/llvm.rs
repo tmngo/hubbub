@@ -129,7 +129,7 @@ impl<'ctx> Generator<'ctx> {
                 let node = self.data.tree.node(ni);
                 if let Tag::FunctionDecl = node.tag {
                     // Skip generic functions with no specializations.
-                    if self.data.tree.node(node.lhs).tag == Tag::ParametricPrototype
+                    if self.data.tree.node(node.lhs).lhs != 0
                         && !self.data.type_parameters.contains_key(&ni)
                     {
                         continue;
@@ -156,7 +156,7 @@ impl<'ctx> Generator<'ctx> {
                 println!("compiling {}", self.data.tree.name(ni));
                 if let Tag::FunctionDecl = node.tag {
                     // Skip generic functions with no specializations.
-                    if self.data.tree.node(node.lhs).tag == Tag::ParametricPrototype
+                    if self.data.tree.node(node.lhs).lhs != 0
                         && !self.data.type_parameters.contains_key(&ni)
                     {
                         continue;
@@ -195,7 +195,8 @@ impl<'ctx> Generator<'ctx> {
         self.builder.position_at_end(entry_block);
         let prototype = self.data.node(node.lhs);
 
-        self.compile_function_parameters(state, prototype.lhs, fn_value);
+        let parameters_id = self.data.tree.node_extra(prototype, 0);
+        self.compile_function_parameters(state, parameters_id, fn_value);
         state.function = Some(fn_value);
         self.compile_function_body(state, node.rhs);
 
@@ -212,8 +213,9 @@ impl<'ctx> Generator<'ctx> {
     fn compile_function_signature(&self, node_id: NodeId, name: &str) -> FunctionValue<'ctx> {
         let data = &self.data;
         let prototype = data.node(node_id);
-        let parameters = data.node(prototype.lhs);
-        let returns = data.node(prototype.rhs);
+        let parameters = data.node(self.data.tree.node_extra(prototype, 0));
+        let returns_id = self.data.tree.node_extra(prototype, 1);
+        let returns = data.node(returns_id);
 
         let mut arg_types = vec![];
         for i in parameters.lhs..parameters.rhs {
@@ -239,10 +241,10 @@ impl<'ctx> Generator<'ctx> {
                 }
                 self.context.struct_type(&return_types, false).into()
             }
-            Tag::Identifier => llvm_type(self.context, data.types, data.type_id(prototype.rhs)),
+            Tag::Identifier => llvm_type(self.context, data.types, data.type_id(returns_id)),
             _ => {
                 if returns.rhs - returns.lhs == 1 {
-                    llvm_type(self.context, data.types, data.type_id(prototype.rhs))
+                    llvm_type(self.context, data.types, data.type_id(returns_id))
                 } else {
                     self.context.struct_type(&[], false).into()
                 }

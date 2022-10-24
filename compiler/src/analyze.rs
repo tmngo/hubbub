@@ -394,7 +394,7 @@ impl<'a> Analyzer<'a> {
             }
             Tag::Field => {
                 // Resolve type_expr
-                self.resolve_node(self.tree.node_index(node.rhs))?;
+                self.resolve_node(self.tree.node_extra(node, 0))?;
             }
             Tag::FunctionDecl => {
                 self.enter_scope();
@@ -419,6 +419,10 @@ impl<'a> Analyzer<'a> {
                     // Resolve type_expr
                     self.resolve_node(field_id)?;
                 }
+            }
+            Tag::Prototype => {
+                self.resolve_node(self.tree.node_extra(node, 0))?;
+                self.resolve_node(self.tree.node_extra(node, 1))?;
             }
             Tag::Struct => {
                 let current_scope = self.current;

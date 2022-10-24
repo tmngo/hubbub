@@ -93,61 +93,60 @@ pub const _ASSERT_TAG_SIZE: () = assert_size::<Tag>(1);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Tag {
-    Access,              // lhs, rhs
-    Add,                 // lhs, rhs
-    Address,             // expr
-    LogicalAnd,          // lhs, rhs
-    LogicalOr,           // lhs, rhs
-    Assign,              // lhs, rhs
-    AssignAdd,           // lhs, rhs
-    Block,               // start..end [Stmt]
-    BlockDirect,         //
-    BitwiseAnd,          // expr
-    BitwiseNot,          // expr
-    BitwiseOr,           // lhs, rhs
-    BitwiseShiftL,       //
-    BitwiseShiftR,       //
-    BitwiseXor,          // lhs, rhs
-    Break,               //
-    Call,                // func_expr, arguments: Expressions
-    Continue,            //
-    Equality,            // lhs, rhs
-    Expressions,         // start..end [Expr]
-    Dereference,         // expr
-    Factorial,           // expr
-    False,               //
-    Field,               // type_expr
-    FunctionDecl,        // prototype, block
-    Greater,             // lhs, rhs
-    Grouping,            // expr
-    Identifier,          //
-    If,                  // condition, block
-    IfElse,              // start..end [If]
-    Import,              // lhs, rhs
-    Inequality,          // lhs, rhs
-    IntegerLiteral,      //
-    Invalid,             //
-    Less,                // lhs, rhs
-    Div,                 // lhs, rhs
-    Module,              // start..end [Declaration]
-    Mul,                 // lhs, rhs
-    Negation,            // expr
-    Not,                 // expr
-    Parameters,          // start..end [Field]
-    ParametricPrototype, //
-    Prototype,           // parameters: Parameters, returns: Expressions
-    Return,              // expr
-    Root,                // start..end [Decl]
-    StringLiteral,       //
-    Struct,              // start..end [Field]
-    Sub,                 // lhs, rhs
-    Subscript,           // lhs, rhs
-    True,                //
-    Type,                // expr
-    TypeParameter,       // start..end [Identifier]
-    TypeParameters,      // start..end [Identifier]
-    VariableDecl,        // type_expr, init_expr
-    While,               // condition, block
+    Access,         // lhs, rhs
+    Add,            // lhs, rhs
+    Address,        // expr
+    LogicalAnd,     // lhs, rhs
+    LogicalOr,      // lhs, rhs
+    Assign,         // lhs, rhs
+    AssignAdd,      // lhs, rhs
+    Block,          // start..end [Stmt]
+    BlockDirect,    //
+    BitwiseAnd,     // expr
+    BitwiseNot,     // expr
+    BitwiseOr,      // lhs, rhs
+    BitwiseShiftL,  //
+    BitwiseShiftR,  //
+    BitwiseXor,     // lhs, rhs
+    Break,          //
+    Call,           // func_expr, arguments: Expressions
+    Continue,       //
+    Equality,       // lhs, rhs
+    Expressions,    // start..end [Expr]
+    Dereference,    // expr
+    Factorial,      // expr
+    False,          //
+    Field,          // type_expr
+    FunctionDecl,   // prototype, block
+    Greater,        // lhs, rhs
+    Grouping,       // expr
+    Identifier,     //
+    If,             // condition, block
+    IfElse,         // start..end [If]
+    Import,         // lhs, rhs
+    Inequality,     // lhs, rhs
+    IntegerLiteral, //
+    Invalid,        //
+    Less,           // lhs, rhs
+    Div,            // lhs, rhs
+    Module,         // start..end [Declaration]
+    Mul,            // lhs, rhs
+    Negation,       // expr
+    Not,            // expr
+    Parameters,     // start..end [Field]
+    Prototype,      // parameters: Parameters, returns: Expressions
+    Return,         // expr
+    Root,           // start..end [Decl]
+    StringLiteral,  //
+    Struct,         // start..end [Field]
+    Sub,            // lhs, rhs
+    Subscript,      // lhs, rhs
+    True,           //
+    Type,           // expr
+    TypeParameter,  // start..end [Identifier]
+    TypeParameters, // start..end [Identifier]
+    VariableDecl,   // type_expr, init_expr
+    While,          // condition, block
 }
 
 // pub struct Node2 {
@@ -510,7 +509,7 @@ impl<'w> Parser<'w> {
         self.shift_token(); // Identifier or operator
         let token_index = self.expect_token(TokenTag::ColonColon)?; // '::'
         self.match_token(TokenTag::Operator);
-        let prototype = self.parse_parametric_prototype()?;
+        let prototype = self.parse_prototype()?;
         let foreign = if let Some(info) = self.tree.info.get(&prototype) {
             let NodeInfo::Prototype { foreign, .. } = info;
             *foreign
@@ -530,17 +529,6 @@ impl<'w> Parser<'w> {
         self.add_node(Tag::FunctionDecl, token_index, prototype, body)
     }
 
-    fn parse_parametric_prototype(&mut self) -> Result<NodeId> {
-        let token = self.index as TokenId;
-        if self.current_tag() == TokenTag::BraceL {
-            let type_parameters = self.parse_type_parameters()?;
-            let prototype = self.parse_prototype()?;
-            self.add_node(Tag::ParametricPrototype, token, type_parameters, prototype)
-        } else {
-            self.parse_prototype()
-        }
-    }
-
     /// type-parameters = '{' type-parameter (',' type-parameter)* ','? '}'
     fn parse_type_parameters(&mut self) -> Result<NodeId> {
         let token = self.expect_token(TokenTag::BraceL)?;
@@ -555,13 +543,19 @@ impl<'w> Parser<'w> {
 
     /// prototype =
     fn parse_prototype(&mut self) -> Result<NodeId> {
+        let type_parameters = if self.current_tag() == TokenTag::BraceL {
+            self.parse_type_parameters()?
+        } else {
+            0
+        };
         let parameters = self.parse_parameters()?;
         let returns = if self.match_token(TokenTag::Arrow) {
             self.parse_type_list()?
         } else {
             0
         };
-        let node_id = self.add_node(Tag::Prototype, 0, parameters, returns)?;
+        let extra_data = self.add_indices_fixed(&[parameters, returns]);
+        let node_id = self.add_node(Tag::Prototype, 0, type_parameters, extra_data)?;
         let (foreign, foreign_name) = if self.match_token(TokenTag::Foreign) {
             if self.current_tag() == TokenTag::StringLiteral {
                 let token = self.shift_token();
@@ -1312,6 +1306,10 @@ impl Tree {
         self.indices[index as usize] as NodeId
     }
 
+    pub fn node_extra(&self, node: &Node, index: u32) -> NodeId {
+        self.node_index(node.rhs + index)
+    }
+
     pub fn node_indirect(&self, index: u32) -> &Node {
         &self.nodes[self.node_index(index) as usize]
     }
@@ -1350,7 +1348,7 @@ impl Tree {
 
     pub fn range(&self, node: &Node) -> Range<u32> {
         match node.tag {
-            Tag::Struct => self.node_index(node.rhs)..self.node_index(node.rhs + 1),
+            Tag::Struct => self.node_extra(node, 0)..self.node_extra(node, 1),
             _ => node.lhs..node.rhs,
         }
     }
@@ -1487,6 +1485,14 @@ impl Tree {
                 }
                 write!(f, ")")?;
             }
+            Tag::Prototype => {
+                write!(f, "({:?}", tag)?;
+                write!(f, " ")?;
+                self.print_node(f, self.node_extra(node, 0), indentation)?;
+                write!(f, " ")?;
+                self.print_node(f, self.node_extra(node, 1), indentation)?;
+                write!(f, ")")?;
+            }
             // One or two children.
             _ => {
                 write!(f, "({:?}", tag)?;
@@ -1499,7 +1505,7 @@ impl Tree {
                 }
                 if tag == Tag::Field {
                     write!(f, " ")?;
-                    self.print_node(f, self.node_index(node.rhs), indentation)?;
+                    self.print_node(f, self.node_extra(node, 0), indentation)?;
                 } else if node.rhs != 0 && tag != Tag::Grouping {
                     write!(f, " ")?;
                     self.print_node(f, node.rhs, indentation)?;

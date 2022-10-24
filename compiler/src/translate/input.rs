@@ -90,14 +90,9 @@ impl<'a> Data<'a> {
         } else {
             self.tree.node_full_name(node_id)
         };
-        let lhs = self.node(node.lhs);
-        let prototype = if lhs.tag == Tag::ParametricPrototype {
-            self.node(lhs.rhs)
-        } else {
-            lhs
-        };
+        let prototype = self.node(node.lhs);
         if includes_types && !full_name.starts_with("Base.") && !foreign {
-            let parameters = self.node(prototype.lhs);
+            let parameters = self.node(self.tree.node_extra(prototype, 0));
             if parameters.rhs > parameters.lhs {
                 write!(full_name, "|").ok();
             }

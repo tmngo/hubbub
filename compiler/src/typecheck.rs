@@ -541,30 +541,36 @@ impl<'a> Typechecker<'a> {
             },
             Tag::True | Tag::False => BuiltInType::Boolean as TypeId,
             Tag::Negation => self.infer_node(node.lhs)?[0],
-            Tag::ParametricPrototype => {
-                // Type parameters
-                let type_parameters = self.tree.node(node.lhs);
-                for i in type_parameters.lhs..type_parameters.rhs {
-                    let node_id = self.tree.node_index(i);
-                    self.add_type(Type::Parameter {
-                        index: (i - type_parameters.lhs) as usize,
-                    });
-                    self.set_node_type(node_id, self.types.len() - 1);
-                }
-                // Prototype
-                self.infer_node(node.rhs)?[0]
-            }
             Tag::Prototype => {
                 let mut parameters = Vec::new();
                 let mut returns = Vec::new();
-                self.infer_node(node.lhs)?; // parameters
-                let return_type = self.infer_node(node.rhs)?[0]; // returns
-                let params = self.tree.node(node.lhs);
+
+                let type_parameters_id = node.lhs;
+                if type_parameters_id != 0 {
+                    // Type parameters
+                    let type_parameters = self.tree.node(type_parameters_id);
+                    for i in type_parameters.lhs..type_parameters.rhs {
+                        let node_id = self.tree.node_index(i);
+                        self.add_type(Type::Parameter {
+                            index: (i - type_parameters.lhs) as usize,
+                        });
+                        self.set_node_type(node_id, self.types.len() - 1);
+                    }
+                }
+
+                let parameters_id = self.tree.node_extra(node, 0);
+                let params = self.tree.node(parameters_id);
+                self.infer_node(parameters_id)?; // parameters
+
+                let returns_id = self.tree.node_extra(node, 1);
+                let rets = self.tree.node(returns_id);
+                let return_type = self.infer_node(returns_id)?[0]; // returns
+
+                assert_eq!(params.tag, Tag::Parameters);
                 for i in params.lhs..params.rhs {
                     let ni = self.tree.node_index(i) as usize;
                     parameters.push(self.node_types[ni]);
                 }
-                let rets = self.tree.node(node.rhs);
                 if rets.tag == Tag::Expressions {
                     for i in rets.lhs..rets.rhs {
                         let ni = self.tree.node_index(i) as usize;
@@ -854,35 +860,36 @@ impl<'a> Typechecker<'a> {
                 let fn_decl = self.tree.node(*definition_id);
                 let prototype = self.tree.node(fn_decl.lhs);
                 match prototype.tag {
-                    Tag::ParametricPrototype => {
-                        // let type_parameters = self.tree.lchild(prototype);
-                        // let inner_prototype = self.tree.rchild(prototype);
-                        // let parameters = self.tree.lchild(inner_prototype);
-                        // let returns = self.tree.rchild(inner_prototype);
-                        // let mut arg_types = Vec::new();
-                        // // let mut ret_types = Vec::new();
-                        // for (i, it) in (parameters.lhs..parameters.rhs).enumerate() {
-                        //     let arg_id = self.tree.node_index(i as u32 + expressions.lhs);
-                        //     let arg_type = self.node_types[arg_id as usize];
-                        //     arg_types.push(arg_type);
-                        // }
-                        // // for (i, it) in (returns.lhs..returns.rhs).enumerate() {
-                        // //     let ret_id = self.tree.node_index(i as u32 + expressions.lhs);
-                        // //     let t = self.node_types[arg_id as usize];
-                        // //     ret_types.push(t);
-                        // // }
-                        // self.types.push(Type::Function {
-                        //     parameters: arg_types.clone(),
-                        //     returns: arg_types.clone(),
-                        // });
-                        // if let Err(mut error) = self
-                        //     .type_parameters
-                        //     .try_insert(definition_id, HashSet::from([arg_types.clone()]))
-                        // {
-                        //     error.entry.get_mut().insert(arg_types);
-                        // }
-                    }
                     Tag::Prototype => {
+                        if prototype.lhs != 0 {
+                            // let type_parameters = self.tree.lchild(prototype);
+                            // let inner_prototype = self.tree.rchild(prototype);
+                            // let parameters = self.tree.lchild(inner_prototype);
+                            // let returns = self.tree.rchild(inner_prototype);
+                            // let mut arg_types = Vec::new();
+                            // // let mut ret_types = Vec::new();
+                            // for (i, it) in (parameters.lhs..parameters.rhs).enumerate() {
+                            //     let arg_id = self.tree.node_index(i as u32 + expressions.lhs);
+                            //     let arg_type = self.node_types[arg_id as usize];
+                            //     arg_types.push(arg_type);
+                            // }
+                            // // for (i, it) in (returns.lhs..returns.rhs).enumerate() {
+                            // //     let ret_id = self.tree.node_index(i as u32 + expressions.lhs);
+                            // //     let t = self.node_types[arg_id as usize];
+                            // //     ret_types.push(t);
+                            // // }
+                            // self.types.push(Type::Function {
+                            //     parameters: arg_types.clone(),
+                            //     returns: arg_types.clone(),
+                            // });
+                            // if let Err(mut error) = self
+                            //     .type_parameters
+                            //     .try_insert(definition_id, HashSet::from([arg_types.clone()]))
+                            // {
+                            //     error.entry.get_mut().insert(arg_types);
+                            // }
+                        }
+
                         // Non-parametric procedure: just type-check the arguments.
                         let fn_type_id = self.node_types[fn_decl.lhs as usize];
                         match self.check_arguments(&argument_types, fn_type_id) {
@@ -910,10 +917,7 @@ impl<'a> Typechecker<'a> {
                         }
                     }
                     _ => {
-                        println!(
-                            "{}",
-                            crate::format_red!("TODO: skipped typechecking of builtin fn")
-                        );
+                        panic!()
                     }
                 }
             }
