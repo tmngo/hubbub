@@ -678,11 +678,11 @@ impl<'w> Parser<'w> {
             TokenTag::ColonEqual => {
                 init_expr = self.parse_expr_list()?;
             }
-            _ => init_expr = self.parse_expr()?,
+            _ => unreachable!("expected one of :, ::, or := in variable declaration"),
         }
         self.expect_tokens(&[TokenTag::Newline, TokenTag::Semicolon])?;
-        let variable_decl =
-            self.add_node(Tag::VariableDecl, identifier_list, type_expr, init_expr)?;
+        let extra_data = self.add_indices_fixed(&[type_expr, init_expr]);
+        let variable_decl = self.add_node(Tag::VariableDecl, token, identifier_list, extra_data)?;
         let identifier_node = self.tree.node_mut(identifier_list);
         // Link identifier nodes back to variable declaration.
         match identifier_node.tag {
@@ -1483,7 +1483,7 @@ impl Tree {
             Tag::Identifier | Tag::IntegerLiteral | Tag::StringLiteral => {
                 write!(f, " \"{}\"", self.node_lexeme(id))?;
             }
-            Tag::Prototype => {
+            Tag::Prototype | Tag::VariableDecl => {
                 self.pretty_print_node(f, node.lhs, indentation, include_ids)?;
                 self.pretty_print_node(f, self.node_extra(node, 0), indentation, include_ids)?;
                 self.pretty_print_node(f, self.node_extra(node, 1), indentation, include_ids)?;
@@ -1497,11 +1497,6 @@ impl Tree {
                 for i in self.range(node) {
                     self.pretty_print_node(f, self.node_index(i), indentation, include_ids)?;
                 }
-            }
-            Tag::VariableDecl => {
-                self.pretty_print_node(f, node.token, indentation, include_ids)?;
-                self.pretty_print_node(f, node.lhs, indentation, include_ids)?;
-                self.pretty_print_node(f, node.rhs, indentation, include_ids)?;
             }
             // One or two children.
             _ => {

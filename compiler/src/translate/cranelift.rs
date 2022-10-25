@@ -374,7 +374,8 @@ impl State {
             Tag::VariableDecl => {
                 // lhs: type
                 // rhs: expr
-                let lhs = data.tree.node(node.token);
+                let lhs = data.tree.node(node.lhs);
+                let rvalues_id = data.tree.node_extra(node, 1);
                 match lhs.tag {
                     Tag::Expressions => {
                         let mut locs = vec![];
@@ -385,7 +386,7 @@ impl State {
                             self.locations.insert(ni, location);
                             locs.push(location);
                         }
-                        let rhs = data.tree.node(node.rhs);
+                        let rhs = data.tree.node(rvalues_id);
                         if rhs.tag == Tag::Expressions {
                             for i in rhs.lhs..rhs.rhs {
                                 let ni = data.tree.node_index(i);
@@ -403,15 +404,15 @@ impl State {
                         }
                     }
                     Tag::Identifier => {
-                        let ni = node.token;
+                        let ni = node.lhs;
                         let slot = self.create_stack_slot(data, c, ni);
                         let location = Location::stack(slot, 0);
                         self.locations.insert(ni, location);
-                        if node.rhs != 0 {
-                            let layout = data.layout(node.rhs);
+                        if rvalues_id != 0 {
+                            let layout = data.layout(rvalues_id);
                             let value = self
-                                .compile_expr(data, c, node.rhs)
-                                .cranelift_value(c, data.layout(node.rhs));
+                                .compile_expr(data, c, rvalues_id)
+                                .cranelift_value(c, data.layout(rvalues_id));
                             location.store(c, value, MemFlags::new(), layout);
                         }
                     }

@@ -411,7 +411,8 @@ impl<'ctx> Generator<'ctx> {
             Tag::VariableDecl => {
                 // lhs: type
                 // rhs: expr
-                let lhs = data.tree.node(node.token);
+                let lhs = data.tree.node(node.lhs);
+                let rvalues_id = data.tree.node_extra(node, 1);
                 match lhs.tag {
                     Tag::Expressions => {
                         let mut locs = vec![];
@@ -424,7 +425,7 @@ impl<'ctx> Generator<'ctx> {
                             state.locations.insert(ni, location);
                             locs.push(location);
                         }
-                        let rhs = data.tree.node(node.rhs);
+                        let rhs = data.tree.node(rvalues_id);
                         if rhs.tag == Tag::Expressions {
                             for i in rhs.lhs..rhs.rhs {
                                 let ni = data.tree.node_index(i);
@@ -435,14 +436,14 @@ impl<'ctx> Generator<'ctx> {
                         }
                     }
                     Tag::Identifier => {
-                        let ni = node.token;
+                        let ni = node.lhs;
                         let type_id = data.type_id(ni);
                         let llvm_type = llvm_type(self.context, data.types, type_id);
                         let stack_addr = builder.build_alloca(llvm_type, "alloca_local");
                         let location = Location::new(stack_addr, 0);
                         state.locations.insert(ni, location);
-                        if node.rhs != 0 {
-                            let value = self.compile_expr(state, node.rhs);
+                        if rvalues_id != 0 {
+                            let value = self.compile_expr(state, rvalues_id);
                             self.builder.build_store(location.base, value);
                         }
                     }

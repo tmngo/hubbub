@@ -452,7 +452,7 @@ impl<'a> Analyzer<'a> {
             }
             Tag::VariableDecl => {
                 // Resolve identifier(s).
-                let lhs = self.tree.node(node.token);
+                let lhs = self.tree.node(node.lhs);
                 match lhs.tag {
                     Tag::Expressions => {
                         for i in lhs.lhs..lhs.rhs {
@@ -467,14 +467,14 @@ impl<'a> Analyzer<'a> {
                         }
                     }
                     Tag::Identifier => {
-                        let ni = node.token;
+                        let ni = node.lhs;
                         let name = self.tree.name(ni);
                         Self::define_symbol(self.tree, &mut self.scopes[self.current], name, ni)?;
                     }
                     _ => {}
                 }
-                self.resolve_node(node.lhs)?;
-                self.resolve_node(node.rhs)?;
+                self.resolve_node(self.tree.node_extra(node, 0))?;
+                self.resolve_node(self.tree.node_extra(node, 1))?;
             }
             _ => {
                 self.resolve_node(node.lhs)?;
@@ -514,9 +514,12 @@ impl<'a> Analyzer<'a> {
             // field -> struct decl
             Tag::Field => self.tree.node_index(def_node.rhs),
             // variable decl -> struct decl
-            Tag::VariableDecl => def_node.lhs,
+            Tag::VariableDecl => self.tree.node_extra(def_node, 0),
             // identifier -> var decl
-            Tag::Identifier => self.tree.node(def_node.lhs).lhs,
+            Tag::Identifier => {
+                let variable_decl = self.tree.node(def_node.lhs);
+                self.tree.node_extra(variable_decl, 0)
+            }
             _ => unreachable!(),
         };
 

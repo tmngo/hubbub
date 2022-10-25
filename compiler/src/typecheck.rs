@@ -709,11 +709,13 @@ impl<'a> Typechecker<'a> {
             Tag::VariableDecl => {
                 // lhs: type-expr
                 // rhs: init-expr
-                let identifiers = self.tree.node(node.token);
+                let identifiers = self.tree.node(node.lhs);
+                let annotation_id = self.tree.node_extra(node, 0);
+                let rvalues_id = self.tree.node_extra(node, 1);
 
-                let annotation = self.infer_node(node.lhs)?[0];
+                let annotation = self.infer_node(annotation_id)?[0];
                 self.infer_node_with_type(
-                    node.rhs,
+                    rvalues_id,
                     if annotation == 0 {
                         None
                     } else {
@@ -723,7 +725,7 @@ impl<'a> Typechecker<'a> {
 
                 let mut r_ids = SmallVec::<[NodeId; 8]>::new();
                 let mut rtypes = SmallVec::<[usize; 8]>::new();
-                let rvalues = self.tree.node(node.rhs);
+                let rvalues = self.tree.node(rvalues_id);
                 match rvalues.tag {
                     Tag::Expressions => {
                         for i in rvalues.lhs..rvalues.rhs {
@@ -734,7 +736,7 @@ impl<'a> Typechecker<'a> {
                         }
                     }
                     _ => {
-                        let ni = node.rhs;
+                        let ni = rvalues_id;
                         let ti = self.node_types[ni as usize];
                         r_ids.push(ni);
                         rtypes.push(ti);
@@ -764,7 +766,7 @@ impl<'a> Typechecker<'a> {
                         }
                     }
                     Tag::Identifier => {
-                        let inferred_type = infer_expr_type(node.token, 0)?;
+                        let inferred_type = infer_expr_type(node.lhs, 0)?;
                         inferred_type_ids.push(inferred_type);
                     }
                     _ => unreachable!(),
