@@ -1,7 +1,7 @@
 use crate::{
     analyze::Definition,
     parse::{Node, NodeId, NodeInfo, Tag, Tree},
-    typecheck::{Type as Typ, TypeId},
+    typecheck::{Type as Typ, TypeId, TypeIds},
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -12,7 +12,7 @@ pub struct Input<'a> {
     pub tree: &'a Tree,
     pub definitions: &'a HashMap<u32, Definition>,
     pub types: &'a Vec<Typ>,
-    pub node_types: &'a Vec<usize>,
+    pub node_types: &'a Vec<TypeIds>,
     type_parameters: HashMap<NodeId, HashSet<Vec<TypeId>>>,
 }
 
@@ -21,7 +21,7 @@ impl<'a> Input<'a> {
         tree: &'a Tree,
         definitions: &'a HashMap<u32, Definition>,
         types: &'a Vec<Typ>,
-        node_types: &'a Vec<usize>,
+        node_types: &'a Vec<TypeIds>,
         type_parameters: HashMap<NodeId, HashSet<Vec<TypeId>>>,
     ) -> Self {
         Self {
@@ -38,7 +38,7 @@ pub struct Data<'a> {
     pub tree: &'a Tree,
     pub definitions: &'a HashMap<u32, Definition>,
     pub types: &'a Vec<Typ>,
-    pub node_types: &'a Vec<usize>,
+    pub node_types: &'a Vec<TypeIds>,
     pub type_parameters: &'a HashMap<NodeId, HashSet<Vec<TypeId>>>,
     pub layouts: Vec<Layout>,
 }
@@ -63,7 +63,7 @@ impl<'a> Data<'a> {
 
     // NodeIds can correspond to multiple types.
     pub fn type_id(&self, node_id: NodeId) -> TypeId {
-        self.node_types[node_id as usize]
+        self.node_types[node_id as usize].first()
     }
 
     // pub fn node_type(&self, node_id: NodeId) -> &Typ {
