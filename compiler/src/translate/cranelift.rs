@@ -3,7 +3,7 @@ use crate::{
     builtin,
     parse::{Node, NodeId, Tag},
     translate::input::{sizeof, Data, Input, Layout, Shape},
-    typecheck::{BuiltInType, TypeId},
+    typecheck::{BuiltInType, TypeId, TypeIds},
     workspace::Workspace,
 };
 use cranelift::prelude::{
@@ -387,20 +387,31 @@ impl State {
                             locs.push(location);
                         }
                         let rhs = data.tree.node(rvalues_id);
-                        if rhs.tag == Tag::Expressions {
-                            for i in rhs.lhs..rhs.rhs {
-                                let ni = data.tree.node_index(i);
-                                let layout = data.layout(ni);
-                                let value = self
-                                    .compile_expr(data, c, ni)
-                                    .cranelift_value(c, data.layout(ni));
-                                locs[(i - rhs.lhs) as usize].store(
-                                    c,
-                                    value,
-                                    MemFlags::new(),
-                                    layout,
-                                );
+                        match rhs.tag {
+                            Tag::Expressions => {
+                                for i in rhs.lhs..rhs.rhs {
+                                    let ni = data.tree.node_index(i);
+                                    let layout = data.layout(ni);
+                                    let value = self
+                                        .compile_expr(data, c, ni)
+                                        .cranelift_value(c, data.layout(ni));
+                                    locs[(i - rhs.lhs) as usize].store(
+                                        c,
+                                        value,
+                                        MemFlags::new(),
+                                        layout,
+                                    );
+                                }
                             }
+                            Tag::Call => {
+                                let call = self.compile_expr(data, c, rvalues_id);
+                                let type_ids = data.type_ids(rvalues_id).all();
+                                for (i, &value) in call.values().iter().enumerate() {
+                                    let layout = &data.layouts[type_ids[i]];
+                                    locs[i as usize].store(c, value, MemFlags::new(), layout);
+                                }
+                            }
+                            _ => {}
                         }
                     }
                     Tag::Identifier => {
@@ -664,10 +675,21 @@ impl State {
         sig.params = args.iter().map(|_| AbiParam::new(ty)).collect();
 
         // Assume one return value.
-        let return_type = data.type_id(node_id);
-        if return_type != BuiltInType::Void as TypeId {
-            sig.returns.push(AbiParam::new(ty));
-        }
+        let return_types = data.type_ids(node_id);
+        let return_type = match return_types {
+            TypeIds::Single(t) => {
+                if *t != BuiltInType::Void as TypeId {
+                    sig.returns.push(AbiParam::new(ty));
+                }
+                *t
+            }
+            TypeIds::Multiple(ts) => {
+                for _ in ts {
+                    sig.returns.push(AbiParam::new(ty));
+                }
+                return_types.first()
+            }
+        };
 
         let callee = self
             .module
@@ -676,7 +698,12 @@ impl State {
         let local_callee = self.module.declare_func_in_func(callee, c.b.func);
         let call = c.b.ins().call(local_callee, &args);
         if return_type != BuiltInType::Void as TypeId {
-            Val::Scalar(c.b.inst_results(call)[0])
+            let return_values = c.b.inst_results(call);
+            if return_values.len() == 1 {
+                Val::Scalar(return_values[0])
+            } else {
+                Val::Multiple(return_values.into())
+            }
         } else {
             Val::Scalar(c.b.ins().iconst(ty, 0))
         }
@@ -871,6 +898,7 @@ impl Location {
 pub enum Val {
     Scalar(Value),
     Reference(Location, Option<Value>),
+    Multiple(Vec<Value>),
 }
 
 impl Val {
@@ -885,6 +913,14 @@ impl Val {
                     location.get_addr(c)
                 }
             }
+            _ => unreachable!("cannot get cranelift_value for multiple"),
+        }
+    }
+    fn values(self) -> Vec<Value> {
+        match &self {
+            Val::Scalar(value) => vec![*value],
+            Val::Multiple(values) => values.clone(),
+            _ => unreachable!(),
         }
     }
 }

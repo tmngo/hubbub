@@ -66,6 +66,10 @@ impl<'a> Data<'a> {
         self.node_types[node_id as usize].first()
     }
 
+    pub fn type_ids(&self, node_id: NodeId) -> &TypeIds {
+        &self.node_types[node_id as usize]
+    }
+
     // pub fn node_type(&self, node_id: NodeId) -> &Typ {
     //     &self.types[self.node_types[node_id as usize]]
     // }

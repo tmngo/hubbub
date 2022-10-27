@@ -14,6 +14,7 @@ use inkwell::{
     types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, IntType},
     values::{
         BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue,
+        StructValue,
     },
     AddressSpace, IntPredicate, OptimizationLevel,
 };
@@ -426,13 +427,31 @@ impl<'ctx> Generator<'ctx> {
                             locs.push(location);
                         }
                         let rhs = data.tree.node(rvalues_id);
-                        if rhs.tag == Tag::Expressions {
-                            for i in rhs.lhs..rhs.rhs {
-                                let ni = data.tree.node_index(i);
-                                let value = self.compile_expr(state, ni);
-                                self.builder
-                                    .build_store(locs[(i - rhs.lhs) as usize].base, value);
+                        match rhs.tag {
+                            Tag::Expressions => {
+                                for i in rhs.lhs..rhs.rhs {
+                                    let ni = data.tree.node_index(i);
+                                    let value = self.compile_expr(state, ni);
+                                    builder.build_store(locs[(i - rhs.lhs) as usize].base, value);
+                                }
                             }
+                            Tag::Call => {
+                                let call = self.compile_expr(state, rvalues_id);
+                                let type_ids = data.type_ids(rvalues_id).all();
+                                if type_ids.len() > 1 {
+                                    for (i, loc) in locs.iter().enumerate() {
+                                        let value = builder
+                                            .build_extract_value::<StructValue>(
+                                                call.into_struct_value(),
+                                                i as u32,
+                                                "extract_value",
+                                            )
+                                            .unwrap();
+                                        builder.build_store(loc.base, value);
+                                    }
+                                }
+                            }
+                            _ => {}
                         }
                     }
                     Tag::Identifier => {
@@ -451,22 +470,22 @@ impl<'ctx> Generator<'ctx> {
                 }
             }
             Tag::Return => {
-                // let mut return_values = Vec::new();
-                // for i in node.lhs..node.rhs {
-                //     let ni = data.node_index(i);
-                //     let val = self.compile_expr(state, ni);
-                //     let zero = self.context.i64_type().const_zero();
-                //     dbg!(val, zero);
-                //     return_values.push(zero);
-                // }
                 if node.lhs == node.rhs {
                     println!("returning none");
                     let unit_value = self.context.const_struct(&[], false).as_basic_value_enum();
                     builder.build_return(Some(&unit_value));
                 } else {
                     println!("returning some");
-                    let val = self.compile_expr(state, data.node_index(node.lhs));
-                    builder.build_return(Some(dbg!(&val)));
+                    let mut return_values = Vec::new();
+                    for i in node.lhs..node.rhs {
+                        let val = self.compile_expr(state, data.node_index(i));
+                        return_values.push(val);
+                    }
+                    if return_values.len() == 1 {
+                        builder.build_return(Some(&return_values[0]));
+                    } else {
+                        builder.build_aggregate_return(&return_values);
+                    };
                 }
             }
             Tag::While => {
