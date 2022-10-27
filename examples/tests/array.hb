@@ -1,7 +1,7 @@
 main :: () -> Int
     arr: Array{Int, 4}
-    i := 0
-    while i < 4
+    i := 1
+    while i != 4
         arr[i] = 2 * i
         i = i + 1
     end

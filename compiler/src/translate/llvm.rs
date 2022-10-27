@@ -662,6 +662,9 @@ impl<'ctx> Generator<'ctx> {
                 let array_ptr = self.compile_lvalue(state, node.lhs);
                 let index_value = self.compile_expr(state, node.rhs).into_int_value();
                 let zero = self.context.i64_type().const_int(0, false);
+                // Offset for 1-based indexing.
+                let base_offset = self.context.i64_type().const_int(1, false);
+                let index_value = builder.build_int_sub(index_value, base_offset, "int_sub");
                 unsafe { builder.build_gep(array_ptr, &[zero, index_value], "gep") }
             }
             _ => unreachable!("Invalid lvalue {:?} for assignment", node.tag),

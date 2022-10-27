@@ -554,21 +554,8 @@ impl State {
                 Val::Scalar(c.b.ins().ineg(lhs))
             }
             Tag::Subscript => {
-                let flags = MemFlags::new();
-                let arr_layout = data.layout(node.lhs);
-                let stride = if let Shape::Array { stride, .. } = arr_layout.shape {
-                    stride
-                } else {
-                    unreachable!();
-                };
-                let base = self.locate(data, node.lhs).load_value(c, flags, arr_layout);
-                dbg!(arr_layout);
-                let index = self
-                    .compile_expr(data, c, node.rhs)
-                    .cranelift_value(c, data.layout(node.rhs));
-                let offset = c.b.ins().imul_imm(index, stride as i64);
-                let addr = c.b.ins().iadd(base, offset);
-                Location::pointer(addr, 0).to_val(c, layout)
+                let lvalue = self.compile_lvalue(data, c, node_id);
+                lvalue.to_val(c, layout)
             }
             Tag::StringLiteral => {
                 let string = data
@@ -640,7 +627,8 @@ impl State {
                 dbg!(arr_layout);
                 let offset = c.b.ins().imul_imm(index, stride as i64);
                 let addr = c.b.ins().iadd(base, offset);
-                Location::pointer(addr, 0)
+                // Offset for 1-based indexing.
+                Location::pointer(addr, -(stride as i32))
             }
             _ => unreachable!("Invalid lvalue {:?} for assignment", node.tag),
         }

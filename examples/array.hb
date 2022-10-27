@@ -21,8 +21,8 @@ main :: () -> Int
     // x := 3
     // x = 4
     array: Array{Int, 4}
-    i := 0
-    while i < 4
+    i := 1
+    while i < 5
         array[i] = 2 * i
         i = i + 1
     end
