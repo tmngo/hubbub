@@ -372,62 +372,35 @@ impl State {
                 c.b.switch_to_block(merge_block);
             }
             Tag::VariableDecl => {
-                // lhs: type
-                // rhs: expr
+                // lhs: expressions
+                // rhs: expressions
                 let lhs = data.tree.node(node.lhs);
+                assert_eq!(lhs.tag, Tag::Expressions);
+                let mut locs = vec![];
+                for i in lhs.lhs..lhs.rhs {
+                    let ni = data.tree.node_index(i);
+                    let slot = self.create_stack_slot(data, c, ni);
+                    let location = Location::stack(slot, 0);
+                    self.locations.insert(ni, location);
+                    locs.push(location);
+                }
                 let rvalues_id = data.tree.node_extra(node, 1);
-                match lhs.tag {
-                    Tag::Expressions => {
-                        let mut locs = vec![];
-                        for i in lhs.lhs..lhs.rhs {
-                            let ni = data.tree.node_index(i);
-                            let slot = self.create_stack_slot(data, c, ni);
-                            let location = Location::stack(slot, 0);
-                            self.locations.insert(ni, location);
-                            locs.push(location);
-                        }
-                        let rhs = data.tree.node(rvalues_id);
-                        match rhs.tag {
-                            Tag::Expressions => {
-                                for i in rhs.lhs..rhs.rhs {
-                                    let ni = data.tree.node_index(i);
-                                    let layout = data.layout(ni);
-                                    let value = self
-                                        .compile_expr(data, c, ni)
-                                        .cranelift_value(c, data.layout(ni));
-                                    locs[(i - rhs.lhs) as usize].store(
-                                        c,
-                                        value,
-                                        MemFlags::new(),
-                                        layout,
-                                    );
-                                }
-                            }
-                            Tag::Call => {
-                                let call = self.compile_expr(data, c, rvalues_id);
-                                let type_ids = data.type_ids(rvalues_id).all();
-                                for (i, &value) in call.values().iter().enumerate() {
-                                    let layout = &data.layouts[type_ids[i]];
-                                    locs[i as usize].store(c, value, MemFlags::new(), layout);
-                                }
-                            }
-                            _ => {}
-                        }
+                if rvalues_id == 0 {
+                    return;
+                }
+                let rhs = data.tree.node(rvalues_id);
+                assert_eq!(rhs.tag, Tag::Expressions);
+                let mut location_index = 0;
+                if let Val::Multiple(values) = self.compile_expr(data, c, rvalues_id) {
+                    let type_ids = data.type_ids(rvalues_id).all();
+                    assert_eq!(type_ids.len(), values.len());
+                    for (i, value) in values.iter().enumerate() {
+                        let layout = &data.layouts[type_ids[i]];
+                        locs[location_index].store(c, *value, MemFlags::new(), layout);
+                        location_index += 1;
                     }
-                    Tag::Identifier => {
-                        let ni = node.lhs;
-                        let slot = self.create_stack_slot(data, c, ni);
-                        let location = Location::stack(slot, 0);
-                        self.locations.insert(ni, location);
-                        if rvalues_id != 0 {
-                            let layout = data.layout(rvalues_id);
-                            let value = self
-                                .compile_expr(data, c, rvalues_id)
-                                .cranelift_value(c, data.layout(rvalues_id));
-                            location.store(c, value, MemFlags::new(), layout);
-                        }
-                    }
-                    _ => {}
+                } else {
+                    unreachable!("rhs of variable declaration must be multiple-valued")
                 }
             }
             Tag::Return => {
@@ -553,6 +526,19 @@ impl State {
                     })
                     .collect();
                 self.compile_call(data, c, node_id, callee_id, args)
+            }
+            Tag::Expressions => {
+                let range = data.tree.range(node);
+                let mut values = Vec::with_capacity(range.len());
+                for i in range {
+                    let ni = data.tree.node_index(i);
+                    let val = self.compile_expr(data, c, ni);
+                    match val {
+                        Val::Multiple(xs) => values.extend(xs),
+                        _ => values.push(val.cranelift_value(c, data.layout(ni))),
+                    }
+                }
+                Val::Multiple(values)
             }
             Tag::Identifier => self.locate(data, node_id).to_val(c, layout),
             Tag::Negation => {
@@ -914,13 +900,6 @@ impl Val {
                 }
             }
             _ => unreachable!("cannot get cranelift_value for multiple"),
-        }
-    }
-    fn values(self) -> Vec<Value> {
-        match &self {
-            Val::Scalar(value) => vec![*value],
-            Val::Multiple(values) => values.clone(),
-            _ => unreachable!(),
         }
     }
 }

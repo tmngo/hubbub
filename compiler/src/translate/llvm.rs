@@ -410,63 +410,28 @@ impl<'ctx> Generator<'ctx> {
                 builder.position_at_end(merge_block);
             }
             Tag::VariableDecl => {
-                // lhs: type
-                // rhs: expr
+                // lhs: expressions
+                // rhs: expressions
                 let lhs = data.tree.node(node.lhs);
+                assert_eq!(lhs.tag, Tag::Expressions);
+                let mut locs = vec![];
+                for i in lhs.lhs..lhs.rhs {
+                    let ni = data.tree.node_index(i);
+                    let type_id = data.type_id(ni);
+                    let llvm_type = llvm_type(self.context, data.types, type_id);
+                    let stack_addr = builder.build_alloca(llvm_type, "alloca_local");
+                    let location = Location::new(stack_addr, 0);
+                    state.locations.insert(ni, location);
+                    locs.push(location);
+                }
                 let rvalues_id = data.tree.node_extra(node, 1);
-                match lhs.tag {
-                    Tag::Expressions => {
-                        let mut locs = vec![];
-                        for i in lhs.lhs..lhs.rhs {
-                            let ni = data.tree.node_index(i);
-                            let type_id = data.type_id(ni);
-                            let llvm_type = llvm_type(self.context, data.types, type_id);
-                            let stack_addr = builder.build_alloca(llvm_type, "alloca_local");
-                            let location = Location::new(stack_addr, 0);
-                            state.locations.insert(ni, location);
-                            locs.push(location);
-                        }
-                        let rhs = data.tree.node(rvalues_id);
-                        match rhs.tag {
-                            Tag::Expressions => {
-                                for i in rhs.lhs..rhs.rhs {
-                                    let ni = data.tree.node_index(i);
-                                    let value = self.compile_expr(state, ni);
-                                    builder.build_store(locs[(i - rhs.lhs) as usize].base, value);
-                                }
-                            }
-                            Tag::Call => {
-                                let call = self.compile_expr(state, rvalues_id);
-                                let type_ids = data.type_ids(rvalues_id).all();
-                                if type_ids.len() > 1 {
-                                    for (i, loc) in locs.iter().enumerate() {
-                                        let value = builder
-                                            .build_extract_value::<StructValue>(
-                                                call.into_struct_value(),
-                                                i as u32,
-                                                "extract_value",
-                                            )
-                                            .unwrap();
-                                        builder.build_store(loc.base, value);
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    Tag::Identifier => {
-                        let ni = node.lhs;
-                        let type_id = data.type_id(ni);
-                        let llvm_type = llvm_type(self.context, data.types, type_id);
-                        let stack_addr = builder.build_alloca(llvm_type, "alloca_local");
-                        let location = Location::new(stack_addr, 0);
-                        state.locations.insert(ni, location);
-                        if rvalues_id != 0 {
-                            let value = self.compile_expr(state, rvalues_id);
-                            self.builder.build_store(location.base, value);
-                        }
-                    }
-                    _ => {}
+                if rvalues_id == 0 {
+                    return;
+                }
+                let rhs = data.tree.node(rvalues_id);
+                assert_eq!(rhs.tag, Tag::Expressions);
+                for (i, value) in self.compile_exprs(state, rvalues_id).iter().enumerate() {
+                    builder.build_store(locs[i].base, *value);
                 }
             }
             Tag::Return => {
@@ -514,6 +479,38 @@ impl<'ctx> Generator<'ctx> {
                 self.compile_expr(state, node_id);
             }
         }
+    }
+
+    pub fn compile_exprs(
+        &self,
+        state: &mut State<'ctx>,
+        node_id: NodeId,
+    ) -> Vec<BasicValueEnum<'ctx>> {
+        let (data, builder) = (&self.data, &self.builder);
+        let node = data.tree.node(node_id);
+        assert_eq!(node.tag, Tag::Expressions);
+        let range = data.tree.range(node);
+        let mut values = Vec::with_capacity(range.len());
+        for i in range {
+            let ni = data.tree.node_index(i);
+            let value = self.compile_expr(state, ni);
+            let type_ids = data.type_ids(ni).all();
+            if type_ids.len() == 1 {
+                values.push(value);
+            } else {
+                for i in 0..type_ids.len() {
+                    let value = builder
+                        .build_extract_value::<StructValue>(
+                            value.into_struct_value(),
+                            i as u32,
+                            "extract_value",
+                        )
+                        .unwrap();
+                    values.push(value);
+                }
+            }
+        }
+        values
     }
 
     pub fn compile_expr(&self, state: &mut State<'ctx>, node_id: NodeId) -> BasicValueEnum<'ctx> {

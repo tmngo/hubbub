@@ -63,12 +63,14 @@ Module
       Identifier "Int"
     Block
       VariableDecl
-        Identifier "c"
-        Mul
-          IntegerLiteral "2"
-          Add
-            Identifier "a"
-            Identifier "b"
+        Expressions
+          Identifier "c"
+        Expressions
+          Mul
+            IntegerLiteral "2"
+            Add
+              Identifier "a"
+              Identifier "b"
       Return
         Identifier "c""#,
     );
@@ -98,8 +100,10 @@ Module
       Identifier "Int"
     Block
       VariableDecl
-        Identifier "x"
-        IntegerLiteral "3"
+        Expressions
+          Identifier "x"
+        Expressions
+          IntegerLiteral "3"
       Return
         Identifier "x""#,
     );
@@ -258,10 +262,12 @@ Module
           Identifier "Int64"
     Block
       VariableDecl
-        Identifier "c"
+        Expressions
+          Identifier "c"
         Identifier "Flo64"
       VariableDecl
-        Identifier "d"
+        Expressions
+          Identifier "d"
         Type "Array"
           Type "Array"
             Identifier "Int64"
@@ -277,8 +283,10 @@ fn parse_assign() {
         "a := b;",
         r#"
 VariableDecl
-  Identifier "a"
-  Identifier "b""#,
+  Expressions
+    Identifier "a"
+  Expressions
+    Identifier "b""#,
     );
 }
 
@@ -304,13 +312,15 @@ Module
       Identifier "Int"
     Block
       VariableDecl
-        Identifier "x"
-        Call
-          Access
-            Identifier "Math"
-            Identifier "cube"
-          Expressions
-            IntegerLiteral "3"
+        Expressions
+          Identifier "x"
+        Expressions
+          Call
+            Access
+              Identifier "Math"
+              Identifier "cube"
+            Expressions
+              IntegerLiteral "3"
       Return
         IntegerLiteral "0"
 Module
@@ -350,17 +360,22 @@ Module
       Parameters
     Block
       VariableDecl
-        Identifier "a"
+        Expressions
+          Identifier "a"
         Identifier "Int8"
       VariableDecl
-        Identifier "b"
-        Add
-          IntegerLiteral "1"
-          IntegerLiteral "2"
+        Expressions
+          Identifier "b"
+        Expressions
+          Add
+            IntegerLiteral "1"
+            IntegerLiteral "2"
       VariableDecl
-        Identifier "c"
+        Expressions
+          Identifier "c"
         Identifier "Int64"
-        Identifier "b"
+        Expressions
+          Identifier "b"
       Assign
         Identifier "a"
         IntegerLiteral "0"
@@ -391,8 +406,10 @@ Module
       Identifier "Int64"
     Block
       VariableDecl
-        Identifier "k"
-        IntegerLiteral "0"
+        Expressions
+          Identifier "k"
+        Expressions
+          IntegerLiteral "0"
       While
         Less
           Identifier "k"

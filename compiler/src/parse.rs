@@ -610,28 +610,22 @@ impl<'w> Parser<'w> {
 
     /// identifier-list = identifier (',' identifier)* ','?
     fn parse_identifier_list(&mut self) -> Result<NodeId> {
-        if self.next_tag(1) == TokenTag::Comma && self.next_tag(2) == TokenTag::Identifier {
-            let range = parse_while!(
-                self,
-                self.token_isnt(TokenTag::Colon) && !self.token_is(TokenTag::ColonEqual),
-                {
-                    let identifier_token = self.expect_token(TokenTag::Identifier)?;
-                    self.match_token(TokenTag::Comma);
-                    self.add_leaf(Tag::Identifier, identifier_token)?
-                }
-            );
-            let first_identifer = self.tree.node(self.tree.node_index(range.start));
-            self.add_node(
-                Tag::Expressions,
-                first_identifer.token,
-                range.start,
-                range.end,
-            )
-        } else {
-            let identifier_token = self.expect_token(TokenTag::Identifier)?;
-            self.match_token(TokenTag::Comma);
-            self.add_leaf(Tag::Identifier, identifier_token)
-        }
+        let range = parse_while!(
+            self,
+            self.token_isnt(TokenTag::Colon) && !self.token_is(TokenTag::ColonEqual),
+            {
+                let identifier_token = self.expect_token(TokenTag::Identifier)?;
+                self.match_token(TokenTag::Comma);
+                self.add_leaf(Tag::Identifier, identifier_token)?
+            }
+        );
+        let first_identifer = self.tree.node(self.tree.node_index(range.start));
+        self.add_node(
+            Tag::Expressions,
+            first_identifer.token,
+            range.start,
+            range.end,
+        )
     }
 
     /// expr-list = expr (',' expr)* ','?
@@ -648,16 +642,12 @@ impl<'w> Parser<'w> {
         );
         let first = self.tree.node_index(range.start);
         let first_identifer = self.tree.node(first);
-        if range.end - range.start == 1 {
-            Ok(first)
-        } else {
-            self.add_node(
-                Tag::Expressions,
-                first_identifer.token,
-                range.start,
-                range.end,
-            )
-        }
+        self.add_node(
+            Tag::Expressions,
+            first_identifer.token,
+            range.start,
+            range.end,
+        )
     }
 
     // token: ':'
@@ -672,7 +662,7 @@ impl<'w> Parser<'w> {
             TokenTag::Colon => {
                 type_expr = self.parse_expr_base()?;
                 if self.match_token(TokenTag::Equal) {
-                    init_expr = self.parse_expr()?;
+                    init_expr = self.parse_expr_list()?;
                 }
             }
             TokenTag::ColonEqual => {

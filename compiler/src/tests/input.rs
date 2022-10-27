@@ -21,7 +21,8 @@ Module
       Identifier "Int"
     Block
       VariableDecl
-        Identifier "segment"
+        Expressions
+          Identifier "segment"
         Identifier "Segment"
       Assign
         Access
@@ -31,7 +32,8 @@ Module
           Identifier "x"
         IntegerLiteral "3"
       VariableDecl
-        Identifier "point"
+        Expressions
+          Identifier "point"
         Identifier "Point"
       Assign
         Access
@@ -87,10 +89,12 @@ Module
       Identifier "Int"
     Block
       VariableDecl
-        Identifier "x"
-        Call
-          Identifier "fib"
-          Expressions
-            IntegerLiteral "7"
+        Expressions
+          Identifier "x"
+        Expressions
+          Call
+            Identifier "fib"
+            Expressions
+              IntegerLiteral "7"
       Return
         Identifier "x""#;

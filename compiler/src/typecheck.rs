@@ -746,57 +746,28 @@ impl<'a> Typechecker<'a> {
                 let mut r_ids = SmallVec::<[NodeId; 8]>::new();
                 let mut rtypes = Vec::<TypeId>::new();
                 let rvalues = self.tree.node(rvalues_id);
-                match rvalues.tag {
-                    Tag::Expressions => {
-                        for i in rvalues.lhs..rvalues.rhs {
-                            let ni = self.tree.node_index(i);
-                            let ti = &self.node_types[ni as usize];
-                            r_ids.push(ni);
-                            match ti {
-                                Single(t) => rtypes.push(*t),
-                                Multiple(ts) => rtypes.extend(ts),
-                            }
-                        }
-                    }
-                    _ => {
-                        let ni = rvalues_id;
-                        let ti = &self.node_types[ni as usize];
-                        r_ids.push(ni);
-                        match ti {
-                            Single(t) => rtypes.push(*t),
-                            Multiple(ts) => rtypes.extend(ts),
-                        }
+                for i in self.tree.range(rvalues) {
+                    let ni = self.tree.node_index(i);
+                    let ti = &self.node_types[ni as usize];
+                    r_ids.push(ni);
+                    match ti {
+                        Single(t) => rtypes.push(*t),
+                        Multiple(ts) => rtypes.extend(ts),
                     }
                 }
 
-                // dbg!(&rtypes);
-                // dbg!(annotation);
-
-                let mut infer_expr_type = |ni, index| {
+                for (index, i) in self.tree.range(identifiers).enumerate() {
+                    let ni = self.tree.node_index(i);
                     inferred_node_ids.push(ni);
                     let rtype = rtypes[index];
                     let inferred_type = infer_type(annotation, rtype)?;
                     if rtype == BuiltInType::IntegerLiteral as TypeId {
                         self.node_types[r_ids[index] as usize] = inferred_type.clone();
                     }
-                    Ok(inferred_type)
-                };
-
-                match identifiers.tag {
-                    Tag::Expressions => {
-                        for i in identifiers.lhs..identifiers.rhs {
-                            let ni = self.tree.node_index(i);
-                            let index = (i - identifiers.lhs) as usize;
-                            let inferred_type = infer_expr_type(ni, index)?;
-                            inferred_type_ids.push(inferred_type);
-                        }
-                    }
-                    Tag::Identifier => {
-                        let inferred_type = infer_expr_type(node.lhs, 0)?;
-                        inferred_type_ids.push(inferred_type);
-                    }
-                    _ => unreachable!(),
+                    inferred_type_ids.push(inferred_type);
                 }
+                self.set_node_type(rvalues_id, Multiple(rtypes));
+
                 Single(0)
                 // infer_type(annotation, rtypes[0])?
             }
