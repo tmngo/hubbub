@@ -231,7 +231,7 @@ impl<'a> Typechecker<'a> {
             current_fn_type_id: None,
             current_struct_id: 0,
             types,
-            node_types: vec![TypeIds::Single(0); tree.nodes.len()],
+            node_types: vec![TypeIds::Single(BuiltInType::Void as TypeId); tree.nodes.len()],
         }
     }
 
@@ -260,7 +260,8 @@ impl<'a> Typechecker<'a> {
     }
 
     fn infer_declaration_type(&mut self, node_id: NodeId) -> Result<()> {
-        if node_id == 0 || self.node_types[node_id as usize].first() != 0 {
+        if node_id == 0 || self.node_types[node_id as usize].first() != BuiltInType::Void as TypeId
+        {
             return Ok(());
         }
         let node = self.tree.node(node_id);
@@ -288,7 +289,7 @@ impl<'a> Typechecker<'a> {
     fn infer_range_with_types(
         &mut self,
         node: &Node,
-        parent_type_ids: Option<Vec<TypeId>>,
+        parent_type_ids: Option<Vec<TypeIds>>,
     ) -> Result<TypeIds> {
         if let Some(type_ids) = parent_type_ids {
             for (index, i) in (node.lhs..node.rhs).enumerate() {
@@ -297,7 +298,7 @@ impl<'a> Typechecker<'a> {
                     if type_ids.is_empty() {
                         None
                     } else {
-                        Some(type_ids[index])
+                        Some(&type_ids[index])
                     },
                 );
                 if let Err(diagnostic) = result {
@@ -312,7 +313,7 @@ impl<'a> Typechecker<'a> {
                 }
             }
         }
-        Ok(Single(0))
+        Ok(Single(BuiltInType::Void as TypeId))
     }
 
     fn infer_node(&mut self, node_id: NodeId) -> Result<TypeIds> {
@@ -323,15 +324,15 @@ impl<'a> Typechecker<'a> {
     fn infer_node_with_type(
         &mut self,
         node_id: NodeId,
-        parent_type_id: Option<TypeId>,
+        parent_type_id: Option<&TypeIds>,
     ) -> Result<TypeIds> {
         if node_id == 0 {
-            return Ok(Single(0));
+            return Ok(Single(BuiltInType::Void as TypeId));
         }
         let node = self.tree.node(node_id);
         // println!("[{}] - {:?}", node_id, node.tag);
         let current_type_id = self.node_types[node_id as usize].first();
-        if current_type_id != 0 {
+        if current_type_id != BuiltInType::Void as TypeId {
             return Ok(Single(current_type_id));
         }
         let mut inferred_node_ids = vec![];
@@ -340,7 +341,7 @@ impl<'a> Typechecker<'a> {
             Tag::Access => {
                 let ltype = self.infer_node(node.lhs)?.first();
                 // Module access.
-                if ltype == 0 {
+                if ltype == BuiltInType::Void as TypeId {
                     return self.infer_node(node.rhs);
                 }
 
@@ -419,10 +420,10 @@ impl<'a> Typechecker<'a> {
                     if !returns.is_empty() {
                         Multiple(returns.clone())
                     } else {
-                        Single(0)
+                        Single(BuiltInType::Void as TypeId)
                     }
                 } else {
-                    Single(0)
+                    Single(BuiltInType::Void as TypeId)
                 }
             }
             Tag::Div
@@ -433,20 +434,45 @@ impl<'a> Typechecker<'a> {
             | Tag::BitwiseShiftR
             | Tag::BitwiseXor => self.infer_binary_node(node)?,
             Tag::Assign => {
-                let ltype = self.infer_node(node.lhs)?.first();
-                let rtype = self.infer_node_with_type(node.rhs, Some(ltype))?.first();
+                let ltype = self.infer_node(node.lhs)?;
+                let rtype = self.infer_node_with_type(node.rhs, Some(&ltype))?.first();
                 // if is_integer(ltype) && rtype == BuiltInType::IntegerLiteral as TypeId {
                 //     self.node_types[node.rhs as usize] = ltype;
                 // } else
-                if node.rhs != 0 && ltype != rtype {
+
+                // let lvalues = self.tree.node(node.lhs);
+                // let mut ltypes = Vec::<TypeId>::new();
+                // for i in self.tree.range(lvalues) {
+                //     let ni = self.tree.node_index(i);
+                //     let ti = &self.node_types[ni as usize];
+                //     match ti {
+                //         Single(t) => ltypes.push(*t),
+                //         Multiple(ts) => ltypes.extend(ts),
+                //     }
+                // }
+
+                // let rvalues = self.tree.node(node.rhs);
+                // let mut rtypes = Vec::<TypeId>::new();
+                // for i in self.tree.range(rvalues) {
+                //     let ni = self.tree.node_index(i);
+                //     // let ti = &self.node_types[ni as usize];
+                //     let ti = self.infer_node_with_type(ni, parent_type_id)?;
+                //     match ti {
+                //         Single(t) => rtypes.push(t),
+                //         Multiple(ts) => rtypes.extend(ts),
+                //     }
+                // }
+
+                if node.rhs != 0 && ltype.first() != rtype {
                     return Err(Diagnostic::error()
                         .with_message(format!(
                             "mismatched types in assignment: expected {:?}, got {:?}",
-                            self.types[ltype], self.types[rtype]
+                            self.types[ltype.first()],
+                            self.types[rtype]
                         ))
                         .with_labels(vec![self.tree.label(node.token)]));
                 }
-                Single(0)
+                Single(BuiltInType::Void as TypeId)
             }
             Tag::Block | Tag::Expressions | Tag::IfElse | Tag::Module | Tag::Parameters => {
                 self.infer_range(node)?
@@ -483,10 +509,10 @@ impl<'a> Typechecker<'a> {
                     if !returns.is_empty() {
                         Multiple(returns.clone())
                     } else {
-                        Single(0)
+                        Single(BuiltInType::Void as TypeId)
                     }
                 } else {
-                    Single(0)
+                    Single(BuiltInType::Void as TypeId)
                 }
             }
             Tag::Dereference => {
@@ -549,14 +575,14 @@ impl<'a> Typechecker<'a> {
                         //         returns: vec![ptr_type],
                         //     })
                         // }
-                        _ => Single(0),
+                        _ => Single(BuiltInType::Void as TypeId),
                     }
                 } else {
-                    Single(0)
+                    Single(BuiltInType::Void as TypeId)
                 }
             }
             Tag::IntegerLiteral => match parent_type_id {
-                Some(type_id) if is_integer(type_id) => Single(type_id),
+                Some(type_id) if is_integer(type_id.first()) => Single(type_id.first()),
                 _ => Single(BuiltInType::IntegerLiteral as TypeId),
             },
             Tag::True | Tag::False => Single(BuiltInType::Boolean as TypeId),
@@ -608,7 +634,7 @@ impl<'a> Typechecker<'a> {
             }
             Tag::Return => {
                 let fn_type = &self.types[self.current_fn_type_id.unwrap()];
-                let return_type_ids = fn_type.returns().clone();
+                let return_type_ids = fn_type.returns().iter().map(|ti| Single(*ti)).collect();
                 self.infer_range_with_types(node, Some(return_type_ids))?
             }
             Tag::Struct => {
@@ -643,7 +669,7 @@ impl<'a> Typechecker<'a> {
             Tag::StringLiteral => Single(BuiltInType::String as TypeId),
             Tag::Subscript => {
                 let array_type = self.infer_node(node.lhs)?.first();
-                self.infer_node_with_type(node.rhs, Some(BuiltInType::Integer as TypeId))?;
+                self.infer_node_with_type(node.rhs, Some(&Single(BuiltInType::Integer as TypeId)))?;
                 if let Type::Array { typ, .. } = self.types[array_type] {
                     Single(typ)
                 } else {
@@ -734,12 +760,13 @@ impl<'a> Typechecker<'a> {
                 let rvalues_id = self.tree.node_extra(node, 1);
 
                 let annotation = self.infer_node(annotation_id)?.first();
+                let annotation_ref = &Single(annotation);
                 self.infer_node_with_type(
                     rvalues_id,
-                    if annotation == 0 {
+                    if annotation == BuiltInType::Void as TypeId {
                         None
                     } else {
-                        Some(annotation)
+                        Some(annotation_ref)
                     },
                 )?;
 
@@ -768,13 +795,13 @@ impl<'a> Typechecker<'a> {
                 }
                 self.set_node_type(rvalues_id, Multiple(rtypes));
 
-                Single(0)
+                Single(BuiltInType::Void as TypeId)
                 // infer_type(annotation, rtypes[0])?
             }
             _ => {
                 self.infer_node(node.lhs)?;
                 self.infer_node(node.rhs)?;
-                Single(0)
+                Single(BuiltInType::Void as TypeId)
             }
         };
 
@@ -1141,14 +1168,15 @@ fn is_integer(type_id: TypeId) -> bool {
 }
 
 fn infer_type(annotation_type: TypeId, value_type: TypeId) -> Result<TypeIds> {
-    if annotation_type != 0
-        && (value_type == 0 || value_type == BuiltInType::IntegerLiteral as TypeId)
+    let void = BuiltInType::Void as TypeId;
+    if annotation_type != void
+        && (value_type == void || value_type == BuiltInType::IntegerLiteral as TypeId)
     {
         // Explicit type based on annotation.
         Ok(Single(annotation_type))
-    } else if annotation_type == 0 && value_type == BuiltInType::IntegerLiteral as TypeId {
+    } else if annotation_type == void && value_type == BuiltInType::IntegerLiteral as TypeId {
         Ok(Single(BuiltInType::Integer as TypeId))
-    } else if annotation_type == 0 && value_type != 0 {
+    } else if annotation_type == void && value_type != void {
         // Infer type based on rvalue.
         Ok(Single(value_type))
     } else if annotation_type != value_type {
