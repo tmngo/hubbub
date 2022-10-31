@@ -12,14 +12,18 @@ use cranelift::prelude::{
         Context,
     },
     isa::{lookup, TargetFrontendConfig},
-    settings, AbiParam, FunctionBuilder, FunctionBuilderContext, InstBuilder, IntCC, MemFlags,
-    StackSlotData, StackSlotKind, Type, Value, Variable,
+    settings, AbiParam, Block, FunctionBuilder, FunctionBuilderContext, InstBuilder, IntCC,
+    MemFlags, StackSlotData, StackSlotKind, Type, Value, Variable,
 };
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataContext, FuncId, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use dlopen::raw::Library;
-use std::{collections::HashMap, fs, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::Path,
+};
 
 pub trait CraneliftModule: Module {
     fn finalize(self: Box<Self>, id: FuncId, output_file: &Path) -> i64;
@@ -126,6 +130,7 @@ impl<'a> Generator<'a> {
             state: State {
                 module,
                 locations: HashMap::new(),
+                filled_blocks: HashSet::new(),
             },
         }
     }
@@ -275,6 +280,7 @@ impl<'a> Generator<'a> {
 pub struct State {
     locations: HashMap<NodeId, Location>,
     pub module: Box<dyn CraneliftModule>,
+    filled_blocks: HashSet<Block>,
 }
 
 impl State {
@@ -303,6 +309,7 @@ impl State {
                 let body = data.node(node.rhs);
                 c.b.ins().brz(condition_expr, merge_block, &[]);
                 c.b.ins().jump(then_block, &[]);
+                self.filled_blocks.insert(c.b.current_block().unwrap());
                 c.b.seal_block(then_block);
                 // then block
                 c.b.switch_to_block(then_block);
@@ -310,8 +317,9 @@ impl State {
                     let index = data.node_index(i);
                     self.compile_stmt(data, c, index);
                 }
-                if !c.b.is_filled() {
+                if !self.filled_blocks.contains(&c.b.current_block().unwrap()) {
                     c.b.ins().jump(merge_block, &[]);
+                    self.filled_blocks.insert(c.b.current_block().unwrap());
                 }
                 c.b.seal_block(merge_block);
                 // merge block
@@ -364,7 +372,7 @@ impl State {
                         let index = data.node_index(j);
                         self.compile_stmt(data, c, index);
                     }
-                    if !c.b.is_filled() {
+                    if !self.filled_blocks.contains(&c.b.current_block().unwrap()) {
                         c.b.ins().jump(merge_block, &[]);
                     }
                 }
@@ -413,6 +421,7 @@ impl State {
                     return_values.push(val);
                 }
                 c.b.ins().return_(&return_values[..]);
+                self.filled_blocks.insert(c.b.current_block().unwrap());
             }
             Tag::While => {
                 let condition = self
@@ -425,6 +434,7 @@ impl State {
                 c.b.ins().brnz(condition, while_block, &[]);
                 // false? jump to after loop
                 c.b.ins().jump(merge_block, &[]);
+                self.filled_blocks.insert(c.b.current_block().unwrap());
                 // block_while:
                 c.b.switch_to_block(while_block);
                 let body = data.node(node.rhs);
@@ -440,6 +450,7 @@ impl State {
                 c.b.seal_block(while_block);
                 c.b.ins().jump(merge_block, &[]);
                 c.b.seal_block(merge_block);
+                self.filled_blocks.insert(c.b.current_block().unwrap());
                 // block_merge:
                 c.b.switch_to_block(merge_block);
             }
@@ -764,7 +775,7 @@ impl State {
 
     fn create_stack_slot(&mut self, data: &Data, c: &mut FnContext, node_id: u32) -> StackSlot {
         let size = sizeof(data.types, data.type_id(node_id));
-        c.b.create_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, size))
+        c.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, size))
     }
 }
 
