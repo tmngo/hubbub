@@ -55,6 +55,7 @@ impl Definition {
 pub enum BuiltInFunction {
     Add,
     Mul,
+    SizeOf,
 }
 
 // Assert that Tag size <= 1 byte
@@ -125,6 +126,10 @@ impl<'a> Analyzer<'a> {
             ("Array", Definition::BuiltIn(BuiltInType::Array)),
             ("+", Definition::BuiltInFunction(BuiltInFunction::Add)),
             ("*", Definition::BuiltInFunction(BuiltInFunction::Mul)),
+            (
+                "sizeof",
+                Definition::BuiltInFunction(BuiltInFunction::SizeOf),
+            ),
         ]);
         let foreign = Scope::from(
             [

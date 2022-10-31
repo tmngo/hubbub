@@ -29,7 +29,9 @@ pub struct TypeError(String);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
+    None,
     Void,
+    Any,
     Boolean,
     Integer,
     Unsigned8,
@@ -111,7 +113,9 @@ impl TypeIds {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum BuiltInType {
+    None,
     Void,
+    Any,
     Boolean,
 
     Integer,
@@ -126,7 +130,8 @@ pub enum BuiltInType {
     Count,
 
     // Prelude types
-    String = 11,
+    PointerUnsigned8,
+    String = BuiltInType::Count as isize + 3,
 }
 
 enum CallResult {
@@ -167,8 +172,10 @@ impl<'a> Typechecker<'a> {
         definitions: &'a mut HashMap<u32, Definition>,
         overload_sets: &'a HashMap<NodeId, Vec<Definition>>,
     ) -> Self {
-        let mut types = vec![Type::Void; BuiltInType::Count as usize];
+        let mut types = vec![Type::None; BuiltInType::Count as usize];
+        // types[BuiltInType::None as TypeId] = Type::None;
         types[BuiltInType::Void as TypeId] = Type::Void;
+        types[BuiltInType::Any as TypeId] = Type::Any;
         types[BuiltInType::Boolean as TypeId] = Type::Boolean;
         types[BuiltInType::Integer as TypeId] = Type::Integer;
         types[BuiltInType::Unsigned8 as TypeId] = Type::Unsigned8;
@@ -208,9 +215,15 @@ impl<'a> Typechecker<'a> {
         };
         types.push(binary_int_op_type);
         let binary_int_op_type_id = types.len() - 1;
+        types.push(Type::Function {
+            parameters: vec![BuiltInType::Any as TypeId],
+            returns: vec![BuiltInType::Integer as TypeId],
+        });
+        let sizeof_type_id = types.len() - 1;
         let fn_types = [
             (BuiltInFunction::Add, binary_int_op_type_id),
             (BuiltInFunction::Mul, binary_int_op_type_id),
+            (BuiltInFunction::SizeOf, sizeof_type_id),
         ];
         for (tag, type_id) in fn_types {
             builtin_function_types.insert(tag, type_id);
@@ -993,7 +1006,7 @@ impl<'a> Typechecker<'a> {
             for arg_type in arg_type_ids.all() {
                 let param_type = parameter_types[parameter_index];
                 parameter_index += 1;
-                if arg_type != param_type {
+                if arg_type != param_type && param_type != BuiltInType::Any as TypeId {
                     // Check if untyped argument is compatible with parameter.
                     if is_integer(param_type) && arg_type == BuiltInType::IntegerLiteral as TypeId {
                         untyped_arguments.push((node_id, param_type));

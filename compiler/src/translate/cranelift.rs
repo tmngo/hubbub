@@ -477,13 +477,7 @@ impl State {
             }
             Tag::Add | Tag::Mul => {
                 let callee_id = node_id;
-                let args = vec![
-                    self.compile_expr(data, c, node.lhs)
-                        .cranelift_value(c, data.layout(node.lhs)),
-                    self.compile_expr(data, c, node.rhs)
-                        .cranelift_value(c, data.layout(node.rhs)),
-                ];
-                self.compile_call(data, c, node_id, callee_id, args)
+                self.compile_call(data, c, node_id, callee_id, true)
             }
             Tag::BitwiseShiftL => {
                 let (lhs, rhs) = self.compile_children(data, c, node);
@@ -527,16 +521,7 @@ impl State {
             Tag::False => Val::Scalar(c.b.ins().iconst(ty, 0)),
             Tag::Call => {
                 let callee_id = node.lhs;
-                let args = data
-                    .tree
-                    .range(data.node(node.rhs))
-                    .map(|i| {
-                        let ni = data.node_index(i);
-                        self.compile_expr(data, c, data.node_index(i))
-                            .cranelift_value(c, data.layout(ni))
-                    })
-                    .collect();
-                self.compile_call(data, c, node_id, callee_id, args)
+                self.compile_call(data, c, node_id, callee_id, false)
             }
             Tag::Expressions => {
                 let range = data.tree.range(node);
@@ -648,7 +633,7 @@ impl State {
         c: &mut FnContext,
         node_id: NodeId,
         callee_id: NodeId,
-        args: Vec<Value>,
+        binary: bool,
     ) -> Val {
         let ty = c.ptr_type;
 
@@ -658,7 +643,7 @@ impl State {
 
         let name = match definition {
             Definition::BuiltInFunction(id) => {
-                return self.compile_built_in_function(c, *id, args);
+                return self.compile_built_in_function(data, c, *id, node_id);
             }
             Definition::User(id) | Definition::Overload(id) => {
                 data.mangle_function_declaration(*id, true)
@@ -666,6 +651,25 @@ impl State {
             Definition::Foreign(_) => data.tree.name(callee_id).to_string(),
             Definition::Resolved(id) => data.mangle_function_declaration(*id, true),
             _ => unreachable!("Definition not found: {}", "failed to get function decl id"),
+        };
+
+        let node = data.tree.node(node_id);
+        let args = if binary {
+            vec![
+                self.compile_expr(data, c, node.lhs)
+                    .cranelift_value(c, data.layout(node.lhs)),
+                self.compile_expr(data, c, node.rhs)
+                    .cranelift_value(c, data.layout(node.rhs)),
+            ]
+        } else {
+            data.tree
+                .range(data.node(node.rhs))
+                .map(|i| {
+                    let ni = data.node_index(i);
+                    self.compile_expr(data, c, data.node_index(i))
+                        .cranelift_value(c, data.layout(ni))
+                })
+                .collect()
         };
 
         let mut sig = self.module.make_signature();
@@ -708,13 +712,38 @@ impl State {
 
     fn compile_built_in_function(
         &mut self,
+        data: &Data,
         c: &mut FnContext,
         built_in_function: BuiltInFunction,
-        args: Vec<Value>,
+        node_id: NodeId,
     ) -> Val {
+        let node = data.tree.node(node_id);
         match built_in_function {
-            BuiltInFunction::Add => Val::Scalar(c.b.ins().iadd(args[0], args[1])),
-            BuiltInFunction::Mul => Val::Scalar(c.b.ins().imul(args[0], args[1])),
+            BuiltInFunction::Add => {
+                let a = self
+                    .compile_expr(data, c, node.lhs)
+                    .cranelift_value(c, data.layout(node.lhs));
+                let b = self
+                    .compile_expr(data, c, node.rhs)
+                    .cranelift_value(c, data.layout(node.rhs));
+                Val::Scalar(c.b.ins().iadd(a, b))
+            }
+            BuiltInFunction::Mul => {
+                let a = self
+                    .compile_expr(data, c, node.lhs)
+                    .cranelift_value(c, data.layout(node.lhs));
+                let b = self
+                    .compile_expr(data, c, node.rhs)
+                    .cranelift_value(c, data.layout(node.rhs));
+                Val::Scalar(c.b.ins().imul(a, b))
+            }
+            BuiltInFunction::SizeOf => {
+                let args = data.tree.node(node.rhs);
+                let first_arg_id = data.tree.node_index(args.lhs);
+                let type_id = data.type_id(first_arg_id);
+                let value = sizeof(data.types, type_id) as i64;
+                Val::Scalar(c.b.ins().iconst(c.ptr_type, value))
+            }
         }
     }
 

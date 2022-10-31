@@ -1,7 +1,7 @@
 use crate::{
     analyze::{BuiltInFunction, Definition, Lookup},
     parse::{Node, NodeId, Tag},
-    translate::input::{Data, Input, Layout},
+    translate::input::{sizeof, Data, Input, Layout},
     typecheck::{BuiltInType, Type as Typ, TypeId},
 };
 use inkwell::{
@@ -547,11 +547,7 @@ impl<'ctx> Generator<'ctx> {
                 let definition = data.definitions.get(&node_id).unwrap_or_else(|| {
                     panic!("Definition not found: {}", "failed to get function decl id")
                 });
-                let args = vec![
-                    self.compile_expr(state, node.lhs),
-                    self.compile_expr(state, node.rhs),
-                ];
-                self.compile_call(node_id, definition, args)
+                self.compile_call(state, node_id, definition, true)
             }
             Tag::BitwiseShiftL => {
                 let (lhs, rhs) = self.compile_children(state, node);
@@ -611,12 +607,7 @@ impl<'ctx> Generator<'ctx> {
                 let definition = data.definitions.get(&node.lhs).unwrap_or_else(|| {
                     panic!("Definition not found: {}", "failed to get function decl id")
                 });
-                let args: Vec<BasicValueEnum> = data
-                    .tree
-                    .range(data.node(node.rhs))
-                    .map(|i| self.compile_expr(state, data.node_index(i)))
-                    .collect();
-                self.compile_call(node_id, definition, args)
+                self.compile_call(state, node_id, definition, false)
             }
             Tag::Identifier => {
                 let name = data.tree.name(node_id);
@@ -699,14 +690,15 @@ impl<'ctx> Generator<'ctx> {
 
     fn compile_call(
         &self,
+        state: &mut State<'ctx>,
         node_id: NodeId,
         definition: &Definition,
-        args: Vec<BasicValueEnum<'ctx>>,
+        binary: bool,
     ) -> BasicValueEnum<'ctx> {
         let (data, builder) = (&self.data, &self.builder);
         let name = match &definition {
             Definition::BuiltInFunction(id) => {
-                return self.compile_built_in_function(*id, args);
+                return self.compile_built_in_function(state, *id, node_id);
             }
             Definition::User(id) | Definition::Foreign(id) | Definition::Overload(id) => {
                 data.mangle_function_declaration(*id, true)
@@ -722,6 +714,19 @@ impl<'ctx> Generator<'ctx> {
 
         // Assume one return value.
         let return_type = data.type_id(node_id);
+
+        let node = data.tree.node(node_id);
+        let args = if binary {
+            vec![
+                self.compile_expr(state, node.lhs),
+                self.compile_expr(state, node.rhs),
+            ]
+        } else {
+            data.tree
+                .range(data.node(node.rhs))
+                .map(|i| self.compile_expr(state, data.node_index(i)))
+                .collect()
+        };
 
         let mut argiter = args.iter();
         let argslice = argiter.by_ref();
@@ -742,22 +747,31 @@ impl<'ctx> Generator<'ctx> {
 
     fn compile_built_in_function(
         &self,
+        state: &mut State<'ctx>,
         built_in_function: BuiltInFunction,
-        args: Vec<BasicValueEnum<'ctx>>,
+        node_id: NodeId,
     ) -> BasicValueEnum<'ctx> {
+        let data = &self.data;
+        let node = data.tree.node(node_id);
         match built_in_function {
-            BuiltInFunction::Add => self.builder.build_int_add(
-                args[0].into_int_value(),
-                args[1].into_int_value(),
-                "int_add",
-            ),
-            BuiltInFunction::Mul => self.builder.build_int_mul(
-                args[0].into_int_value(),
-                args[1].into_int_value(),
-                "int_mul",
-            ),
+            BuiltInFunction::Add => {
+                let a = self.compile_expr(state, node.lhs).into_int_value();
+                let b = self.compile_expr(state, node.rhs).into_int_value();
+                self.builder.build_int_add(a, b, "int_add").into()
+            }
+            BuiltInFunction::Mul => {
+                let a = self.compile_expr(state, node.lhs).into_int_value();
+                let b = self.compile_expr(state, node.rhs).into_int_value();
+                self.builder.build_int_mul(a, b, "int_mul").into()
+            }
+            BuiltInFunction::SizeOf => {
+                let args = data.tree.node(node.rhs);
+                let first_arg_id = data.tree.node_index(args.lhs);
+                let type_id = data.type_id(first_arg_id);
+                let value = sizeof(data.types, type_id) as u64;
+                self.context.i64_type().const_int(value, false).into()
+            }
         }
-        .into()
     }
 
     fn compile_integer_literal(
