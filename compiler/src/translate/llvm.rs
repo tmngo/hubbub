@@ -704,6 +704,42 @@ impl<'ctx> Generator<'ctx> {
                 data.mangle_function_declaration(*id, true)
             }
             Definition::Resolved(id) => data.mangle_function_declaration(*id, true),
+            Definition::BuiltIn(built_in_type) => {
+                let node = data.tree.node(node_id);
+                let args = data.node(node.rhs);
+                let ni = data.node_index(args.lhs);
+                let arg = self.compile_expr(state, ni);
+
+                let from_type_enum = llvm_type(self.context, data.types, data.type_id(ni));
+                let from_bits = from_type_enum.into_int_type().get_bit_width();
+
+                let ti = *built_in_type as TypeId;
+                let to_typ = &data.types[ti];
+                let to_type_enum = llvm_type(self.context, data.types, ti);
+                let to_bits = to_type_enum.into_int_type().get_bit_width();
+
+                return if arg.get_type().is_float_type() {
+                    let value = arg.into_float_value();
+                    let to_type = to_type_enum.into_float_type();
+                    if to_bits < from_bits {
+                        builder.build_float_trunc(value, to_type, "trunc")
+                    } else {
+                        builder.build_float_ext(value, to_type, "ext")
+                    }
+                    .as_basic_value_enum()
+                } else {
+                    let value = arg.into_int_value();
+                    let to_type = to_type_enum.into_int_type();
+                    if to_bits < from_bits {
+                        builder.build_int_truncate(value, to_type, "trunc")
+                    } else if to_typ.is_signed() {
+                        builder.build_int_s_extend(value, to_type, "sext")
+                    } else {
+                        builder.build_int_z_extend(value, to_type, "sext")
+                    }
+                    .as_basic_value_enum()
+                };
+            }
             _ => unreachable!("Definition not found: {}", "failed to get function decl id"),
         };
 
@@ -852,7 +888,10 @@ pub fn llvm_type<'ctx>(
         Typ::Integer => context.i64_type().into(),
         Typ::Unsigned8 => context.i8_type().into(),
         Typ::Boolean => context.bool_type().into(),
-        _ => unreachable!("Invalid type"),
+        _ => unreachable!(
+            "Invalid type: {:?} is not a valid LLVM type.",
+            &types[type_id]
+        ),
     }
 }
 

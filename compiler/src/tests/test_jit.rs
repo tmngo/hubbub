@@ -169,6 +169,11 @@ fn boolean() {
     test("boolean", Test::AotAndJit, "", 0, 6);
 }
 #[test]
+fn builtin() {
+    test("builtin", Test::AotAndJit, "", 0, 0);
+}
+
+#[test]
 fn fibonacci() {
     test("fibonacci", Test::AotAndJit, FIBONACCI_TREE, 12, 13)
 }

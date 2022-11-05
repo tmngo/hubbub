@@ -665,6 +665,23 @@ impl State {
             }
             Definition::Foreign(_) => data.tree.name(callee_id).to_string(),
             Definition::Resolved(id) => data.mangle_function_declaration(*id, true),
+            Definition::BuiltIn(built_in_type) => {
+                let node = data.tree.node(node_id);
+                let args = data.node(node.rhs);
+                let ni = data.node_index(args.lhs);
+                let arg = self.compile_expr_value(data, c, ni);
+                let ti = *built_in_type as TypeId;
+                let from_type = cl_type(c.ptr_type, data.typ(ni));
+                let to_typ = &data.types[ti];
+                let to_type = cl_type(c.ptr_type, to_typ);
+                return if to_type.bytes() < from_type.bytes() {
+                    Val::Scalar(c.b.ins().ireduce(to_type, arg))
+                } else if to_typ.is_signed() {
+                    Val::Scalar(c.b.ins().sextend(to_type, arg))
+                } else {
+                    Val::Scalar(c.b.ins().uextend(to_type, arg))
+                };
+            }
             _ => unreachable!("Definition not found: {}", "failed to get function decl id"),
         };
 

@@ -70,9 +70,9 @@ impl<'a> Data<'a> {
         &self.node_types[node_id as usize]
     }
 
-    // pub fn node_type(&self, node_id: NodeId) -> &Typ {
-    //     &self.types[self.node_types[node_id as usize]]
-    // }
+    pub fn typ(&self, node_id: NodeId) -> &Typ {
+        &self.types[self.type_id(node_id)]
+    }
 
     pub fn layout(&self, node_id: NodeId) -> &Layout {
         &self.layouts[self.type_id(node_id)]

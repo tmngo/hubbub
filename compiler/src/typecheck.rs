@@ -525,7 +525,8 @@ impl<'a> Typechecker<'a> {
                         Single(BuiltInType::Void as TypeId)
                     }
                 } else {
-                    Single(BuiltInType::Void as TypeId)
+                    // Callee type is not a function (e.g. a cast).
+                    Single(ltype as TypeId)
                 }
             }
             Tag::Dereference => {
@@ -985,6 +986,9 @@ impl<'a> Typechecker<'a> {
                 }
             }
             Definition::Foreign(_) => {}
+            Definition::BuiltIn(built_in_type) => {
+                self.set_node_type(callee_id, Single(*built_in_type as TypeId))
+            }
             _ => unreachable!("Definition not found: {}", self.tree.name(callee_id)),
         }
         Ok(())
