@@ -3,17 +3,16 @@ use crate::{
     builtin,
     parse::{Node, NodeId, Tag},
     translate::input::{sizeof, Data, Input, Layout, Shape},
-    typecheck::{BuiltInType, TypeId, TypeIds},
+    typecheck::{BuiltInType, Type as Typ, TypeId, TypeIds},
     workspace::Workspace,
 };
 use cranelift::prelude::{
-    codegen::{
-        ir::{Function, StackSlot},
-        Context,
-    },
+    codegen::{ir::StackSlot, Context},
     isa::{lookup, TargetFrontendConfig},
-    settings, AbiParam, Block, FunctionBuilder, FunctionBuilderContext, InstBuilder, IntCC,
-    MemFlags, StackSlotData, StackSlotKind, Type, Value, Variable,
+    settings,
+    types::{F32, I32, I8},
+    AbiParam, Block, FunctionBuilder, FunctionBuilderContext, InstBuilder, IntCC, MemFlags,
+    Signature, StackSlotData, StackSlotKind, Type, Value, Variable,
 };
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataContext, FuncId, Linkage, Module};
@@ -115,11 +114,11 @@ impl<'a> Generator<'a> {
             Box::new(ObjectModule::new(object_builder))
         };
 
-        let ty = module.target_config().pointer_type();
         let layouts = input
             .types
             .iter()
-            .map(|typ| Layout::new(input.types, typ, ty.bytes()))
+            .enumerate()
+            .map(|(i, typ)| Layout::new(input.types, typ, sizeof(input.types, i)))
             .collect();
 
         Self {
@@ -136,19 +135,31 @@ impl<'a> Generator<'a> {
     }
 
     ///
-    pub fn init_signature(func: &mut Function, parameters: &Node, returns: &Node, t: Type) {
-        for _ in parameters.lhs..parameters.rhs {
+    pub fn init_signature(
+        data: &Data,
+        signature: &mut Signature,
+        parameters: &Node,
+        returns: &Node,
+        t: Type,
+    ) {
+        for i in parameters.lhs..parameters.rhs {
             // Tag::Field
-            func.signature.params.push(AbiParam::new(t));
+            let ni = data.tree.node_index(i);
+            let size = sizeof(data.types, data.type_id(ni));
+            let t = if size == 1 { I8 } else { t };
+            signature.params.push(AbiParam::new(t));
         }
         match returns.tag {
             Tag::Expressions => {
-                for _ in returns.lhs..returns.rhs {
-                    func.signature.returns.push(AbiParam::new(t));
+                for i in returns.lhs..returns.rhs {
+                    let ni = data.tree.node_index(i);
+                    let size = sizeof(data.types, data.type_id(ni));
+                    let t = if size == 1 { I8 } else { t };
+                    signature.returns.push(AbiParam::new(t));
                 }
             }
             Tag::Identifier | Tag::Type => {
-                func.signature.returns.push(AbiParam::new(t));
+                signature.returns.push(AbiParam::new(t));
             }
             _ => {}
         }
@@ -223,11 +234,9 @@ impl<'a> Generator<'a> {
         };
 
         let node = data.node(node_id);
-        Self::compile_function_signature(state, data, &mut c, node.lhs);
-        Self::compile_function_body(state, data, &mut c, node.rhs);
-
+        c.b.func.signature = Self::compile_function_signature(state, data, &mut c, node.lhs);
+        Self::compile_function_body(state, data, &mut c, node_id);
         c.b.finalize();
-        // let is_overloaded = data.definitions.contains_key(&node_id);
         let name = data.mangle_function_declaration(node_id, true);
         println!("{} :: {}", name, c.b.func.display());
         let fn_id = state
@@ -244,11 +253,22 @@ impl<'a> Generator<'a> {
         data: &Data,
         c: &mut FnContext,
         node_id: NodeId,
-    ) {
+    ) -> Signature {
+        let mut signature = state.module.make_signature();
         let prototype = data.node(node_id);
         let parameters = data.node(data.tree.node_extra(prototype, 0));
         let returns = data.node(data.tree.node_extra(prototype, 1));
-        Self::init_signature(c.b.func, parameters, returns, c.ptr_type);
+        Self::init_signature(data, &mut signature, parameters, returns, c.ptr_type);
+        signature
+    }
+
+    fn compile_function_body(state: &mut State, data: &Data, c: &mut FnContext, node_id: NodeId) {
+        let fn_decl = data.node(node_id);
+        let prototype = data.node(fn_decl.lhs);
+        let parameters = data.node(data.tree.node_extra(prototype, 0));
+        let body = data.node(fn_decl.rhs);
+        assert_eq!(fn_decl.tag, Tag::FunctionDecl);
+        assert_eq!(body.tag, Tag::Block);
 
         let entry_block = c.b.create_block();
         c.b.append_block_params_for_function_params(entry_block);
@@ -266,10 +286,7 @@ impl<'a> Generator<'a> {
             let layout = data.layout(ni);
             location.store(c, value, MemFlags::new(), layout);
         }
-    }
 
-    fn compile_function_body(state: &mut State, data: &Data, c: &mut FnContext, node_id: NodeId) {
-        let body = data.node(node_id);
         for i in body.lhs..body.rhs {
             let ni = data.node_index(i);
             state.compile_stmt(data, c, ni);
@@ -293,17 +310,13 @@ impl State {
                 // rhs: expr
                 assert_eq!(data.type_id(node.lhs), data.type_id(node.rhs));
                 let layout = data.layout(node.rhs);
-                let rvalue = self
-                    .compile_expr(data, c, node.rhs)
-                    .cranelift_value(c, layout);
+                let rvalue = self.compile_expr_value(data, c, node.rhs);
                 let flags = MemFlags::new();
                 let lvalue = self.compile_lvalue(data, c, node.lhs);
                 lvalue.store(c, rvalue, flags, layout);
             }
             Tag::If => {
-                let condition_expr = self
-                    .compile_expr(data, c, node.lhs)
-                    .cranelift_value(c, data.layout(node.lhs));
+                let condition_expr = self.compile_expr_value(data, c, node.lhs);
                 let then_block = c.b.create_block();
                 let merge_block = c.b.create_block();
                 let body = data.node(node.rhs);
@@ -344,9 +357,7 @@ impl State {
                 let merge_block = c.b.create_block();
                 // Compile branches.
                 for i in 0..if_count {
-                    let condition_expr = self
-                        .compile_expr(data, c, if_nodes[i].lhs)
-                        .cranelift_value(c, data.layout(if_nodes[i].lhs));
+                    let condition_expr = self.compile_expr_value(data, c, if_nodes[i].lhs);
                     c.b.ins().brnz(condition_expr, then_blocks[i], &[]);
                     c.b.seal_block(then_blocks[i]);
                     if i < if_count - 1 {
@@ -415,18 +426,14 @@ impl State {
                 let mut return_values = Vec::new();
                 for i in node.lhs..node.rhs {
                     let ni = data.node_index(i);
-                    let val = self
-                        .compile_expr(data, c, ni)
-                        .cranelift_value(c, data.layout(ni));
+                    let val = self.compile_expr_value(data, c, ni);
                     return_values.push(val);
                 }
                 c.b.ins().return_(&return_values[..]);
                 self.filled_blocks.insert(c.b.current_block().unwrap());
             }
             Tag::While => {
-                let condition = self
-                    .compile_expr(data, c, node.lhs)
-                    .cranelift_value(c, data.layout(node.lhs));
+                let condition = self.compile_expr_value(data, c, node.lhs);
                 let while_block = c.b.create_block();
                 let merge_block = c.b.create_block();
                 // check condition
@@ -442,9 +449,7 @@ impl State {
                     let ni = data.node_index(i);
                     self.compile_stmt(data, c, ni);
                 }
-                let condition = self
-                    .compile_expr(data, c, node.lhs)
-                    .cranelift_value(c, data.layout(node.lhs));
+                let condition = self.compile_expr_value(data, c, node.lhs);
                 // brnz block_while
                 c.b.ins().brnz(condition, while_block, &[]);
                 c.b.seal_block(while_block);
@@ -460,20 +465,29 @@ impl State {
         }
     }
 
+    pub fn compile_expr_value(&mut self, data: &Data, c: &mut FnContext, node_id: NodeId) -> Value {
+        self.compile_expr(data, c, node_id)
+            .cranelift_value(data, c, node_id)
+    }
+
     /// Returns a value. A value can be a scalar or an aggregate.
     /// NodeId -> Val
     pub fn compile_expr(&mut self, data: &Data, c: &mut FnContext, node_id: NodeId) -> Val {
         let ty = c.ptr_type;
         let node = data.node(node_id);
-        let layout = data.layout(node_id);
         match node.tag {
-            Tag::Access => self.locate_field(data, node_id).to_val(c, layout),
+            Tag::Access => self.locate_field(data, node_id).to_val(data, c, node_id),
             Tag::Address => Val::Scalar(self.locate(data, node.lhs).get_addr(c)),
             Tag::Dereference => {
                 let flags = MemFlags::new();
                 let ptr_layout = data.layout(node.lhs);
-                let ptr = self.locate(data, node.lhs).load_value(c, flags, ptr_layout);
-                Location::pointer(ptr, 0).to_val(c, layout)
+                let ptr = self.locate(data, node.lhs).load_value(
+                    c,
+                    flags,
+                    data.typ(node.lhs),
+                    ptr_layout,
+                );
+                Location::pointer(ptr, 0).to_val(data, c, node_id)
             }
             Tag::Add | Tag::Mul => {
                 let callee_id = node_id;
@@ -531,24 +545,22 @@ impl State {
                     let val = self.compile_expr(data, c, ni);
                     match val {
                         Val::Multiple(xs) => values.extend(xs),
-                        _ => values.push(val.cranelift_value(c, data.layout(ni))),
+                        _ => values.push(val.cranelift_value(data, c, ni)),
                     }
                 }
                 Val::Multiple(values)
             }
-            Tag::Identifier => self.locate(data, node_id).to_val(c, layout),
+            Tag::Identifier => self.locate(data, node_id).to_val(data, c, node_id),
             Tag::Negation => {
                 if data.tree.node(node.lhs).tag == Tag::IntegerLiteral {
                     return self.compile_integer_literal(data, c, node.lhs, true);
                 }
-                let lhs = self
-                    .compile_expr(data, c, node.lhs)
-                    .cranelift_value(c, data.layout(node.lhs));
+                let lhs = self.compile_expr_value(data, c, node.lhs);
                 Val::Scalar(c.b.ins().ineg(lhs))
             }
             Tag::Subscript => {
                 let lvalue = self.compile_lvalue(data, c, node_id);
-                lvalue.to_val(c, layout)
+                lvalue.to_val(data, c, node_id)
             }
             Tag::StringLiteral => {
                 let string = data
@@ -574,20 +586,15 @@ impl State {
                 Location::stack(slot, 0).store(c, data_ptr, MemFlags::new(), layout);
                 Location::stack(slot, 8).store(c, length_value, MemFlags::new(), layout);
 
-                let layout = data.layout(node_id);
-                Location::stack(slot, 0).to_val(c, layout)
+                Location::stack(slot, 0).to_val(data, c, node_id)
             }
             _ => unreachable!("Invalid expression tag: {:?}", node.tag),
         }
     }
 
     fn compile_children(&mut self, data: &Data, c: &mut FnContext, node: &Node) -> (Value, Value) {
-        let lhs = self
-            .compile_expr(data, c, node.lhs)
-            .cranelift_value(c, data.layout(node.lhs));
-        let rhs = self
-            .compile_expr(data, c, node.rhs)
-            .cranelift_value(c, data.layout(node.rhs));
+        let lhs = self.compile_expr_value(data, c, node.lhs);
+        let rhs = self.compile_expr_value(data, c, node.rhs);
         (lhs, rhs)
     }
 
@@ -603,7 +610,12 @@ impl State {
             Tag::Dereference => {
                 // Layout of referenced variable
                 let ptr_layout = data.layout(node.lhs);
-                let ptr = self.locate(data, node.lhs).load_value(c, flags, ptr_layout);
+                let ptr = self.locate(data, node.lhs).load_value(
+                    c,
+                    flags,
+                    data.typ(node.lhs),
+                    ptr_layout,
+                );
                 Location::pointer(ptr, 0)
             }
             Tag::Subscript => {
@@ -613,10 +625,13 @@ impl State {
                 } else {
                     unreachable!();
                 };
-                let base = self.locate(data, node.lhs).load_value(c, flags, arr_layout);
-                let index = self
-                    .compile_expr(data, c, node.rhs)
-                    .cranelift_value(c, data.layout(node.rhs));
+                let base = self.locate(data, node.lhs).load_value(
+                    c,
+                    flags,
+                    data.typ(node.lhs),
+                    arr_layout,
+                );
+                let index = self.compile_expr_value(data, c, node.rhs);
                 dbg!(arr_layout);
                 let offset = c.b.ins().imul_imm(index, stride as i64);
                 let addr = c.b.ins().iadd(base, offset);
@@ -656,18 +671,15 @@ impl State {
         let node = data.tree.node(node_id);
         let args = if binary {
             vec![
-                self.compile_expr(data, c, node.lhs)
-                    .cranelift_value(c, data.layout(node.lhs)),
-                self.compile_expr(data, c, node.rhs)
-                    .cranelift_value(c, data.layout(node.rhs)),
+                self.compile_expr_value(data, c, node.lhs),
+                self.compile_expr_value(data, c, node.rhs),
             ]
         } else {
             data.tree
                 .range(data.node(node.rhs))
                 .map(|i| {
                     let ni = data.node_index(i);
-                    self.compile_expr(data, c, data.node_index(i))
-                        .cranelift_value(c, data.layout(ni))
+                    self.compile_expr_value(data, c, ni)
                 })
                 .collect()
         };
@@ -685,8 +697,9 @@ impl State {
                 *t
             }
             TypeIds::Multiple(ts) => {
-                for _ in ts {
-                    sig.returns.push(AbiParam::new(ty));
+                for ti in ts {
+                    let t = cl_type(c.ptr_type, &data.types[*ti]);
+                    sig.returns.push(AbiParam::new(t));
                 }
                 return_types.first()
             }
@@ -720,21 +733,13 @@ impl State {
         let node = data.tree.node(node_id);
         match built_in_function {
             BuiltInFunction::Add => {
-                let a = self
-                    .compile_expr(data, c, node.lhs)
-                    .cranelift_value(c, data.layout(node.lhs));
-                let b = self
-                    .compile_expr(data, c, node.rhs)
-                    .cranelift_value(c, data.layout(node.rhs));
+                let a = self.compile_expr_value(data, c, node.lhs);
+                let b = self.compile_expr_value(data, c, node.rhs);
                 Val::Scalar(c.b.ins().iadd(a, b))
             }
             BuiltInFunction::Mul => {
-                let a = self
-                    .compile_expr(data, c, node.lhs)
-                    .cranelift_value(c, data.layout(node.lhs));
-                let b = self
-                    .compile_expr(data, c, node.rhs)
-                    .cranelift_value(c, data.layout(node.rhs));
+                let a = self.compile_expr_value(data, c, node.lhs);
+                let b = self.compile_expr_value(data, c, node.rhs);
                 Val::Scalar(c.b.ins().imul(a, b))
             }
             BuiltInFunction::SizeOf => {
@@ -754,7 +759,12 @@ impl State {
         node_id: NodeId,
         negative: bool,
     ) -> Val {
-        let ty = c.ptr_type;
+        // Doesn't use cl_type, so we can default to ptr_type.
+        let ty = match data.typ(node_id) {
+            Typ::Unsigned8 => I8,
+            Typ::Unsigned32 => I32,
+            _ => c.ptr_type,
+        };
         let token_str = data.tree.node_lexeme(node_id);
         let value = token_str.parse::<i64>().unwrap();
         Val::Scalar(c.b.ins().iconst(ty, if negative { -value } else { value }))
@@ -808,6 +818,18 @@ impl State {
     }
 }
 
+pub fn cl_type(ptr_type: Type, typ: &Typ) -> Type {
+    match typ {
+        Typ::Integer => ptr_type,
+        Typ::Unsigned32 => I32,
+        Typ::Unsigned8 => I8,
+        Typ::Float => F32,
+        Typ::Boolean => I8,
+        Typ::Pointer { .. } => ptr_type,
+        _ => unreachable!("Invalid type: {typ:?} is not a primitive Cranelift type."),
+    }
+}
+
 // https://github.com/bjorn3/rustc_codegen_cranelift/blob/master/src/pointer.rs
 #[derive(Copy, Clone, Debug)]
 pub struct Location {
@@ -853,21 +875,22 @@ impl Location {
             offset: self.offset + extra_offset,
         }
     }
-    fn load_scalar(&self, c: &mut FnContext, flags: MemFlags) -> Value {
-        let (ins, ty) = (c.b.ins(), c.ptr_type);
+    fn load_scalar(&self, c: &mut FnContext, flags: MemFlags, typ: &Typ) -> Value {
+        let ins = c.b.ins();
+        let ty = cl_type(c.ptr_type, typ);
         match self.base {
             LocationBase::Pointer(base_addr) => ins.load(ty, flags, base_addr, self.offset),
             LocationBase::Register(variable) => c.b.use_var(variable),
             LocationBase::Stack(stack_slot) => ins.stack_load(ty, stack_slot, self.offset),
         }
     }
-    fn load_value(&self, c: &mut FnContext, flags: MemFlags, layout: &Layout) -> Value {
+    fn load_value(&self, c: &mut FnContext, flags: MemFlags, typ: &Typ, layout: &Layout) -> Value {
         let (ins, ty) = (c.b.ins(), c.ptr_type);
         match self.base {
-            LocationBase::Pointer(_) | LocationBase::Register(_) => self.load_scalar(c, flags),
+            LocationBase::Pointer(_) | LocationBase::Register(_) => self.load_scalar(c, flags, typ),
             LocationBase::Stack(stack_slot) => {
                 if layout.size <= 8 {
-                    self.load_scalar(c, flags)
+                    self.load_scalar(c, flags, typ)
                 } else {
                     ins.stack_addr(ty, stack_slot, self.offset)
                 }
@@ -904,13 +927,16 @@ impl Location {
             }
         };
     }
-    fn to_val(self, c: &mut FnContext, layout: &Layout) -> Val {
-        let (ins, ty) = (c.b.ins(), c.ptr_type);
+    fn to_val(self, data: &Data, c: &mut FnContext, node_id: NodeId) -> Val {
+        let ins = c.b.ins();
+        let typ = data.typ(node_id);
+        let layout = data.layout(node_id);
         match self.base {
             LocationBase::Register(variable) => Val::Scalar(c.b.use_var(variable)),
             LocationBase::Pointer(_) => Val::Reference(self, None),
             LocationBase::Stack(stack_slot) => {
                 if layout.size <= 8 {
+                    let ty = cl_type(c.ptr_type, typ);
                     Val::Scalar(ins.stack_load(ty, stack_slot, self.offset))
                 } else {
                     Val::Reference(self, None)
@@ -928,13 +954,15 @@ pub enum Val {
 }
 
 impl Val {
-    fn cranelift_value(self, c: &mut FnContext, layout: &Layout) -> Value {
+    fn cranelift_value(self, data: &Data, c: &mut FnContext, node_id: NodeId) -> Value {
+        let typ = data.typ(node_id);
+        let layout = data.layout(node_id);
         match &self {
             Val::Scalar(value) => *value,
             // location is a pointer or stack slot
             Val::Reference(location, _) => {
                 if layout.size <= 8 {
-                    location.load_scalar(c, MemFlags::new())
+                    location.load_scalar(c, MemFlags::new(), typ)
                 } else {
                     location.get_addr(c)
                 }
