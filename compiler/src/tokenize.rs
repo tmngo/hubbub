@@ -36,6 +36,7 @@ pub enum Tag {
     Equal,
     EqualEqual,
     False,
+    FloatLiteral,
     Foreign,
     ForeignLibrary,
     Greater,
@@ -379,10 +380,16 @@ impl<'a> Tokenizer<'a> {
                 },
                 Tag::StateIntegerLiteral10 => match c {
                     '0'..='9' | '_' => self.advance(),
+                    '.' => self.start(Tag::FloatLiteral),
                     _ => return self.token(Tag::IntegerLiteral),
+                },
+                Tag::FloatLiteral => match c {
+                    '0'..='9' | '_' => self.advance(),
+                    _ => return self.token(Tag::FloatLiteral),
                 },
                 Tag::StateZero => match c {
                     '0'..='9' | '_' => self.start(Tag::StateIntegerLiteral10),
+                    '.' => self.start(Tag::FloatLiteral),
                     _ => return self.token(Tag::IntegerLiteral),
                 },
                 _ => {

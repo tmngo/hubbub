@@ -1,7 +1,17 @@
 use std::alloc::Layout;
 
 pub extern "C" fn print_int(value: isize) -> isize {
-    println!("{}", value);
+    println!("{value}");
+    0
+}
+
+pub extern "C" fn print_f32(value: f32) -> isize {
+    println!("{value}");
+    0
+}
+
+pub extern "C" fn print_f64(value: f64) -> isize {
+    println!("{value}");
     0
 }
 

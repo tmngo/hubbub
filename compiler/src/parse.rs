@@ -117,6 +117,7 @@ pub enum Tag {
     Factorial,      // expr
     False,          //
     Field,          // type_expr
+    FloatLiteral,   //
     FunctionDecl,   // prototype, block
     Greater,        // lhs, rhs
     Grouping,       // expr
@@ -1035,9 +1036,10 @@ impl<'w> Parser<'w> {
                 self.expect_token(TokenTag::ParenR)?;
                 Ok(expr)
             }
-            TokenTag::IntegerLiteral => self.add_leaf(Tag::IntegerLiteral, token),
             TokenTag::True => self.add_leaf(Tag::True, token),
             TokenTag::False => self.add_leaf(Tag::False, token),
+            TokenTag::IntegerLiteral => self.add_leaf(Tag::IntegerLiteral, token),
+            TokenTag::FloatLiteral => self.add_leaf(Tag::FloatLiteral, token),
             TokenTag::StringLiteral => self.add_leaf(Tag::StringLiteral, token),
             _ => Err(Diagnostic::error()
                 .with_message(format!(
@@ -1470,7 +1472,7 @@ impl Tree {
                     self.pretty_print_node(f, self.node_index(i), indentation, include_ids)?;
                 }
             }
-            Tag::Identifier | Tag::IntegerLiteral | Tag::StringLiteral => {
+            Tag::Identifier | Tag::IntegerLiteral | Tag::FloatLiteral | Tag::StringLiteral => {
                 write!(f, " \"{}\"", self.node_lexeme(id))?;
             }
             Tag::Prototype | Tag::VariableDecl => {

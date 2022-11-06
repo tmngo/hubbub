@@ -1,8 +1,21 @@
 use std::alloc;
 
 #[export_name = "Base.print_int"]
-fn print_int(i: isize) {
+fn print_int(i: isize) -> isize {
     println!("{}", i);
+    0
+}
+
+#[export_name = "Base.print_f32"]
+fn print_f32(value: f32) -> isize {
+    println!("{value}");
+    0
+}
+
+#[export_name = "Base.print_f64"]
+fn print_f64(value: f64) -> isize {
+    println!("{value}");
+    0
 }
 
 #[export_name = "Base.alloc"]

@@ -10,7 +10,7 @@ use cranelift::prelude::{
     codegen::{ir::StackSlot, Context},
     isa::{lookup, TargetFrontendConfig},
     settings,
-    types::{F32, I32, I8},
+    types::{F32, F64, I32, I64, I8},
     AbiParam, Block, FunctionBuilder, FunctionBuilderContext, InstBuilder, IntCC, MemFlags,
     Signature, StackSlotData, StackSlotKind, Type, Value, Variable,
 };
@@ -83,6 +83,8 @@ impl<'a> Generator<'a> {
                 JITBuilder::new(cranelift_module::default_libcall_names()).unwrap();
             jit_builder.symbols(vec![
                 ("Base.print_int", builtin::print_int as *const u8),
+                ("Base.print_f32", builtin::print_f32 as *const u8),
+                ("Base.print_f64", builtin::print_f64 as *const u8),
                 ("Base.alloc", builtin::alloc as *const u8),
                 ("Base.dealloc", builtin::dealloc as *const u8),
             ]);
@@ -146,7 +148,11 @@ impl<'a> Generator<'a> {
             // Tag::Field
             let ni = data.tree.node_index(i);
             let size = sizeof(data.types, data.type_id(ni));
-            let t = if size == 1 { I8 } else { t };
+            let t = if size <= 8 {
+                cl_type(t, data.typ(ni))
+            } else {
+                t
+            };
             signature.params.push(AbiParam::new(t));
         }
         match returns.tag {
@@ -154,7 +160,11 @@ impl<'a> Generator<'a> {
                 for i in returns.lhs..returns.rhs {
                     let ni = data.tree.node_index(i);
                     let size = sizeof(data.types, data.type_id(ni));
-                    let t = if size == 1 { I8 } else { t };
+                    let t = if size <= 8 {
+                        cl_type(t, data.typ(ni))
+                    } else {
+                        t
+                    };
                     signature.returns.push(AbiParam::new(t));
                 }
             }
@@ -531,8 +541,32 @@ impl State {
                 Val::Scalar(c.b.ins().icmp(IntCC::NotEqual, lhs, rhs))
             }
             Tag::IntegerLiteral => self.compile_integer_literal(data, c, node_id, false),
-            Tag::True => Val::Scalar(c.b.ins().iconst(ty, 1)),
-            Tag::False => Val::Scalar(c.b.ins().iconst(ty, 0)),
+            Tag::FloatLiteral => {
+                let token_str = data.tree.node_lexeme(node_id);
+                dbg!(token_str);
+                dbg!(data.typ(node_id));
+                match data.typ(node_id) {
+                    Typ::Numeric {
+                        floating: true,
+                        bytes: 4,
+                        ..
+                    } => {
+                        let value = token_str.parse::<f32>().unwrap();
+                        Val::Scalar(c.b.ins().f32const(value))
+                    }
+                    Typ::Numeric {
+                        floating: true,
+                        bytes: 8,
+                        ..
+                    } => {
+                        let value = token_str.parse::<f64>().unwrap();
+                        Val::Scalar(c.b.ins().f64const(value))
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            Tag::True => Val::Scalar(c.b.ins().iconst(I8, 1)),
+            Tag::False => Val::Scalar(c.b.ins().iconst(I8, 0)),
             Tag::Call => {
                 let callee_id = node.lhs;
                 self.compile_call(data, c, node_id, callee_id, false)
@@ -686,23 +720,24 @@ impl State {
         };
 
         let node = data.tree.node(node_id);
-        let args = if binary {
-            vec![
-                self.compile_expr_value(data, c, node.lhs),
-                self.compile_expr_value(data, c, node.rhs),
-            ]
+        let arg_ids = if binary {
+            vec![node.lhs, node.rhs]
         } else {
             data.tree
                 .range(data.node(node.rhs))
-                .map(|i| {
-                    let ni = data.node_index(i);
-                    self.compile_expr_value(data, c, ni)
-                })
+                .map(|i| data.node_index(i))
                 .collect()
         };
+        let args: Vec<Value> = arg_ids
+            .iter()
+            .map(|ni| self.compile_expr_value(data, c, *ni))
+            .collect();
 
         let mut sig = self.module.make_signature();
-        sig.params = args.iter().map(|_| AbiParam::new(ty)).collect();
+        for ni in arg_ids {
+            let t = cl_type(c.ptr_type, data.typ(ni));
+            sig.params.push(AbiParam::new(t));
+        }
 
         // Assume one return value.
         let return_types = data.type_ids(node_id);
@@ -780,6 +815,11 @@ impl State {
         let ty = match data.typ(node_id) {
             Typ::Unsigned8 => I8,
             Typ::Unsigned32 => I32,
+            Typ::Numeric {
+                floating: false,
+                bytes: 4,
+                ..
+            } => I32,
             _ => c.ptr_type,
         };
         let token_str = data.tree.node_lexeme(node_id);
@@ -843,6 +883,23 @@ pub fn cl_type(ptr_type: Type, typ: &Typ) -> Type {
         Typ::Float => F32,
         Typ::Boolean => I8,
         Typ::Pointer { .. } => ptr_type,
+        Typ::Numeric {
+            floating, bytes, ..
+        } => {
+            if *floating {
+                match bytes {
+                    4 => F32,
+                    8 => F64,
+                    _ => unreachable!("Float types must be 4 or 8 bytes."),
+                }
+            } else {
+                match bytes {
+                    4 => I32,
+                    8 => I64,
+                    _ => unreachable!("Integer types must be 4 or 8 bytes."),
+                }
+            }
+        }
         _ => unreachable!("Invalid type: {typ:?} is not a primitive Cranelift type."),
     }
 }

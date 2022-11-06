@@ -591,6 +591,16 @@ impl<'ctx> Generator<'ctx> {
                     .build_int_compare(IntPredicate::SLT, lhs, rhs, "int_compare_slt")
                     .into()
             }
+            Tag::FloatLiteral => {
+                let token_str = data.tree.node_lexeme(node_id);
+                // dbg!(token_str);
+                let value = token_str.parse::<f32>().unwrap();
+                // dbg!(value);
+                self.context
+                    .f32_type()
+                    .const_float(value as f64)
+                    .as_basic_value_enum()
+            }
             Tag::Grouping => self.compile_expr(state, node.lhs),
             Tag::Inequality => {
                 let (lhs, rhs) = self.compile_children(state, node);
@@ -818,6 +828,7 @@ impl<'ctx> Generator<'ctx> {
     ) -> BasicValueEnum<'ctx> {
         let data = &self.data;
         let token_str = data.tree.node_lexeme(node_id);
+        // dbg!(token_str);
         let value = token_str.parse::<i64>().unwrap();
         let typ = &data.types[type_id as usize];
         let llvm_type = llvm_type(self.context, data.types, type_id);
@@ -887,7 +898,21 @@ pub fn llvm_type<'ctx>(
         Typ::Void => context.struct_type(&[], false).into(),
         Typ::Integer => context.i64_type().into(),
         Typ::Unsigned8 => context.i8_type().into(),
+        Typ::Unsigned32 => context.i32_type().into(),
         Typ::Boolean => context.bool_type().into(),
+        Typ::Numeric {
+            floating, bytes, ..
+        } => match (*floating, *bytes) {
+            (true, 4) => context.f32_type().into(),
+            (true, 8) => context.f64_type().into(),
+            (false, 4) => context.i32_type().into(),
+            (false, 8) => context.i64_type().into(),
+            _ => unreachable!(
+                "Invalid numeric type: {:?} is not a valid LLVM type.",
+                &types[type_id]
+            ),
+        },
+        Typ::Float => context.f32_type().into(),
         _ => unreachable!(
             "Invalid type: {:?} is not a valid LLVM type.",
             &types[type_id]

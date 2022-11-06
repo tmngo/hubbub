@@ -35,6 +35,7 @@ pub enum Type {
     Boolean,
     Integer,
     Unsigned8,
+    Unsigned32,
     IntegerLiteral,
     Float,
     String,
@@ -60,6 +61,11 @@ pub enum Type {
     Parameter {
         index: usize,
     },
+    Numeric {
+        floating: bool,
+        signed: bool,
+        bytes: u8,
+    },
 }
 
 impl Type {
@@ -81,6 +87,8 @@ impl Type {
         match self {
             Self::Integer => true,
             Self::Unsigned8 => false,
+            Self::Unsigned32 => false,
+            Self::Numeric { signed, .. } => *signed,
             _ => unreachable!("is_signed is only valid for integer types"),
         }
     }
@@ -120,9 +128,11 @@ pub enum BuiltInType {
 
     Integer,
     Unsigned8,
+    Unsigned32,
 
     IntegerLiteral,
     Float,
+    Float64,
     Type,
     Array,
     Pointer,
@@ -179,7 +189,23 @@ impl<'a> Typechecker<'a> {
         types[BuiltInType::Boolean as TypeId] = Type::Boolean;
         types[BuiltInType::Integer as TypeId] = Type::Integer;
         types[BuiltInType::Unsigned8 as TypeId] = Type::Unsigned8;
-        types[BuiltInType::Float as TypeId] = Type::Float;
+        // types[BuiltInType::Unsigned32 as TypeId] = Type::Unsigned32;
+        types[BuiltInType::Unsigned32 as TypeId] = Type::Numeric {
+            floating: false,
+            signed: false,
+            bytes: 4,
+        };
+        types[BuiltInType::Float as TypeId] = Type::Numeric {
+            floating: true,
+            signed: true,
+            bytes: 4,
+        };
+        types[BuiltInType::Float64 as TypeId] = Type::Numeric {
+            floating: true,
+            signed: true,
+            bytes: 8,
+        };
+        // types[BuiltInType::Float as TypeId] = Type::Float;
         types[BuiltInType::Type as TypeId] = Type::Type;
 
         // Set up string type.
@@ -599,6 +625,7 @@ impl<'a> Typechecker<'a> {
                 Some(type_id) if is_integer(type_id.first()) => Single(type_id.first()),
                 _ => Single(BuiltInType::IntegerLiteral as TypeId),
             },
+            Tag::FloatLiteral => Single(BuiltInType::Float as TypeId),
             Tag::True | Tag::False => Single(BuiltInType::Boolean as TypeId),
             Tag::Negation => self.infer_node(node.lhs)?,
             Tag::Prototype => {
@@ -1181,7 +1208,9 @@ impl<'a> Typechecker<'a> {
 }
 
 fn is_integer(type_id: TypeId) -> bool {
-    type_id == BuiltInType::Integer as TypeId || type_id == BuiltInType::Unsigned8 as TypeId
+    type_id == BuiltInType::Integer as TypeId
+        || type_id == BuiltInType::Unsigned8 as TypeId
+        || type_id == BuiltInType::Unsigned32 as TypeId
 }
 
 fn infer_type(annotation_type: TypeId, value_type: TypeId) -> Result<TypeIds> {

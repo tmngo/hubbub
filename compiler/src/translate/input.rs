@@ -208,6 +208,7 @@ pub fn sizeof(types: &Vec<Typ>, type_id: usize) -> u32 {
             size
         }
         Typ::Unsigned8 => 1,
+        Typ::Numeric { bytes, .. } => *bytes as u32,
         _ => 8,
     }
 }
