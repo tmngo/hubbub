@@ -1,4 +1,4 @@
-main :: () -> Int64
+main :: () -> Int
     return loop(5, 10)
 end
 

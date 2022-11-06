@@ -7,7 +7,7 @@ f :: (a: Int, b: Int) -> Int
     return c
 end
 
-main :: () -> Int64
+main :: () -> Int
     a := 3
     b := 5
     c := f(a, b) 

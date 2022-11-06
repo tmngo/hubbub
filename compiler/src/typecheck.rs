@@ -33,11 +33,7 @@ pub enum Type {
     Void,
     Any,
     Boolean,
-    Integer,
-    Unsigned8,
-    Unsigned32,
     IntegerLiteral,
-    Float,
     String,
     Type,
 
@@ -85,9 +81,6 @@ impl Type {
     }
     pub fn is_signed(&self) -> bool {
         match self {
-            Self::Integer => true,
-            Self::Unsigned8 => false,
-            Self::Unsigned32 => false,
             Self::Numeric { signed, .. } => *signed,
             _ => unreachable!("is_signed is only valid for integer types"),
         }
@@ -126,12 +119,17 @@ pub enum BuiltInType {
     Any,
     Boolean,
 
-    Integer,
+    Integer8,
+    Integer16,
+    Integer32,
+    Integer64,
     Unsigned8,
+    Unsigned16,
     Unsigned32,
+    Unsigned64,
 
     IntegerLiteral,
-    Float,
+    Float32,
     Float64,
     Type,
     Array,
@@ -187,15 +185,50 @@ impl<'a> Typechecker<'a> {
         types[BuiltInType::Void as TypeId] = Type::Void;
         types[BuiltInType::Any as TypeId] = Type::Any;
         types[BuiltInType::Boolean as TypeId] = Type::Boolean;
-        types[BuiltInType::Integer as TypeId] = Type::Integer;
-        types[BuiltInType::Unsigned8 as TypeId] = Type::Unsigned8;
-        // types[BuiltInType::Unsigned32 as TypeId] = Type::Unsigned32;
+        // Signed integers
+        types[BuiltInType::Integer8 as TypeId] = Type::Numeric {
+            floating: false,
+            signed: true,
+            bytes: 1,
+        };
+        types[BuiltInType::Integer16 as TypeId] = Type::Numeric {
+            floating: false,
+            signed: true,
+            bytes: 2,
+        };
+        types[BuiltInType::Integer32 as TypeId] = Type::Numeric {
+            floating: false,
+            signed: true,
+            bytes: 4,
+        };
+        types[BuiltInType::Integer64 as TypeId] = Type::Numeric {
+            floating: false,
+            signed: true,
+            bytes: 8,
+        };
+        // Unsigned integers
+        types[BuiltInType::Unsigned8 as TypeId] = Type::Numeric {
+            floating: false,
+            signed: false,
+            bytes: 1,
+        };
+        types[BuiltInType::Unsigned16 as TypeId] = Type::Numeric {
+            floating: false,
+            signed: false,
+            bytes: 2,
+        };
         types[BuiltInType::Unsigned32 as TypeId] = Type::Numeric {
             floating: false,
             signed: false,
             bytes: 4,
         };
-        types[BuiltInType::Float as TypeId] = Type::Numeric {
+        types[BuiltInType::Unsigned64 as TypeId] = Type::Numeric {
+            floating: false,
+            signed: false,
+            bytes: 8,
+        };
+        // Floating-point numbers
+        types[BuiltInType::Float32 as TypeId] = Type::Numeric {
             floating: true,
             signed: true,
             bytes: 4,
@@ -205,7 +238,6 @@ impl<'a> Typechecker<'a> {
             signed: true,
             bytes: 8,
         };
-        // types[BuiltInType::Float as TypeId] = Type::Float;
         types[BuiltInType::Type as TypeId] = Type::Type;
 
         // Set up string type.
@@ -234,16 +266,16 @@ impl<'a> Typechecker<'a> {
         let mut builtin_function_types = HashMap::new();
         let binary_int_op_type = Type::Function {
             parameters: vec![
-                BuiltInType::Integer as TypeId,
-                BuiltInType::Integer as TypeId,
+                BuiltInType::Integer64 as TypeId,
+                BuiltInType::Integer64 as TypeId,
             ],
-            returns: vec![BuiltInType::Integer as TypeId],
+            returns: vec![BuiltInType::Integer64 as TypeId],
         };
         types.push(binary_int_op_type);
         let binary_int_op_type_id = types.len() - 1;
         types.push(Type::Function {
             parameters: vec![BuiltInType::Any as TypeId],
-            returns: vec![BuiltInType::Integer as TypeId],
+            returns: vec![BuiltInType::Integer64 as TypeId],
         });
         let sizeof_type_id = types.len() - 1;
         let fn_types = [
@@ -625,9 +657,18 @@ impl<'a> Typechecker<'a> {
                 Some(type_id) if is_integer(type_id.first()) => Single(type_id.first()),
                 _ => Single(BuiltInType::IntegerLiteral as TypeId),
             },
-            Tag::FloatLiteral => Single(BuiltInType::Float as TypeId),
+            Tag::FloatLiteral => Single(BuiltInType::Float32 as TypeId),
             Tag::True | Tag::False => Single(BuiltInType::Boolean as TypeId),
-            Tag::Negation => self.infer_node(node.lhs)?,
+            Tag::Negation => {
+                if let Some(type_ids) = parent_type_id {
+                    self.infer_node_with_type(node.lhs, Some(&Single(type_ids.first())))?
+                } else {
+                    self.infer_node_with_type(
+                        node.lhs,
+                        Some(&Single(BuiltInType::Integer64 as TypeId)),
+                    )?
+                }
+            }
             Tag::Prototype => {
                 let mut parameters = Vec::new();
                 let mut returns = Vec::new();
@@ -710,7 +751,10 @@ impl<'a> Typechecker<'a> {
             Tag::StringLiteral => Single(BuiltInType::String as TypeId),
             Tag::Subscript => {
                 let array_type = self.infer_node(node.lhs)?.first();
-                self.infer_node_with_type(node.rhs, Some(&Single(BuiltInType::Integer as TypeId)))?;
+                self.infer_node_with_type(
+                    node.rhs,
+                    Some(&Single(BuiltInType::Integer64 as TypeId)),
+                )?;
                 if let Type::Array { typ, .. } = self.types[array_type] {
                     Single(typ)
                 } else {
@@ -1208,9 +1252,9 @@ impl<'a> Typechecker<'a> {
 }
 
 fn is_integer(type_id: TypeId) -> bool {
-    type_id == BuiltInType::Integer as TypeId
-        || type_id == BuiltInType::Unsigned8 as TypeId
-        || type_id == BuiltInType::Unsigned32 as TypeId
+    type_id >= BuiltInType::Integer8 as TypeId && type_id <= BuiltInType::Integer64 as TypeId
+        || type_id >= BuiltInType::Unsigned8 as TypeId
+            && type_id <= BuiltInType::Unsigned64 as TypeId
 }
 
 fn infer_type(annotation_type: TypeId, value_type: TypeId) -> Result<TypeIds> {
@@ -1221,7 +1265,7 @@ fn infer_type(annotation_type: TypeId, value_type: TypeId) -> Result<TypeIds> {
         // Explicit type based on annotation.
         Ok(Single(annotation_type))
     } else if annotation_type == void && value_type == BuiltInType::IntegerLiteral as TypeId {
-        Ok(Single(BuiltInType::Integer as TypeId))
+        Ok(Single(BuiltInType::Integer64 as TypeId))
     } else if annotation_type == void && value_type != void {
         // Infer type based on rvalue.
         Ok(Single(value_type))

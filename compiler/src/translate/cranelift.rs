@@ -10,7 +10,7 @@ use cranelift::prelude::{
     codegen::{ir::StackSlot, Context},
     isa::{lookup, TargetFrontendConfig},
     settings,
-    types::{F32, F64, I32, I64, I8},
+    types::{F32, F64, I16, I32, I64, I8},
     AbiParam, Block, FunctionBuilder, FunctionBuilderContext, InstBuilder, IntCC, MemFlags,
     Signature, StackSlotData, StackSlotKind, Type, Value, Variable,
 };
@@ -811,17 +811,7 @@ impl State {
         node_id: NodeId,
         negative: bool,
     ) -> Val {
-        // Doesn't use cl_type, so we can default to ptr_type.
-        let ty = match data.typ(node_id) {
-            Typ::Unsigned8 => I8,
-            Typ::Unsigned32 => I32,
-            Typ::Numeric {
-                floating: false,
-                bytes: 4,
-                ..
-            } => I32,
-            _ => c.ptr_type,
-        };
+        let ty = cl_type(c.ptr_type, data.typ(node_id));
         let token_str = data.tree.node_lexeme(node_id);
         let value = token_str.parse::<i64>().unwrap();
         Val::Scalar(c.b.ins().iconst(ty, if negative { -value } else { value }))
@@ -877,10 +867,6 @@ impl State {
 
 pub fn cl_type(ptr_type: Type, typ: &Typ) -> Type {
     match typ {
-        Typ::Integer => ptr_type,
-        Typ::Unsigned32 => I32,
-        Typ::Unsigned8 => I8,
-        Typ::Float => F32,
         Typ::Boolean => I8,
         Typ::Pointer { .. } => ptr_type,
         Typ::Numeric {
@@ -894,9 +880,11 @@ pub fn cl_type(ptr_type: Type, typ: &Typ) -> Type {
                 }
             } else {
                 match bytes {
+                    1 => I8,
+                    2 => I16,
                     4 => I32,
                     8 => I64,
-                    _ => unreachable!("Integer types must be 4 or 8 bytes."),
+                    _ => unreachable!("Integer types must be 1/2/4/8 bytes."),
                 }
             }
         }

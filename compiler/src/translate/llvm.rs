@@ -896,15 +896,14 @@ pub fn llvm_type<'ctx>(
             context.struct_type(&field_types, false).into()
         }
         Typ::Void => context.struct_type(&[], false).into(),
-        Typ::Integer => context.i64_type().into(),
-        Typ::Unsigned8 => context.i8_type().into(),
-        Typ::Unsigned32 => context.i32_type().into(),
         Typ::Boolean => context.bool_type().into(),
         Typ::Numeric {
             floating, bytes, ..
         } => match (*floating, *bytes) {
             (true, 4) => context.f32_type().into(),
             (true, 8) => context.f64_type().into(),
+            (false, 1) => context.i8_type().into(),
+            (false, 2) => context.i16_type().into(),
             (false, 4) => context.i32_type().into(),
             (false, 8) => context.i64_type().into(),
             _ => unreachable!(
@@ -912,7 +911,6 @@ pub fn llvm_type<'ctx>(
                 &types[type_id]
             ),
         },
-        Typ::Float => context.f32_type().into(),
         _ => unreachable!(
             "Invalid type: {:?} is not a valid LLVM type.",
             &types[type_id]
