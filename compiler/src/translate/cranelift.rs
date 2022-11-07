@@ -141,7 +141,7 @@ impl<'a> Generator<'a> {
         data: &Data,
         signature: &mut Signature,
         parameters: &Node,
-        returns: &Node,
+        returns_id: NodeId,
         t: Type,
     ) {
         for i in parameters.lhs..parameters.rhs {
@@ -155,23 +155,19 @@ impl<'a> Generator<'a> {
             };
             signature.params.push(AbiParam::new(t));
         }
-        match returns.tag {
-            Tag::Expressions => {
-                for i in returns.lhs..returns.rhs {
-                    let ni = data.tree.node_index(i);
-                    let size = sizeof(data.types, data.type_id(ni));
-                    let t = if size <= 8 {
-                        cl_type(t, data.typ(ni))
-                    } else {
-                        t
-                    };
-                    signature.returns.push(AbiParam::new(t));
-                }
-            }
-            Tag::Identifier | Tag::Type => {
+        if returns_id != 0 {
+            let returns = data.node(returns_id);
+            assert_eq!(returns.tag, Tag::Expressions);
+            for i in returns.lhs..returns.rhs {
+                let ni = data.tree.node_index(i);
+                let size = sizeof(data.types, data.type_id(ni));
+                let t = if size <= 8 {
+                    cl_type(data, t, data.typ(ni))
+                } else {
+                    t
+                };
                 signature.returns.push(AbiParam::new(t));
             }
-            _ => {}
         }
     }
 
@@ -267,8 +263,8 @@ impl<'a> Generator<'a> {
         let mut signature = state.module.make_signature();
         let prototype = data.node(node_id);
         let parameters = data.node(data.tree.node_extra(prototype, 0));
-        let returns = data.node(data.tree.node_extra(prototype, 1));
-        Self::init_signature(data, &mut signature, parameters, returns, c.ptr_type);
+        let returns_id = data.tree.node_extra(prototype, 1);
+        Self::init_signature(data, &mut signature, parameters, returns_id, c.ptr_type);
         signature
     }
 

@@ -232,23 +232,20 @@ impl<'ctx> Generator<'ctx> {
             .collect::<Vec<BasicMetadataTypeEnum>>();
         let argslice = argslice.as_slice();
 
-        let ret_type: BasicTypeEnum = match returns.tag {
-            Tag::Expressions => {
-                let mut return_types = vec![];
-                for i in returns.lhs..returns.rhs {
-                    let ni = data.node_index(i);
-                    let type_id = data.type_id(ni);
-                    return_types.push(llvm_type(self.context, data.types, type_id));
-                }
-                self.context.struct_type(&return_types, false).into()
+        let ret_type = if returns_id == 0 {
+            self.context.struct_type(&[], false).into()
+        } else {
+            assert_eq!(returns.tag, Tag::Expressions);
+            let mut return_types = vec![];
+            for i in returns.lhs..returns.rhs {
+                let ni = data.node_index(i);
+                let type_id = data.type_id(ni);
+                return_types.push(llvm_type(self.context, data.types, type_id));
             }
-            Tag::Identifier => llvm_type(self.context, data.types, data.type_id(returns_id)),
-            _ => {
-                if returns.rhs - returns.lhs == 1 {
-                    llvm_type(self.context, data.types, data.type_id(returns_id))
-                } else {
-                    self.context.struct_type(&[], false).into()
-                }
+            if return_types.len() == 1 {
+                return_types[0]
+            } else {
+                self.context.struct_type(&return_types, false).into()
             }
         };
         let fn_type = ret_type.fn_type(argslice, false);

@@ -60,7 +60,8 @@ Module
         Field
           Identifier "b"
           Identifier "Int"
-      Identifier "Int"
+      Expressions
+        Identifier "Int"
     Block
       VariableDecl
         Expressions
@@ -97,7 +98,8 @@ Module
   FunctionDecl
     Prototype
       Parameters
-      Identifier "Int"
+      Expressions
+        Identifier "Int"
     Block
       VariableDecl
         Expressions
@@ -309,7 +311,8 @@ Module
   FunctionDecl
     Prototype
       Parameters
-      Identifier "Int"
+      Expressions
+        Identifier "Int"
     Block
       VariableDecl
         Expressions
@@ -330,7 +333,8 @@ Module
         Field
           Identifier "a"
           Identifier "Int"
-      Identifier "Int"
+      Expressions
+        Identifier "Int"
     Block
       Return
         Mul
@@ -403,7 +407,8 @@ Module
   FunctionDecl
     Prototype
       Parameters
-      Identifier "Int64"
+      Expressions
+        Identifier "Int64"
     Block
       VariableDecl
         Expressions
@@ -567,7 +572,8 @@ Module
         Field
           Identifier "b"
           Identifier "T"
-      Identifier "Int"
+      Expressions
+        Identifier "Int"
     Block
       IfElse
         If

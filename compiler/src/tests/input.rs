@@ -18,7 +18,8 @@ Module
   FunctionDecl
     Prototype
       Parameters
-      Identifier "Int"
+      Expressions
+        Identifier "Int"
     Block
       VariableDecl
         Expressions
@@ -60,7 +61,8 @@ Module
         Field
           Identifier "n"
           Identifier "Int"
-      Identifier "Int"
+      Expressions
+        Identifier "Int"
     Block
       If
         Less
@@ -86,7 +88,8 @@ Module
   FunctionDecl
     Prototype
       Parameters
-      Identifier "Int"
+      Expressions
+        Identifier "Int"
     Block
       VariableDecl
         Expressions

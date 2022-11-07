@@ -605,7 +605,9 @@ impl<'w> Parser<'w> {
             self.expect_token(TokenTag::ParenR)?;
             self.add_node(Tag::Expressions, 0, range.start, range.end)
         } else {
-            self.parse_expr_base()
+            let type_expr = self.parse_expr_base()?;
+            let start = self.add_indices_fixed(&[type_expr]);
+            self.add_node(Tag::Expressions, 0, start, start + 1)
         }
     }
 
