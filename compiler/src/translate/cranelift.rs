@@ -149,7 +149,7 @@ impl<'a> Generator<'a> {
             let ni = data.tree.node_index(i);
             let size = sizeof(data.types, data.type_id(ni));
             let t = if size <= 8 {
-                cl_type(t, data.typ(ni))
+                cl_type(data, t, data.typ(ni))
             } else {
                 t
             };
@@ -190,15 +190,35 @@ impl<'a> Generator<'a> {
                 let node = self.data.node(ni);
                 if let Tag::FunctionDecl = node.tag {
                     // Skip generic functions with no specializations.
-                    if self.data.node(node.lhs).lhs != 0
-                        && !self.data.type_parameters.contains_key(&ni)
-                    {
+                    // dbg!(self.data.tree.name(ni));
+
+                    if self.data.node(node.lhs).lhs != 0 {
+                        if !self.data.type_parameters.contains_key(&ni) {
+                            continue;
+                        }
+                        for (arg_types, var_types) in self.data.type_parameters.get(&ni).unwrap() {
+                            self.data.active_type_parameters = Some(var_types);
+                            let name =
+                                self.data
+                                    .mangle_function_declaration(ni, true, Some(arg_types));
+                            Self::compile_function_decl(
+                                &self.data,
+                                &mut self.ctx,
+                                &mut self.builder_ctx,
+                                &mut self.data_ctx,
+                                &mut self.state,
+                                ni,
+                                name,
+                            );
+                        }
                         continue;
                     }
                     // Skip function signatures
                     if node.rhs == 0 {
                         continue;
                     }
+                    self.data.active_type_parameters = None;
+                    let name = self.data.mangle_function_declaration(ni, true, None);
                     let fn_id = Self::compile_function_decl(
                         &self.data,
                         &mut self.ctx,
@@ -206,6 +226,7 @@ impl<'a> Generator<'a> {
                         &mut self.data_ctx,
                         &mut self.state,
                         ni,
+                        name,
                     );
                     let fn_name = self.data.tree.name(ni);
                     if fn_name == "main" {
@@ -229,6 +250,7 @@ impl<'a> Generator<'a> {
         data_ctx: &mut DataContext,
         state: &mut State,
         node_id: NodeId,
+        name: String,
     ) -> FuncId {
         let target_config = state.module.target_config();
         let ptr_type = target_config.pointer_type();
@@ -243,7 +265,6 @@ impl<'a> Generator<'a> {
         c.b.func.signature = Self::compile_function_signature(state, data, &mut c, node.lhs);
         Self::compile_function_body(state, data, &mut c, node_id);
         c.b.finalize();
-        let name = data.mangle_function_declaration(node_id, true);
         println!("{} :: {}", name, c.b.func.display());
         let fn_id = state
             .module
@@ -488,6 +509,7 @@ impl State {
                 let flags = MemFlags::new();
                 let ptr_layout = data.layout(node.lhs);
                 let ptr = self.locate(data, node.lhs).load_value(
+                    data,
                     c,
                     flags,
                     data.typ(node.lhs),
@@ -539,8 +561,8 @@ impl State {
             Tag::IntegerLiteral => self.compile_integer_literal(data, c, node_id, false),
             Tag::FloatLiteral => {
                 let token_str = data.tree.node_lexeme(node_id);
-                dbg!(token_str);
-                dbg!(data.typ(node_id));
+                // dbg!(token_str);
+                // dbg!(data.typ(node_id));
                 match data.typ(node_id) {
                     Typ::Numeric {
                         floating: true,
@@ -641,6 +663,7 @@ impl State {
                 // Layout of referenced variable
                 let ptr_layout = data.layout(node.lhs);
                 let ptr = self.locate(data, node.lhs).load_value(
+                    data,
                     c,
                     flags,
                     data.typ(node.lhs),
@@ -656,13 +679,13 @@ impl State {
                     unreachable!();
                 };
                 let base = self.locate(data, node.lhs).load_value(
+                    data,
                     c,
                     flags,
                     data.typ(node.lhs),
                     arr_layout,
                 );
                 let index = self.compile_expr_value(data, c, node.rhs);
-                dbg!(arr_layout);
                 let offset = c.b.ins().imul_imm(index, stride as i64);
                 let addr = c.b.ins().iadd(base, offset);
                 // Offset for 1-based indexing.
@@ -672,6 +695,9 @@ impl State {
         }
     }
 
+    /// If the called function is generic, the definition id refers to the generic declaration.
+    /// To call the specialization, we need the right name and the right signature. At the call
+    /// site, we know the base name and the arguments.
     fn compile_call(
         &mut self,
         data: &Data,
@@ -686,24 +712,38 @@ impl State {
             panic!("Definition not found: {}", "failed to get function decl id")
         });
 
+        let node = data.tree.node(node_id);
+        let arg_ids = if binary {
+            vec![node.lhs, node.rhs]
+        } else {
+            data.tree
+                .range(data.node(node.rhs))
+                .map(|i| data.node_index(i))
+                .collect()
+        };
+        let mut arg_type_ids = vec![];
+        for ni in &arg_ids {
+            arg_type_ids.push(data.type_id(*ni));
+        }
+
         let name = match definition {
             Definition::BuiltInFunction(id) => {
                 return self.compile_built_in_function(data, c, *id, node_id);
             }
             Definition::User(id) | Definition::Overload(id) => {
-                data.mangle_function_declaration(*id, true)
+                // assert_eq!(&arg_type_ids, data.typ(callee_id).parameters());
+                data.mangle_function_declaration(*id, true, Some(&arg_type_ids))
             }
             Definition::Foreign(_) => data.tree.name(callee_id).to_string(),
-            Definition::Resolved(id) => data.mangle_function_declaration(*id, true),
+            Definition::Resolved(id) => data.mangle_function_declaration(*id, true, None),
             Definition::BuiltIn(built_in_type) => {
-                let node = data.tree.node(node_id);
                 let args = data.node(node.rhs);
                 let ni = data.node_index(args.lhs);
                 let arg = self.compile_expr_value(data, c, ni);
                 let ti = *built_in_type as TypeId;
-                let from_type = cl_type(c.ptr_type, data.typ(ni));
+                let from_type = cl_type(data, c.ptr_type, data.typ(ni));
                 let to_typ = &data.types[ti];
-                let to_type = cl_type(c.ptr_type, to_typ);
+                let to_type = cl_type(data, c.ptr_type, to_typ);
                 return if to_type.bytes() < from_type.bytes() {
                     Val::Scalar(c.b.ins().ireduce(to_type, arg))
                 } else if to_typ.is_signed() {
@@ -715,15 +755,6 @@ impl State {
             _ => unreachable!("Definition not found: {}", "failed to get function decl id"),
         };
 
-        let node = data.tree.node(node_id);
-        let arg_ids = if binary {
-            vec![node.lhs, node.rhs]
-        } else {
-            data.tree
-                .range(data.node(node.rhs))
-                .map(|i| data.node_index(i))
-                .collect()
-        };
         let args: Vec<Value> = arg_ids
             .iter()
             .map(|ni| self.compile_expr_value(data, c, *ni))
@@ -731,25 +762,54 @@ impl State {
 
         let mut sig = self.module.make_signature();
         for ni in arg_ids {
-            let t = cl_type(c.ptr_type, data.typ(ni));
+            let t = cl_type(data, c.ptr_type, data.typ(ni));
             sig.params.push(AbiParam::new(t));
         }
 
         // Assume one return value.
+        // If the called function is generic, we need to get the return type based on the
+        // arguments, not the call expression.
         let return_types = data.type_ids(node_id);
         let return_type = match return_types {
             TypeIds::Single(t) => {
-                if *t != BuiltInType::Void as TypeId {
-                    sig.returns.push(AbiParam::new(ty));
+                if let Typ::Parameter { index } = &data.types[*t] {
+                    let type_arguments = data
+                        .type_parameters
+                        .get(&definition.id())
+                        .unwrap()
+                        .get(&arg_type_ids)
+                        .unwrap();
+                    type_arguments[*index]
+                } else {
+                    if *t != BuiltInType::Void as TypeId {
+                        sig.returns.push(AbiParam::new(ty));
+                    }
+                    *t
                 }
-                *t
             }
             TypeIds::Multiple(ts) => {
+                let mut return_type_id = return_types.first();
                 for ti in ts {
-                    let t = cl_type(c.ptr_type, &data.types[*ti]);
+                    let typ = &data.types[*ti];
+
+                    let typ = if let Typ::Parameter { index } = typ {
+                        let type_arguments = data
+                            .type_parameters
+                            .get(&definition.id())
+                            .unwrap()
+                            .get(&arg_type_ids)
+                            .unwrap();
+                        let ti = type_arguments[*index];
+                        return_type_id = ti;
+                        &data.types[ti]
+                    } else {
+                        typ
+                    };
+                    let t = cl_type(data, c.ptr_type, typ);
                     sig.returns.push(AbiParam::new(t));
                 }
-                return_types.first()
+                // dbg!(&data.types[return_type_id]);
+                return_type_id
             }
         };
 
@@ -807,7 +867,7 @@ impl State {
         node_id: NodeId,
         negative: bool,
     ) -> Val {
-        let ty = cl_type(c.ptr_type, data.typ(node_id));
+        let ty = cl_type(data, c.ptr_type, data.typ(node_id));
         let token_str = data.tree.node_lexeme(node_id);
         let value = token_str.parse::<i64>().unwrap();
         Val::Scalar(c.b.ins().iconst(ty, if negative { -value } else { value }))
@@ -861,7 +921,7 @@ impl State {
     }
 }
 
-pub fn cl_type(ptr_type: Type, typ: &Typ) -> Type {
+pub fn cl_type(data: &Data, ptr_type: Type, typ: &Typ) -> Type {
     match typ {
         Typ::Boolean => I8,
         Typ::Pointer { .. } => ptr_type,
@@ -884,6 +944,11 @@ pub fn cl_type(ptr_type: Type, typ: &Typ) -> Type {
                 }
             }
         }
+        Typ::Parameter { index } => cl_type(
+            data,
+            ptr_type,
+            &data.types[data.active_type_parameters.unwrap()[*index]],
+        ),
         _ => unreachable!("Invalid type: {typ:?} is not a primitive Cranelift type."),
     }
 }
@@ -933,22 +998,31 @@ impl Location {
             offset: self.offset + extra_offset,
         }
     }
-    fn load_scalar(&self, c: &mut FnContext, flags: MemFlags, typ: &Typ) -> Value {
+    fn load_scalar(&self, data: &Data, c: &mut FnContext, flags: MemFlags, typ: &Typ) -> Value {
         let ins = c.b.ins();
-        let ty = cl_type(c.ptr_type, typ);
+        let ty = cl_type(data, c.ptr_type, typ);
         match self.base {
             LocationBase::Pointer(base_addr) => ins.load(ty, flags, base_addr, self.offset),
             LocationBase::Register(variable) => c.b.use_var(variable),
             LocationBase::Stack(stack_slot) => ins.stack_load(ty, stack_slot, self.offset),
         }
     }
-    fn load_value(&self, c: &mut FnContext, flags: MemFlags, typ: &Typ, layout: &Layout) -> Value {
+    fn load_value(
+        &self,
+        data: &Data,
+        c: &mut FnContext,
+        flags: MemFlags,
+        typ: &Typ,
+        layout: &Layout,
+    ) -> Value {
         let (ins, ty) = (c.b.ins(), c.ptr_type);
         match self.base {
-            LocationBase::Pointer(_) | LocationBase::Register(_) => self.load_scalar(c, flags, typ),
+            LocationBase::Pointer(_) | LocationBase::Register(_) => {
+                self.load_scalar(data, c, flags, typ)
+            }
             LocationBase::Stack(stack_slot) => {
                 if layout.size <= 8 {
-                    self.load_scalar(c, flags, typ)
+                    self.load_scalar(data, c, flags, typ)
                 } else {
                     ins.stack_addr(ty, stack_slot, self.offset)
                 }
@@ -994,7 +1068,7 @@ impl Location {
             LocationBase::Pointer(_) => Val::Reference(self, None),
             LocationBase::Stack(stack_slot) => {
                 if layout.size <= 8 {
-                    let ty = cl_type(c.ptr_type, typ);
+                    let ty = cl_type(data, c.ptr_type, typ);
                     Val::Scalar(ins.stack_load(ty, stack_slot, self.offset))
                 } else {
                     Val::Reference(self, None)
@@ -1020,7 +1094,7 @@ impl Val {
             // location is a pointer or stack slot
             Val::Reference(location, _) => {
                 if layout.size <= 8 {
-                    location.load_scalar(c, MemFlags::new(), typ)
+                    location.load_scalar(data, c, MemFlags::new(), typ)
                 } else {
                     location.get_addr(c)
                 }

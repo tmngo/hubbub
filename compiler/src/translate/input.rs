@@ -3,17 +3,14 @@ use crate::{
     parse::{Node, NodeId, NodeInfo, Tag, Tree},
     typecheck::{Type as Typ, TypeId, TypeIds},
 };
-use std::{
-    collections::{HashMap, HashSet},
-    fmt::Write,
-};
+use std::{collections::HashMap, fmt::Write};
 
 pub struct Input<'a> {
     pub tree: &'a Tree,
     pub definitions: &'a HashMap<u32, Definition>,
     pub types: &'a Vec<Typ>,
     pub node_types: &'a Vec<TypeIds>,
-    type_parameters: HashMap<NodeId, HashSet<Vec<TypeId>>>,
+    type_parameters: HashMap<NodeId, HashMap<Vec<TypeId>, Vec<TypeId>>>,
 }
 
 impl<'a> Input<'a> {
@@ -22,7 +19,7 @@ impl<'a> Input<'a> {
         definitions: &'a HashMap<u32, Definition>,
         types: &'a Vec<Typ>,
         node_types: &'a Vec<TypeIds>,
-        type_parameters: HashMap<NodeId, HashSet<Vec<TypeId>>>,
+        type_parameters: HashMap<NodeId, HashMap<Vec<TypeId>, Vec<TypeId>>>,
     ) -> Self {
         Self {
             tree,
@@ -39,7 +36,8 @@ pub struct Data<'a> {
     pub definitions: &'a HashMap<u32, Definition>,
     pub types: &'a Vec<Typ>,
     pub node_types: &'a Vec<TypeIds>,
-    pub type_parameters: &'a HashMap<NodeId, HashSet<Vec<TypeId>>>,
+    pub type_parameters: &'a HashMap<NodeId, HashMap<Vec<TypeId>, Vec<TypeId>>>,
+    pub active_type_parameters: Option<&'a Vec<TypeId>>,
     pub layouts: Vec<Layout>,
 }
 
@@ -51,6 +49,7 @@ impl<'a> Data<'a> {
             types: input.types,
             node_types: input.node_types,
             type_parameters: &input.type_parameters,
+            active_type_parameters: None,
             layouts,
         }
     }
@@ -78,7 +77,12 @@ impl<'a> Data<'a> {
         &self.layouts[self.type_id(node_id)]
     }
 
-    pub fn mangle_function_declaration(&self, node_id: NodeId, includes_types: bool) -> String {
+    pub fn mangle_function_declaration(
+        &self,
+        node_id: NodeId,
+        includes_types: bool,
+        type_parameters: Option<&Vec<TypeId>>,
+    ) -> String {
         let node = self.node(node_id);
         let NodeInfo::Prototype {
             foreign,
@@ -100,10 +104,20 @@ impl<'a> Data<'a> {
             if parameters.rhs > parameters.lhs {
                 write!(full_name, "|").ok();
             }
-            for i in parameters.lhs..parameters.rhs {
-                let ni = self.node_index(i);
-                let ti = self.type_id(ni);
-                write!(full_name, "{},", ti).ok();
+            if let Some(type_parameters) = type_parameters {
+                for ti in type_parameters {
+                    write!(full_name, "{},", ti).ok();
+                }
+            } else {
+                for i in parameters.lhs..parameters.rhs {
+                    let ni = self.node_index(i);
+                    let typ = self.typ(ni);
+                    let ti = match typ {
+                        Typ::Parameter { index } => dbg!(type_parameters).as_ref().unwrap()[*index],
+                        _ => self.type_id(ni),
+                    };
+                    write!(full_name, "{},", ti).ok();
+                }
             }
         }
         full_name

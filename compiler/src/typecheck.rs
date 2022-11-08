@@ -5,10 +5,7 @@ use crate::{
 };
 use codespan_reporting::diagnostic::Diagnostic;
 use smallvec::SmallVec;
-use std::{
-    collections::{HashMap, HashSet},
-    hash::Hash,
-};
+use std::{collections::HashMap, hash::Hash};
 use thiserror::Error;
 
 /**
@@ -149,7 +146,7 @@ enum CallResult {
 }
 
 type TypeMap<P = Vec<TypeId>> = HashMap<P, TypeId>;
-type TypeParameters = HashMap<NodeId, HashSet<Vec<TypeId>>>;
+type TypeParameters = HashMap<NodeId, HashMap<Vec<TypeId>, Vec<TypeId>>>;
 
 pub struct Typechecker<'a> {
     workspace: &'a mut Workspace,
@@ -612,6 +609,7 @@ impl<'a> Typechecker<'a> {
                     self.current_fn_type_id = Some(fn_type_id);
                 }
                 self.infer_node(node.rhs)?;
+                self.current_fn_type_id = None;
                 fn_type
             }
             Tag::Equality | Tag::Greater | Tag::Inequality | Tag::Less => {
@@ -973,32 +971,86 @@ impl<'a> Typechecker<'a> {
                 match prototype.tag {
                     Tag::Prototype => {
                         if prototype.lhs != 0 {
-                            // let type_parameters = self.tree.lchild(prototype);
-                            // let inner_prototype = self.tree.rchild(prototype);
-                            // let parameters = self.tree.lchild(inner_prototype);
-                            // let returns = self.tree.rchild(inner_prototype);
-                            // let mut arg_types = Vec::new();
-                            // // let mut ret_types = Vec::new();
-                            // for (i, it) in (parameters.lhs..parameters.rhs).enumerate() {
-                            //     let arg_id = self.tree.node_index(i as u32 + expressions.lhs);
-                            //     let arg_type = self.node_types[arg_id as usize];
-                            //     arg_types.push(arg_type);
-                            // }
-                            // // for (i, it) in (returns.lhs..returns.rhs).enumerate() {
-                            // //     let ret_id = self.tree.node_index(i as u32 + expressions.lhs);
-                            // //     let t = self.node_types[arg_id as usize];
-                            // //     ret_types.push(t);
-                            // // }
-                            // self.types.push(Type::Function {
-                            //     parameters: arg_types.clone(),
-                            //     returns: arg_types.clone(),
-                            // });
-                            // if let Err(mut error) = self
-                            //     .type_parameters
-                            //     .try_insert(definition_id, HashSet::from([arg_types.clone()]))
-                            // {
-                            //     error.entry.get_mut().insert(arg_types);
-                            // }
+                            let type_parameters = self.tree.node(prototype.lhs);
+                            let parameters = self.tree.node(self.tree.node_extra(prototype, 0));
+                            let returns_id = self.tree.node_extra(prototype, 1);
+                            let returns = self.tree.node(returns_id);
+                            let mut flat_argument_types = vec![];
+                            for (node_id, arg_type_ids) in argument_types {
+                                if let Single(type_id) = arg_type_ids {
+                                    if type_id == BuiltInType::IntegerLiteral as TypeId {
+                                        self.set_node_type(
+                                            node_id,
+                                            Single(BuiltInType::Integer64 as TypeId),
+                                        );
+                                        flat_argument_types.push(BuiltInType::Integer64 as TypeId);
+                                        continue;
+                                    }
+                                }
+                                flat_argument_types.extend(arg_type_ids.all());
+                            }
+                            let mut type_arguments = vec![
+                                BuiltInType::None as TypeId;
+                                self.tree.range(type_parameters).count()
+                            ];
+                            for (pi, i) in self.tree.range(parameters).enumerate() {
+                                let ni = self.tree.node_index(i);
+                                let ti = self.node_types[ni as usize].first();
+                                let arg_type = flat_argument_types[pi];
+                                if let Type::Parameter { index } = self.types[ti] {
+                                    let param_type = type_arguments[index];
+                                    if param_type == BuiltInType::None as TypeId {
+                                        type_arguments[index] = arg_type;
+                                    } else if arg_type != param_type {
+                                        return Err(Diagnostic::error().with_message(format!(
+                                            "mismatched types in function call: expected {:?} argument, got {:?}",
+                                            self.types[param_type],
+                                            self.types[arg_type])
+                                        ).with_labels(vec![self
+                                            .tree
+                                            .label(self.tree.node(callee_id).token)]));
+                                    }
+                                }
+                            }
+                            let mut return_type_ids = vec![];
+                            if returns_id != 0 {
+                                assert_eq!(returns.tag, Tag::Expressions);
+                                for i in self.tree.range(returns) {
+                                    let ni = self.tree.node_index(i);
+                                    let ti = self.node_types[ni as usize].first();
+                                    let ti = match self.types[ti] {
+                                        Type::Parameter { index } => type_arguments[index],
+                                        Type::Pointer { typ, .. } => {
+                                            if let Type::Parameter { index } = self.types[typ] {
+                                                type_arguments[index]
+                                            } else {
+                                                ti
+                                            }
+                                        }
+                                        _ => ti,
+                                    };
+                                    return_type_ids.push(ti);
+                                }
+                            }
+                            if let Err(mut occupied_err) = self.type_parameters.try_insert(
+                                *definition_id,
+                                HashMap::from([(
+                                    flat_argument_types.clone(),
+                                    type_arguments.clone(),
+                                )]),
+                            ) {
+                                occupied_err
+                                    .entry
+                                    .get_mut()
+                                    .insert(flat_argument_types.clone(), type_arguments);
+                            }
+
+                            let callee_type_id = self.add_function_type(Type::Function {
+                                parameters: flat_argument_types.clone(),
+                                returns: return_type_ids,
+                            });
+                            self.set_node_type(callee_id, Single(callee_type_id));
+                            return Ok(());
                         }
 
                         // Non-parametric procedure: just type-check the arguments.

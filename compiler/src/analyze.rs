@@ -430,7 +430,11 @@ impl<'a> Analyzer<'a> {
                 }
             }
             Tag::Prototype => {
+                // Type parameters
+                self.resolve_node(node.lhs)?;
+                // Parameters
                 self.resolve_node(self.tree.node_extra(node, 0))?;
+                // Return values
                 self.resolve_node(self.tree.node_extra(node, 1))?;
             }
             Tag::Struct => {

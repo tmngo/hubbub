@@ -135,7 +135,8 @@ pub enum Tag {
     Negation,       // expr
     Not,            // expr
     Parameters,     // start..end [Field]
-    Prototype,      // parameters: Parameters, returns: Expressions
+    /// lhs: type_parameters, rhs: (parameters, returns)
+    Prototype,
     Return,         // expr
     Root,           // start..end [Decl]
     StringLiteral,  //

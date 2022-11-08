@@ -172,7 +172,6 @@ fn boolean() {
 fn builtin() {
     test("builtin", Test::AotAndJit, "", 0, 0);
 }
-
 #[test]
 fn fibonacci() {
     test("fibonacci", Test::AotAndJit, FIBONACCI_TREE, 12, 13)
@@ -192,6 +191,10 @@ fn negation() {
 #[test]
 fn overload() {
     test("overload", Test::AotAndJit, "", 0, 10);
+}
+#[test]
+fn parapoly() {
+    test("parapoly", Test::AotAndJit, "", 0, 0);
 }
 #[test]
 fn pointer() {
