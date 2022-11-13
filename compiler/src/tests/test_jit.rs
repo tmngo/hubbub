@@ -173,12 +173,16 @@ fn builtin() {
     test("builtin", Test::AotAndJit, "", 0, 0);
 }
 #[test]
+fn sharedlib() {
+    test("sharedlib", Test::AotAndJit, "", 0, 1);
+}
+#[test]
 fn fibonacci() {
     test("fibonacci", Test::AotAndJit, FIBONACCI_TREE, 12, 13)
 }
 #[test]
-fn if_else() {
-    test("if_else", Test::AotAndJit, "", 0, 61);
+fn ifelse() {
+    test("ifelse", Test::AotAndJit, "", 0, 61);
 }
 #[test]
 fn multiple() {
@@ -210,15 +214,15 @@ fn string() {
 }
 #[test]
 fn structs() {
-    test("struct", Test::AotAndJit, STRUCTS_TREE, 24, 7);
+    test("structs", Test::AotAndJit, STRUCTS_TREE, 24, 7);
 }
 #[test]
 fn unicode() {
     test("unicode", Test::AotAndJit, "", 0, 114);
 }
 #[test]
-fn while_loop() {
-    test("loop", Test::AotAndJit, "", 0, 35);
+fn whileloop() {
+    test("whileloop", Test::AotAndJit, "", 0, 35);
 }
 #[test]
 fn xorshift() {

@@ -3,6 +3,11 @@ Wrapper :: struct {T}
     ptr: Pointer{T}
 end
 
+Pair :: struct {A, B}
+    a: A
+    b: B
+end
+
 main :: () -> Int
     w: Wrapper{Int}
     z: Wrapper{Bool}
@@ -13,5 +18,10 @@ main :: () -> Int
         w.arr[1] = 4
         w.arr[2] = 5
     end
-    return w.arr[0] + w.arr[1] + w.arr[2]
+
+    pair: Pair{Bool, Int}
+    pair.a = false
+    pair.b = 0 
+
+    return w.arr[0] + w.arr[1] + w.arr[2] + pair.b
 end
