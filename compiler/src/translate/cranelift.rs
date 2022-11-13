@@ -343,20 +343,24 @@ impl State {
                 lvalue.store(c, rvalue, flags, layout);
             }
             Tag::If => {
+                // Each basic block must be filled
+                // i.e. end in a terminator: brtable, jump, return, or trap
+                // Conditional branch instructions must be followed by a terminator.
                 let condition_expr = self.compile_expr_value(data, c, node.lhs);
                 let then_block = c.b.create_block();
                 let merge_block = c.b.create_block();
-                let body = data.node(node.rhs);
                 c.b.ins().brz(condition_expr, merge_block, &[]);
                 c.b.ins().jump(then_block, &[]);
-                self.filled_blocks.insert(c.b.current_block().unwrap());
                 c.b.seal_block(then_block);
+                self.filled_blocks.insert(c.b.current_block().unwrap());
                 // then block
                 c.b.switch_to_block(then_block);
+                let body = data.node(node.rhs);
                 for i in body.lhs..body.rhs {
                     let index = data.node_index(i);
                     self.compile_stmt(data, c, index);
                 }
+                // Check if the last statement compiled was a terminator.
                 if !self.filled_blocks.contains(&c.b.current_block().unwrap()) {
                     c.b.ins().jump(merge_block, &[]);
                     self.filled_blocks.insert(c.b.current_block().unwrap());
