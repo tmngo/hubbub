@@ -586,7 +586,23 @@ impl State {
     pub fn compile_expr(&mut self, data: &Data, c: &mut FnContext, node_id: NodeId) -> Val {
         let ty = c.ptr_type;
         let node = data.node(node_id);
+
+        macro_rules! compile_binary_expr {
+            ($inst:ident) => {{
+                let (lhs, rhs) = self.compile_children(data, c, node);
+                Val::Scalar(c.b.ins().$inst(lhs, rhs))
+            }};
+        }
+        macro_rules! compile_int_compare {
+            ($cond:expr) => {{
+                let (lhs, rhs) = self.compile_children(data, c, node);
+                let value = c.b.ins().icmp($cond, lhs, rhs);
+                Val::Scalar(c.b.ins().bint(I8, value))
+            }};
+        }
+
         match node.tag {
+            // Variables
             Tag::Access => self.locate_field(data, node_id).to_val(data, c, node_id),
             Tag::Address => Val::Scalar(self.locate(data, node.lhs).get_addr(c)),
             Tag::Dereference => {
@@ -601,47 +617,58 @@ impl State {
                 );
                 Location::pointer(ptr, 0).to_val(data, c, node_id)
             }
-            Tag::Add | Tag::Mul => {
-                let callee_id = node_id;
-                self.compile_call(data, c, node_id, callee_id, true)
+            Tag::Expressions => {
+                let range = data.tree.range(node);
+                let mut values = Vec::with_capacity(range.len());
+                for i in range {
+                    let ni = data.tree.node_index(i);
+                    let val = self.compile_expr(data, c, ni);
+                    match val {
+                        Val::Multiple(xs) => values.extend(xs),
+                        _ => values.push(val.cranelift_value(data, c, ni)),
+                    }
+                }
+                Val::Multiple(values)
             }
-            Tag::BitwiseShiftL => {
-                let (lhs, rhs) = self.compile_children(data, c, node);
-                Val::Scalar(c.b.ins().ishl(lhs, rhs))
+            Tag::Identifier => self.locate(data, node_id).to_val(data, c, node_id),
+            Tag::Subscript => {
+                let lvalue = self.compile_lvalue(data, c, node_id);
+                lvalue.to_val(data, c, node_id)
             }
-            Tag::BitwiseShiftR => {
-                let (lhs, rhs) = self.compile_children(data, c, node);
-                Val::Scalar(c.b.ins().sshr(lhs, rhs))
+            // Function calls
+            Tag::Add | Tag::Mul => self.compile_call(data, c, node_id, node_id, true),
+            Tag::Call => self.compile_call(data, c, node_id, node.lhs, false),
+            // Arithmetic operators
+            Tag::Div => compile_binary_expr!(sdiv),
+            Tag::Sub => compile_binary_expr!(isub),
+            Tag::Negation => {
+                if data.tree.node(node.lhs).tag == Tag::IntegerLiteral {
+                    return self.compile_integer_literal(data, c, node.lhs, true);
+                }
+                let lhs = self.compile_expr_value(data, c, node.lhs);
+                Val::Scalar(c.b.ins().ineg(lhs))
             }
-            Tag::BitwiseXor => {
-                let (lhs, rhs) = self.compile_children(data, c, node);
-                Val::Scalar(c.b.ins().bxor(lhs, rhs))
+            // Bitwise operators
+            Tag::BitwiseShiftL => compile_binary_expr!(ishl),
+            Tag::BitwiseShiftR => compile_binary_expr!(sshr),
+            Tag::BitwiseXor => compile_binary_expr!(bxor),
+            // Logical operators
+            Tag::Equality => compile_int_compare!(IntCC::Equal),
+            Tag::Inequality => compile_int_compare!(IntCC::NotEqual),
+            Tag::Greater => compile_int_compare!(IntCC::SignedGreaterThan),
+            Tag::GreaterEqual => compile_int_compare!(IntCC::SignedGreaterThanOrEqual),
+            Tag::Less => compile_int_compare!(IntCC::SignedLessThan),
+            Tag::LessEqual => compile_int_compare!(IntCC::SignedLessThanOrEqual),
+            Tag::LogicalAnd => self.compile_short_circuit(data, c, node, true),
+            Tag::LogicalOr => self.compile_short_circuit(data, c, node, false),
+            Tag::Not => {
+                let value = self.compile_expr_value(data, c, node.lhs);
+                let value = c.b.ins().icmp_imm(IntCC::Equal, value, 0);
+                Val::Scalar(c.b.ins().bint(I8, value))
             }
-            Tag::Sub => {
-                let (lhs, rhs) = self.compile_children(data, c, node);
-                Val::Scalar(c.b.ins().isub(lhs, rhs))
-            }
-            Tag::Div => {
-                let (lhs, rhs) = self.compile_children(data, c, node);
-                Val::Scalar(c.b.ins().sdiv(lhs, rhs))
-            }
-            Tag::Equality => {
-                let (lhs, rhs) = self.compile_children(data, c, node);
-                Val::Scalar(c.b.ins().icmp(IntCC::Equal, lhs, rhs))
-            }
-            Tag::Greater => {
-                let (lhs, rhs) = self.compile_children(data, c, node);
-                Val::Scalar(c.b.ins().icmp(IntCC::SignedGreaterThan, lhs, rhs))
-            }
-            Tag::Less => {
-                let (lhs, rhs) = self.compile_children(data, c, node);
-                Val::Scalar(c.b.ins().icmp(IntCC::SignedLessThan, lhs, rhs))
-            }
-            Tag::Grouping => self.compile_expr(data, c, node.lhs),
-            Tag::Inequality => {
-                let (lhs, rhs) = self.compile_children(data, c, node);
-                Val::Scalar(c.b.ins().icmp(IntCC::NotEqual, lhs, rhs))
-            }
+            // Literal values
+            Tag::False => Val::Scalar(c.b.ins().iconst(I8, 0)),
+            Tag::True => Val::Scalar(c.b.ins().iconst(I8, 1)),
             Tag::IntegerLiteral => self.compile_integer_literal(data, c, node_id, false),
             Tag::FloatLiteral => {
                 let token_str = data.tree.node_lexeme(node_id);
@@ -666,37 +693,6 @@ impl State {
                     }
                     _ => unreachable!(),
                 }
-            }
-            Tag::True => Val::Scalar(c.b.ins().iconst(I8, 1)),
-            Tag::False => Val::Scalar(c.b.ins().iconst(I8, 0)),
-            Tag::Call => {
-                let callee_id = node.lhs;
-                self.compile_call(data, c, node_id, callee_id, false)
-            }
-            Tag::Expressions => {
-                let range = data.tree.range(node);
-                let mut values = Vec::with_capacity(range.len());
-                for i in range {
-                    let ni = data.tree.node_index(i);
-                    let val = self.compile_expr(data, c, ni);
-                    match val {
-                        Val::Multiple(xs) => values.extend(xs),
-                        _ => values.push(val.cranelift_value(data, c, ni)),
-                    }
-                }
-                Val::Multiple(values)
-            }
-            Tag::Identifier => self.locate(data, node_id).to_val(data, c, node_id),
-            Tag::Negation => {
-                if data.tree.node(node.lhs).tag == Tag::IntegerLiteral {
-                    return self.compile_integer_literal(data, c, node.lhs, true);
-                }
-                let lhs = self.compile_expr_value(data, c, node.lhs);
-                Val::Scalar(c.b.ins().ineg(lhs))
-            }
-            Tag::Subscript => {
-                let lvalue = self.compile_lvalue(data, c, node_id);
-                lvalue.to_val(data, c, node_id)
             }
             Tag::StringLiteral => {
                 let mut string = data
@@ -741,8 +737,6 @@ impl State {
         match node.tag {
             // a.x = b
             Tag::Access => self.locate_field(data, node_id),
-            // a = b
-            Tag::Identifier => self.locate_variable(data, node_id),
             // @a = b
             Tag::Dereference => {
                 // Layout of referenced variable
@@ -756,6 +750,8 @@ impl State {
                 );
                 Location::pointer(ptr, 0)
             }
+            // a = b
+            Tag::Identifier => self.locate_variable(data, node_id),
             Tag::Subscript => {
                 let arr_layout = data.layout(node.lhs);
                 let stride = if let Shape::Array { stride, .. } = arr_layout.shape {
@@ -793,10 +789,6 @@ impl State {
     ) -> Val {
         let ty = c.ptr_type;
 
-        let definition = data.definitions.get(&callee_id).unwrap_or_else(|| {
-            panic!("Definition not found: {}", "failed to get function decl id")
-        });
-
         let node = data.tree.node(node_id);
         let arg_ids = if binary {
             vec![node.lhs, node.rhs]
@@ -810,6 +802,10 @@ impl State {
         for ni in &arg_ids {
             arg_type_ids.push(data.type_id(*ni));
         }
+
+        let definition = data.definitions.get(&callee_id).unwrap_or_else(|| {
+            panic!("Definition not found: {}", "failed to get function decl id")
+        });
 
         let name = match definition {
             Definition::BuiltInFunction(id) => {
@@ -954,6 +950,36 @@ impl State {
                 Val::Scalar(c.b.ins().iconst(c.ptr_type, value))
             }
         }
+    }
+
+    fn compile_short_circuit(
+        &mut self,
+        data: &Data,
+        c: &mut FnContext,
+        node: &Node,
+        is_and: bool,
+    ) -> Val {
+        let right_block = c.b.create_block();
+        let merge_block = c.b.create_block();
+        c.b.append_block_param(merge_block, I8);
+        let lhs = self.compile_expr_value(data, c, node.lhs);
+        if is_and {
+            // If lhs is true, evaluate the rhs. Otherwise, short-circuit and jump to the merge block.
+            c.b.ins().brnz(lhs, right_block, &[]);
+        } else {
+            // If lhs is false, evaluate the rhs. Otherwise, short-circuit and jump to the merge block.
+            c.b.ins().brz(lhs, right_block, &[]);
+        }
+        c.b.ins().jump(merge_block, &[lhs]);
+        c.b.seal_block(right_block);
+        c.b.switch_to_block(right_block);
+        let rhs = self.compile_expr_value(data, c, node.rhs);
+        c.b.ins().jump(merge_block, &[rhs]);
+        c.b.seal_block(merge_block);
+        c.b.switch_to_block(merge_block);
+        let value = c.b.block_params(merge_block)[0];
+        let value = c.b.ins().raw_bitcast(I8, value);
+        Val::Scalar(value)
     }
 
     fn compile_integer_literal(

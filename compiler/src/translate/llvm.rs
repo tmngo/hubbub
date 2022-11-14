@@ -530,7 +530,24 @@ impl<'ctx> Generator<'ctx> {
     pub fn compile_expr(&self, state: &mut State<'ctx>, node_id: NodeId) -> BasicValueEnum<'ctx> {
         let (data, builder) = (&self.data, &self.builder);
         let node = data.node(node_id);
+
+        macro_rules! compile_binary_expr {
+            ($inst:ident, $name:literal) => {{
+                let (lhs, rhs) = self.compile_children(state, node);
+                builder.$inst(lhs, rhs, $name).into()
+            }};
+        }
+        macro_rules! compile_int_compare {
+            ($predicate:expr, $name:literal) => {{
+                let (lhs, rhs) = self.compile_children(state, node);
+                builder
+                    .build_int_compare($predicate, lhs, rhs, $name)
+                    .into()
+            }};
+        }
+
         match node.tag {
+            // Variables
             Tag::Access => {
                 let container = self.compile_expr(state, node.lhs);
                 let field_id = data
@@ -557,54 +574,53 @@ impl<'ctx> Generator<'ctx> {
                     .into_pointer_value();
                 builder.build_load(ptr, "deref")
             }
-            Tag::Add | Tag::Mul => {
-                let definition = data.definitions.get(&node_id).unwrap_or_else(|| {
-                    panic!("Definition not found: {}", "failed to get function decl id")
-                });
-                self.compile_call(state, node_id, definition, true)
+            Tag::Identifier => {
+                let name = data.tree.name(node_id);
+                let location = self.locate(state, node_id);
+                builder.build_load(location.base, name)
             }
-            Tag::BitwiseShiftL => {
-                let (lhs, rhs) = self.compile_children(state, node);
-                builder.build_left_shift(lhs, rhs, "left_shift").into()
+            Tag::Subscript => {
+                let lvalue = self.compile_lvalue(state, node_id);
+                builder.build_load(lvalue, "subscript")
             }
+            // Function calls
+            Tag::Add | Tag::Mul => self.compile_call(state, node_id, node_id, true),
+            Tag::Call => self.compile_call(state, node_id, node.lhs, false),
+            // Arithmetic operators
+            Tag::Div => compile_binary_expr!(build_int_signed_div, "int_signed_div"),
+            Tag::Sub => compile_binary_expr!(build_int_sub, "int_sub"),
+            Tag::Negation => {
+                if data.tree.node(node.lhs).tag == Tag::IntegerLiteral {
+                    return self.compile_integer_literal(node.lhs, data.type_id(node_id), true);
+                }
+                let value = self.compile_expr(state, node.lhs).into_int_value();
+                builder.build_int_neg(value, "int_neg").into()
+            }
+            // Bitwise operators
+            Tag::BitwiseShiftL => compile_binary_expr!(build_left_shift, "left_shift"),
             Tag::BitwiseShiftR => {
                 let (lhs, rhs) = self.compile_children(state, node);
                 builder
                     .build_right_shift(lhs, rhs, true, "right_shift")
                     .into()
             }
-            Tag::BitwiseXor => {
-                let (lhs, rhs) = self.compile_children(state, node);
-                builder.build_xor(lhs, rhs, "xor").into()
+            Tag::BitwiseXor => compile_binary_expr!(build_xor, "xor"),
+            // Logical operators
+            Tag::Equality => compile_int_compare!(IntPredicate::EQ, "int_compare_eq"),
+            Tag::Inequality => compile_int_compare!(IntPredicate::NE, "int_compare_ne"),
+            Tag::Greater => compile_int_compare!(IntPredicate::SGT, "int_compare_sgt"),
+            Tag::GreaterEqual => compile_int_compare!(IntPredicate::SGE, "int_compare_sge"),
+            Tag::Less => compile_int_compare!(IntPredicate::SLT, "int_compare_slt"),
+            Tag::LessEqual => compile_int_compare!(IntPredicate::SLE, "int_compare_sle"),
+            Tag::LogicalAnd => self.compile_short_circuit(state, node, true),
+            Tag::LogicalOr => self.compile_short_circuit(state, node, false),
+            Tag::Not => {
+                let value = self.compile_expr(state, node.lhs).into_int_value();
+                builder.build_not(value, "not").into()
             }
-            Tag::Sub => {
-                let (lhs, rhs) = self.compile_children(state, node);
-                builder.build_int_sub(lhs, rhs, "int_sub").into()
-            }
-            Tag::Div => {
-                let (lhs, rhs) = self.compile_children(state, node);
-                builder
-                    .build_int_signed_div(lhs, rhs, "int_signed_div")
-                    .into()
-            }
-            Tag::Equality => {
-                let (lhs, rhs) = self.compile_children(state, node);
-                builder
-                    .build_int_compare(IntPredicate::EQ, lhs, rhs, "int_compare_eq")
-                    .into()
-            }
-            Tag::Greater => {
-                let (lhs, rhs) = self.compile_children(state, node);
-                builder
-                    .build_int_compare(IntPredicate::SGT, lhs, rhs, "int_compare_sgt")
-                    .into()
-            }
-            Tag::Less => {
-                let (lhs, rhs) = self.compile_children(state, node);
-                builder
-                    .build_int_compare(IntPredicate::SLT, lhs, rhs, "int_compare_slt")
-                    .into()
-            }
+            // Literal values
+            Tag::False => self.context.bool_type().const_int(0, false).into(),
+            Tag::True => self.context.bool_type().const_int(1, false).into(),
             Tag::FloatLiteral => {
                 let token_str = data.tree.node_lexeme(node_id);
                 // dbg!(token_str);
@@ -615,35 +631,8 @@ impl<'ctx> Generator<'ctx> {
                     .const_float(value as f64)
                     .as_basic_value_enum()
             }
-            Tag::Grouping => self.compile_expr(state, node.lhs),
-            Tag::Inequality => {
-                let (lhs, rhs) = self.compile_children(state, node);
-                builder
-                    .build_int_compare(IntPredicate::NE, lhs, rhs, "int_compare_ne")
-                    .into()
-            }
             Tag::IntegerLiteral => {
                 self.compile_integer_literal(node_id, data.type_id(node_id), false)
-            }
-            Tag::True => self.context.bool_type().const_int(1, false).into(),
-            Tag::False => self.context.bool_type().const_int(0, false).into(),
-            Tag::Call => {
-                let definition = data.definitions.get(&node.lhs).unwrap_or_else(|| {
-                    panic!("Definition not found: {}", "failed to get function decl id")
-                });
-                self.compile_call(state, node_id, definition, false)
-            }
-            Tag::Identifier => {
-                let name = data.tree.name(node_id);
-                let location = self.locate(state, node_id);
-                builder.build_load(location.base, name)
-            }
-            Tag::Negation => {
-                if data.tree.node(node.lhs).tag == Tag::IntegerLiteral {
-                    return self.compile_integer_literal(node.lhs, data.type_id(node_id), true);
-                }
-                let value = self.compile_expr(state, node.lhs).into_int_value();
-                builder.build_int_neg(value, "int_neg").into()
             }
             Tag::StringLiteral => {
                 let mut string = data
@@ -661,10 +650,6 @@ impl<'ctx> Generator<'ctx> {
                         false,
                     )
                     .into()
-            }
-            Tag::Subscript => {
-                let lvalue = self.compile_lvalue(state, node_id);
-                builder.build_load(lvalue, "subscript")
             }
             _ => unreachable!("Invalid expression tag: {:?}", node.tag),
         }
@@ -685,8 +670,6 @@ impl<'ctx> Generator<'ctx> {
                     .build_struct_gep(struct_ptr, field_index, "")
                     .unwrap()
             }
-            // a = b
-            Tag::Identifier => self.locate(state, node_id).base,
             // @a = b
             Tag::Dereference => {
                 let location = self.compile_lvalue(state, node.lhs);
@@ -694,6 +677,8 @@ impl<'ctx> Generator<'ctx> {
                     .build_load(location, "pointer_value")
                     .into_pointer_value()
             }
+            // a = b
+            Tag::Identifier => self.locate(state, node_id).base,
             Tag::Subscript => {
                 let array_ptr = self.compile_lvalue(state, node.lhs);
                 let index_value = self.compile_expr(state, node.rhs).into_int_value();
@@ -721,7 +706,7 @@ impl<'ctx> Generator<'ctx> {
         &self,
         state: &mut State<'ctx>,
         node_id: NodeId,
-        definition: &Definition,
+        callee_id: NodeId,
         binary: bool,
     ) -> BasicValueEnum<'ctx> {
         let (data, builder) = (&self.data, &self.builder);
@@ -735,6 +720,10 @@ impl<'ctx> Generator<'ctx> {
                 .map(|i| data.node_index(i))
                 .collect()
         };
+
+        let definition = data.definitions.get(&callee_id).unwrap_or_else(|| {
+            panic!("Definition not found: {}", "failed to get function decl id")
+        });
 
         let name = match &definition {
             Definition::BuiltInFunction(id) => {
@@ -842,6 +831,36 @@ impl<'ctx> Generator<'ctx> {
                 self.context.i64_type().const_int(value, false).into()
             }
         }
+    }
+
+    fn compile_short_circuit(
+        &self,
+        state: &mut State<'ctx>,
+        node: &Node,
+        is_and: bool,
+    ) -> BasicValueEnum<'ctx> {
+        let parent_fn = state.function.unwrap();
+        let lhs = self.compile_expr(state, node.lhs).into_int_value();
+        // Record the first predecessor block after compiling the lhs.
+        let lhs_block = self.builder.get_insert_block().unwrap();
+        let right_block = self.context.append_basic_block(parent_fn, "right_block");
+        let merge_block = self.context.append_basic_block(parent_fn, "merge_block");
+        if is_and {
+            self.builder
+                .build_conditional_branch(lhs, right_block, merge_block);
+        } else {
+            self.builder
+                .build_conditional_branch(lhs, merge_block, right_block);
+        }
+        self.builder.position_at_end(right_block);
+        let rhs = self.compile_expr(state, node.rhs);
+        // Record the second predecessor block after compiling the lhs.
+        let rhs_block = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(merge_block);
+        self.builder.position_at_end(merge_block);
+        let phi = self.builder.build_phi(self.context.bool_type(), "phi");
+        phi.add_incoming(&[(&lhs, lhs_block), (&rhs, rhs_block)]);
+        phi.as_basic_value()
     }
 
     fn compile_integer_literal(

@@ -222,6 +222,7 @@ pub fn sizeof(types: &Vec<Typ>, type_id: usize) -> u32 {
             size
         }
         Typ::Numeric { bytes, .. } => *bytes as u32,
+        Typ::Boolean => 1,
         _ => 8,
     }
 }

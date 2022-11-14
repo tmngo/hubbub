@@ -612,10 +612,39 @@ impl<'a> Typechecker<'a> {
                 self.current_fn_type_id = None;
                 fn_type
             }
-            Tag::Equality | Tag::Greater | Tag::Inequality | Tag::Less => {
-                self.infer_binary_node(node)?;
+            Tag::Equality
+            | Tag::Greater
+            | Tag::GreaterEqual
+            | Tag::Inequality
+            | Tag::Less
+            | Tag::LessEqual
+            | Tag::LogicalAnd
+            | Tag::LogicalOr => {
+                let ltype = self.infer_node(node.lhs)?.first();
+                let rtype = self.infer_node(node.rhs)?.first();
+                if ltype != rtype {
+                    if is_integer(ltype) && rtype == BuiltInType::IntegerLiteral as TypeId {
+                        self.node_types[node.rhs as usize] = Single(ltype);
+                        return Ok(Single(ltype));
+                    } else if ltype == BuiltInType::IntegerLiteral as TypeId && is_integer(rtype) {
+                        self.node_types[node.lhs as usize] = Single(rtype);
+                        return Ok(Single(rtype));
+                    }
+                    return Err(Diagnostic::error()
+                        .with_message(format!(
+                            "mismatched types: left is \"{:?}\", right is \"{:?}\"",
+                            self.types[ltype], self.types[rtype]
+                        ))
+                        .with_labels(vec![self.tree.label(node.token)]));
+                } else if ltype == BuiltInType::IntegerLiteral as TypeId
+                    && rtype == BuiltInType::IntegerLiteral as TypeId
+                {
+                    self.node_types[node.lhs as usize] = Single(BuiltInType::Integer64 as TypeId);
+                    self.node_types[node.rhs as usize] = Single(BuiltInType::Integer64 as TypeId);
+                }
                 Single(BuiltInType::Boolean as TypeId)
             }
+            Tag::Not => Single(self.infer_node(node.lhs)?.first()),
             Tag::Identifier => {
                 // The type of an identifier is the type of its definition.
                 let decl = self.definitions.get(&node_id);

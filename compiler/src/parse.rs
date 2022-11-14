@@ -120,6 +120,7 @@ pub enum Tag {
     FloatLiteral,   //
     FunctionDecl,   // prototype, block
     Greater,        // lhs, rhs
+    GreaterEqual,   // lhs, rhs
     Grouping,       // expr
     Identifier,     //
     If,             // condition, block
@@ -129,6 +130,7 @@ pub enum Tag {
     IntegerLiteral, //
     Invalid,        //
     Less,           // lhs, rhs
+    LessEqual,      // lhs, rhs
     Div,            // lhs, rhs
     Module,         // start..end [Declaration]
     Mul,            // lhs, rhs
@@ -304,7 +306,9 @@ fn token_to_operator(tag: TokenTag) -> Operator {
         TokenTag::BangEqual => Operator::new(Tag::Inequality, 3, Associativity::None),
         TokenTag::EqualEqual => Operator::new(Tag::Equality, 3, Associativity::None),
         TokenTag::Greater => Operator::new(Tag::Greater, 3, Associativity::None),
+        TokenTag::GreaterEqual => Operator::new(Tag::GreaterEqual, 3, Associativity::None),
         TokenTag::Less => Operator::new(Tag::Less, 3, Associativity::None),
+        TokenTag::LessEqual => Operator::new(Tag::LessEqual, 3, Associativity::None),
         //
         TokenTag::Ampersand => Operator::new(Tag::BitwiseAnd, 4, Associativity::Left),
         TokenTag::Caret => Operator::new(Tag::BitwiseXor, 4, Associativity::Left),
