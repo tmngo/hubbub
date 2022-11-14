@@ -1,7 +1,7 @@
 use crate::{
     analyze::{BuiltInFunction, Definition, Lookup},
     builtin,
-    parse::{Node, NodeId, Tag},
+    parse::{Node, NodeId, NodeInfo, Tag},
     translate::input::{sizeof, Data, Input, Layout, Shape},
     typecheck::{BuiltInType, Type as Typ, TypeId, TypeIds},
     workspace::Workspace,
@@ -11,8 +11,8 @@ use cranelift::prelude::{
     isa::{lookup, TargetFrontendConfig},
     settings,
     types::{F32, F64, I16, I32, I64, I8},
-    AbiParam, Block, FunctionBuilder, FunctionBuilderContext, InstBuilder, IntCC, MemFlags,
-    Signature, StackSlotData, StackSlotKind, Type, Value, Variable,
+    AbiParam, Block, Configurable, FunctionBuilder, FunctionBuilderContext, InstBuilder, IntCC,
+    MemFlags, Signature, StackSlotData, StackSlotKind, Type, Value, Variable,
 };
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataContext, FuncId, Linkage, Module};
@@ -71,8 +71,9 @@ impl<'a> Generator<'a> {
         output_name: String,
         use_jit: bool,
     ) -> Self {
-        let flag_builder = settings::builder();
-        // flag_builder.set("is_pic", "true").unwrap();
+        let mut flag_builder = settings::builder();
+        // flag_builder.set("enable_verifier", "false").ok();
+        flag_builder.set("is_pic", "true").unwrap();
         let isa_builder = lookup(target_lexicon::HOST).unwrap();
         let isa = isa_builder
             .finish(settings::Flags::new(flag_builder))
@@ -132,6 +133,8 @@ impl<'a> Generator<'a> {
                 module,
                 locations: HashMap::new(),
                 filled_blocks: HashSet::new(),
+                signatures: HashMap::new(),
+                // func_refs: HashMap::new(),
             },
         }
     }
@@ -173,21 +176,61 @@ impl<'a> Generator<'a> {
 
     ///
     pub fn compile_nodes(mut self, filename: &Path) -> Option<i64> {
-        let root = &self.data.node(0);
+        let tree = self.data.tree;
+        let root = tree.node(0);
         let mut fn_ids = Vec::new();
         let mut main_id = None;
 
         for i in root.lhs..root.rhs {
             let module_index = self.data.node_index(i);
             let module = self.data.node(module_index);
+            if module.tag != Tag::Module {
+                continue;
+            }
 
+            for i in module.lhs..module.rhs {
+                let ni = tree.node_index(i);
+                let node = tree.node(ni);
+                if let Tag::FunctionDecl = node.tag {
+                    if self.data.node(node.lhs).lhs != 0 {
+                        // Skip generic functions with no specializations.
+                        if !self.data.type_parameters.contains_key(&ni) {
+                            continue;
+                        }
+                        for (arg_types, var_types) in self.data.type_parameters.get(&ni).unwrap() {
+                            self.data.active_type_parameters = Some(var_types);
+                            let name =
+                                self.data
+                                    .mangle_function_declaration(ni, true, Some(arg_types));
+                            Self::compile_function_signature(
+                                &mut self.state,
+                                &self.data,
+                                ni,
+                                &name,
+                            );
+                        }
+                        continue;
+                    }
+                    if node.rhs == 0 {
+                        // continue;
+                    }
+                    self.data.active_type_parameters = None;
+                    let name = self.data.mangle_function_declaration(ni, true, None);
+                    Self::compile_function_signature(&mut self.state, &self.data, ni, &name);
+                };
+            }
+        }
+
+        for i in root.lhs..root.rhs {
+            let module_index = self.data.node_index(i);
+            let module = self.data.node(module_index);
             if module.tag != Tag::Module {
                 continue;
             }
 
             for i in module.lhs..module.rhs {
                 let ni = self.data.node_index(i);
-                let node = self.data.node(ni);
+                let node = tree.node(ni);
                 if let Tag::FunctionDecl = node.tag {
                     // Skip generic functions with no specializations.
                     // dbg!(self.data.tree.name(ni));
@@ -237,7 +280,8 @@ impl<'a> Generator<'a> {
             }
         }
         if let Some(id) = main_id {
-            return Some(self.state.module.finalize(id, filename));
+            let code = self.state.module.finalize(id, filename);
+            return Some(code);
         }
         None
     }
@@ -261,32 +305,66 @@ impl<'a> Generator<'a> {
             target_config,
         };
 
-        let node = data.node(node_id);
-        c.b.func.signature = Self::compile_function_signature(state, data, &mut c, node.lhs);
+        // Build signature
+        // let node = data.node(node_id);
+        // let fn_id = Self::compile_function_signature(state, data, c.b.func, node.lhs, &name);
+
+        // Get cached signature
+        let cached_func = state.signatures.get(&name).unwrap();
+        let fn_id = cached_func.0;
+        c.b.func.signature = cached_func.1.clone();
+
         Self::compile_function_body(state, data, &mut c, node_id);
         c.b.finalize();
-        println!("{} :: {}", name, c.b.func.display());
-        let fn_id = state
-            .module
-            .declare_function(&name, Linkage::Export, &c.b.func.signature)
-            .unwrap();
+        // println!("{} :: {}", name, c.b.func.display());
+
+        // Write CLIF to file
+        // let mut s = String::new();
+        // cranelift::codegen::write_function(&mut s, c.b.func);
+        // std::fs::write(
+        //     format!("./fn-{}.clif", name.replace("|", "-").replace(",", "-"),),
+        //     s,
+        // );
+
         state.module.define_function(fn_id, ctx).unwrap();
+        // println!("{}", cranelift::codegen::timing::take_current());
         state.module.clear_context(ctx);
+        state.filled_blocks.clear();
         fn_id
     }
 
     fn compile_function_signature(
         state: &mut State,
         data: &Data,
-        c: &mut FnContext,
         node_id: NodeId,
-    ) -> Signature {
+        name: &str,
+    ) -> FuncId {
+        let target_config = state.module.target_config();
+        let ptr_type = target_config.pointer_type();
         let mut signature = state.module.make_signature();
-        let prototype = data.node(node_id);
+        let fn_decl = data.node(node_id);
+        let prototype = data.node(fn_decl.lhs);
         let parameters = data.node(data.tree.node_extra(prototype, 0));
         let returns_id = data.tree.node_extra(prototype, 1);
-        Self::init_signature(data, &mut signature, parameters, returns_id, c.ptr_type);
-        signature
+        Self::init_signature(data, &mut signature, parameters, returns_id, ptr_type);
+        let linkage =
+            if let Some(NodeInfo::Prototype { foreign, .. }) = data.tree.info.get(&fn_decl.lhs) {
+                if *foreign || fn_decl.rhs == 0 {
+                    Linkage::Import
+                } else {
+                    Linkage::Export
+                }
+            } else {
+                Linkage::Export
+            };
+        let fn_id = state
+            .module
+            .declare_function(name, linkage, &signature)
+            .unwrap();
+        state
+            .signatures
+            .insert(name.to_string(), (fn_id, signature.clone()));
+        fn_id
     }
 
     fn compile_function_body(state: &mut State, data: &Data, c: &mut FnContext, node_id: NodeId) {
@@ -325,6 +403,8 @@ pub struct State {
     locations: HashMap<NodeId, Location>,
     pub module: Box<dyn CraneliftModule>,
     filled_blocks: HashSet<Block>,
+    pub signatures: HashMap<String, (FuncId, Signature)>,
+    // func_refs: HashMap<FuncId, FuncRef>,
 }
 
 impl State {
@@ -822,6 +902,17 @@ impl State {
             .declare_function(&name, Linkage::Import, &sig)
             .unwrap();
         let local_callee = self.module.declare_func_in_func(callee, c.b.func);
+
+        // let cached_func = self.signatures.get(&name).unwrap();
+        // assert!(sig == cached_func.1);
+        // Get function data from cache
+        // let callee = cached_func.0;
+        // let local_callee = self
+        //     .func_refs
+        //     .get(&callee)
+        //     .cloned()
+        //     .unwrap_or_else(|| self.module.declare_func_in_func(callee, c.b.func));
+
         let call = c.b.ins().call(local_callee, &args);
         if return_type != BuiltInType::Void as TypeId {
             let return_values = c.b.inst_results(call);
