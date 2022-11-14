@@ -646,9 +646,14 @@ impl<'ctx> Generator<'ctx> {
                 builder.build_int_neg(value, "int_neg").into()
             }
             Tag::StringLiteral => {
-                let string = data.tree.token_str(node.token).trim_matches('"');
+                let mut string = data
+                    .tree
+                    .token_str(node.token)
+                    .trim_matches('"')
+                    .to_string();
                 let length = string.len();
-                let ptr = self.builder.build_global_string_ptr(string, "string_data");
+                string.push('\0');
+                let ptr = self.builder.build_global_string_ptr(&string, "string_data");
                 let len = self.context.i64_type().const_int(length as u64, true);
                 self.context
                     .const_struct(

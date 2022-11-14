@@ -137,8 +137,6 @@ impl<'a> Analyzer<'a> {
         ]);
         let foreign = Scope::from(
             [
-                ("putchar", 1),
-                ("puts", 1),
                 // ("DisplayHelloFromMyDLL", 9),
                 // ("print_int", 2),
                 // ("alloc", 3),

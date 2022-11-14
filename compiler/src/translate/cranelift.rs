@@ -699,12 +699,13 @@ impl State {
                 lvalue.to_val(data, c, node_id)
             }
             Tag::StringLiteral => {
-                let string = data
+                let mut string = data
                     .tree
                     .token_str(node.token)
                     .trim_matches('"')
                     .to_string();
                 let length = string.len();
+                string.push('\0');
 
                 // Create pointer to stored data.
                 c.data_ctx.define(string.into_bytes().into_boxed_slice());
