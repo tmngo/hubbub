@@ -1,4 +1,5 @@
 use crate::{
+    link::get_module_dir,
     tokenize::{Tag as TokenTag, Token, Tokenizer},
     utils::assert_size,
     workspace::{Result, Workspace},
@@ -256,9 +257,17 @@ pub enum NodeInfo {
 
 #[derive(Debug, Clone)]
 pub struct Module {
+    pub kind: ModuleKind,
     pub name: String,
     pub alias: Option<String>,
     pub first_token_id: u32,
+}
+
+#[derive(Clone, Debug)]
+pub enum ModuleKind {
+    Entry,
+    Module,
+    Prelude,
 }
 
 #[derive(Copy, Clone)]
@@ -339,14 +348,14 @@ macro_rules! parse_while {
 }
 
 impl<'w> Parser<'w> {
-    pub fn new(workspace: &'w mut Workspace, source: &str, tokens: Vec<Token>) -> Self {
+    pub fn new(workspace: &'w mut Workspace) -> Self {
         Self {
             workspace,
             stack: Vec::new(),
             index: 0,
             tree: Tree {
-                sources: vec![source.to_string()],
-                tokens,
+                sources: vec![],
+                tokens: vec![],
                 nodes: vec![Node {
                     tag: Tag::Root,
                     token: 0,
@@ -355,11 +364,7 @@ impl<'w> Parser<'w> {
                 }],
                 indices: Vec::new(),
                 info: HashMap::new(),
-                modules: Vec::from([Module {
-                    name: String::new(),
-                    alias: None,
-                    first_token_id: 0,
-                }]),
+                modules: Vec::new(),
             },
         }
     }
@@ -456,30 +461,9 @@ impl<'w> Parser<'w> {
 
         if self.tree.get_module_index(&module_name).is_none() {
             let filename = &format!("{}.hb", module_name);
-            let path = if let Ok(value) = std::env::var("ABSOLUTE_MODULE_PATH") {
-                PathBuf::from(value).join(filename)
-            } else {
-                std::env::current_exe()
-                    .unwrap()
-                    .parent()
-                    .unwrap()
-                    .join("modules")
-                    .join(filename)
-            };
+            let path = get_module_dir().join(filename);
             if path.exists() {
-                self.tree.modules.push(Module {
-                    name: module_name,
-                    alias,
-                    first_token_id: self.tree.tokens.len() as TokenId,
-                });
-                let source = std::fs::read_to_string(&path).unwrap();
-                let mut tokenizer = Tokenizer::new(&source);
-                tokenizer.append_tokens(&mut self.tree.tokens);
-                self.tree.sources.push(source.clone());
-                self.workspace.files.add(
-                    path.file_name().unwrap().to_owned().into_string().unwrap(),
-                    source,
-                );
+                self.add_module(ModuleKind::Module, module_name, alias, path);
             } else {
                 return Err(Diagnostic::error().with_message(format!(
                     "Failed to find module \"{}\" at path {:?}",
@@ -489,6 +473,48 @@ impl<'w> Parser<'w> {
         }
         self.match_token(TokenTag::Newline);
         self.add_node(Tag::Import, module_token, lhs, rhs)
+    }
+
+    pub fn add_module(
+        &mut self,
+        kind: ModuleKind,
+        module_name: String,
+        alias: Option<String>,
+        path: PathBuf,
+    ) {
+        let source = std::fs::read_to_string(&path).unwrap();
+        self.tree.modules.push(Module {
+            kind,
+            name: module_name,
+            alias,
+            first_token_id: self.tree.tokens.len() as TokenId,
+        });
+        let mut tokenizer = Tokenizer::new(&source);
+        tokenizer.append_tokens(&mut self.tree.tokens);
+        self.tree.sources.push(source.clone());
+        self.workspace.files.add(
+            path.file_name().unwrap().to_owned().into_string().unwrap(),
+            source,
+        );
+    }
+
+    pub fn add_module_from_source(
+        &mut self,
+        kind: ModuleKind,
+        module_name: String,
+        alias: Option<String>,
+        source: String,
+    ) {
+        self.tree.modules.push(Module {
+            kind,
+            name: module_name,
+            alias,
+            first_token_id: self.tree.tokens.len() as TokenId,
+        });
+        let mut tokenizer = Tokenizer::new(&source);
+        tokenizer.append_tokens(&mut self.tree.tokens);
+        self.tree.sources.push(source.clone());
+        self.workspace.files.add("".to_string(), source);
     }
 
     fn parse_foreign_library(&mut self) -> Result<()> {
@@ -1199,7 +1225,7 @@ impl<'w> Parser<'w> {
     }
 
     fn is_at_end(&self) -> bool {
-        self.index >= self.tree.tokens.len() - 1 || self.token_is(TokenTag::Eof)
+        self.index + 1 >= self.tree.tokens.len() || self.token_is(TokenTag::Eof)
     }
 
     fn assert_token(&mut self, tag: TokenTag) -> Result<()> {
@@ -1322,7 +1348,7 @@ impl Tree {
         let node_name = self.name(id);
         let module_token_id = self.token_source(node.token).1;
         if let Some(module) = self.token_module(module_token_id) {
-            if module.name == "GLFW" {
+            if module.name == "GLFW" || module.name.is_empty() {
                 return node_name.to_string();
             }
             format!("{}.{}", &module.name, node_name)
@@ -1366,6 +1392,7 @@ impl Tree {
             Tag::FunctionDecl => node.token as i32 - 1,
             Tag::Module => node.token as i32 + 1,
             Tag::Struct => node.token as i32 - 2,
+            Tag::VariableDecl => node.token as i32 - 1,
             _ => node.token as i32,
         } as usize;
         let token = &self.tokens[token_index];
@@ -1395,6 +1422,8 @@ impl Tree {
         if token_id == 0 {
             return None;
         }
+        // Gets the index of the first element of the second partition.
+        // This is the first module where m.first_token_id >= token_id
         let module_index = self
             .modules
             .partition_point(|m| m.first_token_id < token_id);

@@ -4,6 +4,7 @@ use crate::{
     translate::input::{sizeof, Data, Input, Layout},
     typecheck::{BuiltInType, Type as Typ, TypeId},
 };
+use codespan_reporting::diagnostic::Diagnostic;
 use inkwell::{
     builder::Builder,
     context::Context,
@@ -552,7 +553,8 @@ impl<'ctx> Generator<'ctx> {
                 let container = self.compile_expr(state, node.lhs);
                 let field_id = data
                     .definitions
-                    .get_definition_id(node_id, "failed to lookup field definition");
+                    .get_definition_id(node_id, Diagnostic::error())
+                    .expect("failed to lookup field definition");
                 let field = data.node(field_id);
                 let field_index = data.node_index(field.rhs + 1);
                 match container {
@@ -662,7 +664,8 @@ impl<'ctx> Generator<'ctx> {
             Tag::Access => {
                 let field_id = data
                     .definitions
-                    .get_definition_id(node_id, "failed to lookup field definition");
+                    .get_definition_id(node_id, Diagnostic::error())
+                    .expect("failed to lookup field definition");
                 let field = data.node(field_id);
                 let field_index = data.node_index(field.rhs + 1);
                 let struct_ptr = self.compile_lvalue(state, node.lhs);
@@ -891,7 +894,8 @@ impl<'ctx> Generator<'ctx> {
                 let def_id = self
                     .data
                     .definitions
-                    .get_definition_id(node_id, "failed to look up variable definition");
+                    .get_definition_id(node_id, Diagnostic::error())
+                    .expect("failed to lookup variable definition");
                 *state
                     .locations
                     .get(&def_id)

@@ -132,11 +132,13 @@ pub enum BuiltInType {
     Array,
     Pointer,
 
+    String,
+
     Count,
 
     // Prelude types
     PointerUnsigned8,
-    String = BuiltInType::Count as isize + 3,
+    // String = BuiltInType::Count as isize + 4,
 }
 
 enum CallResult {
@@ -431,12 +433,9 @@ impl<'a> Typechecker<'a> {
                 }
 
                 // Struct access.
-                if let (Type::Struct { fields, .. }, Definition::User(field_index)) = (
-                    &self.types[ltype as usize],
-                    self.definitions
-                        .get(&node.rhs)
-                        .expect("field index not defined"),
-                ) {
+                if let (Type::Struct { fields, .. }, Some(Definition::User(field_index))) =
+                    (&self.types[ltype as usize], self.definitions.get(&node.rhs))
+                {
                     Single(fields[*field_index as usize])
                 } else {
                     return Err(Diagnostic::error().with_message("cannot access non-struct"));
@@ -771,7 +770,13 @@ impl<'a> Typechecker<'a> {
                     fields.push(self.node_types[ni].first());
                 }
                 let is_generic = fields.iter().any(|&type_id| self.is_generic(type_id));
-                let type_id = self.add_type(Type::Struct { fields, is_generic });
+                let struct_type = Type::Struct { fields, is_generic };
+                let type_id = if self.tree.name(node_id) == "String" {
+                    self.types[BuiltInType::String as TypeId] = struct_type;
+                    BuiltInType::String as TypeId
+                } else {
+                    self.add_type(struct_type)
+                };
                 self.type_definitions.insert(type_id, node_id);
                 Single(type_id)
             }

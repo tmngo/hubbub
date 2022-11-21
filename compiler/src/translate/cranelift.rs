@@ -6,6 +6,7 @@ use crate::{
     typecheck::{BuiltInType, Type as Typ, TypeId, TypeIds},
     workspace::Workspace,
 };
+use codespan_reporting::diagnostic::Diagnostic;
 use cranelift::prelude::{
     codegen::{ir::StackSlot, Context},
     isa::{lookup, TargetFrontendConfig},
@@ -1007,7 +1008,8 @@ impl State {
     fn locate_variable(&self, data: &Data, node_id: NodeId) -> Location {
         let def_id = data
             .definitions
-            .get_definition_id(node_id, "failed to look up variable definition");
+            .get_definition_id(node_id, Diagnostic::error())
+            .expect("failed to lookup variable declaration");
         *self.locations.get(&def_id).expect("failed to get location")
     }
 
@@ -1020,8 +1022,8 @@ impl State {
         while parent.tag == Tag::Access {
             let field_index = data
                 .definitions
-                .get_definition_id(parent.rhs, "failed to lookup field definition")
-                as usize;
+                .get_definition_id(parent.rhs, Diagnostic::error())
+                .expect("failed to lookup field definition") as usize;
             indices.push(field_index);
             parent_id = parent.lhs;
             type_ids.push(data.type_id(parent_id));

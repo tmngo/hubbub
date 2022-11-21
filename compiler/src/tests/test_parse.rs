@@ -1,5 +1,6 @@
 use crate::{
-    link::set_default_absolute_module_path, parse::Parser, tokenize::Tokenizer,
+    link::set_default_absolute_module_path,
+    parse::{ModuleKind, Parser},
     workspace::Workspace,
 };
 
@@ -11,12 +12,9 @@ pub enum Test {
 
 pub fn test_parse(test: Test, source: &str, expected: &str) {
     set_default_absolute_module_path();
-    let mut tokenizer = Tokenizer::new(source);
-    let tokens = tokenizer.tokenize();
-
     let mut workspace = Workspace::new();
-
-    let mut parser = Parser::new(&mut workspace, source, tokens);
+    let mut parser = Parser::new(&mut workspace);
+    parser.add_module_from_source(ModuleKind::Entry, "".to_string(), None, source.to_string());
 
     match test {
         Test::File => {

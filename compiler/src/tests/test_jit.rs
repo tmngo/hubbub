@@ -1,9 +1,8 @@
 use crate::{
     analyze::Analyzer,
-    link::{link, prepend_module, set_default_absolute_module_path},
-    parse::Parser,
+    link::{get_module_dir, link, set_default_absolute_module_path},
+    parse::{self, Parser},
     tests::input::*,
-    tokenize::Tokenizer,
     translate::{cranelift::Generator, input::Input, llvm},
     typecheck::Typechecker,
     workspace::Workspace,
@@ -32,19 +31,19 @@ pub fn test(
     let path = Path::new("../examples/tests/")
         .join(filename)
         .with_extension("hb");
-    let source = std::fs::read_to_string(path).unwrap();
-    let source = if matches!(test, Test::WithPrelude) {
-        prepend_module("Prelude.hb", &source)
-    } else {
-        source
-    };
-
-    let mut tokenizer = Tokenizer::new(&source);
-    let tokens = tokenizer.tokenize();
 
     let mut workspace = Workspace::new();
 
-    let mut parser = Parser::new(&mut workspace, &source, tokens);
+    let mut parser = Parser::new(&mut workspace);
+    if matches!(test, Test::WithPrelude) {
+        parser.add_module(
+            parse::ModuleKind::Prelude,
+            "".to_string(),
+            None,
+            get_module_dir().join("Prelude.hb"),
+        )
+    }
+    parser.add_module(parse::ModuleKind::Entry, "".to_string(), None, path);
     parser.parse();
     let tree = parser.tree();
     let formatted_tree = &format!("{:?}", tree);

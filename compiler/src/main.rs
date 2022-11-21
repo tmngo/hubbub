@@ -2,10 +2,10 @@
 #![feature(option_result_contains)]
 
 use crate::{
-    link::{link, prepend_module, set_default_absolute_module_path},
+    link::{get_module_dir, link, set_default_absolute_module_path},
     workspace::Workspace,
 };
-use std::{collections::HashSet, env, fs, path::Path, time::Instant};
+use std::{collections::HashSet, env, path::Path, time::Instant};
 
 pub mod analyze;
 mod builtin;
@@ -31,47 +31,43 @@ fn main() {
     let src_filename = format!("{}.hb", filename);
     let obj_filename = format!("{}.obj", filename);
     let exe_filename = format!("{}.exe", filename);
-    let source = prepend_module("Prelude.hb", &fs::read_to_string(&src_filename).unwrap());
 
     let mut workspace = Workspace::new();
 
-    workspace.files.add(src_filename, source.clone());
-
-    println!("--- BEGIN TOKENIZE");
-    let start = Instant::now();
-    let mut tokenizer = tokenize::Tokenizer::new(&source);
-    let tokens = tokenizer.tokenize();
-    let t_tokenize = start.elapsed();
-    tokenize::print(&source, &tokens);
-    println!("--- END TOKENIZE\n");
-
-    if args.len() == 3 && flags.contains("-t") {
-        return;
-    }
-
     println!("--- BEGIN PARSE");
     let start = Instant::now();
-    let mut parser = parse::Parser::new(&mut workspace, &source, tokens);
+    let mut parser = parse::Parser::new(&mut workspace);
+    parser.add_module(
+        parse::ModuleKind::Prelude,
+        "".to_string(),
+        None,
+        get_module_dir().join("Prelude.hb"),
+    );
+    parser.add_module(
+        parse::ModuleKind::Entry,
+        "".to_string(),
+        None,
+        src_filename.into(),
+    );
     parser.parse();
     let t_parse = start.elapsed();
     let tree = parser.tree();
-    println!("{:#?}", tree);
     if workspace.has_errors() {
         workspace.print_errors();
         return;
     }
-    println!("--- END PARSE\n");
-
     if args.len() == 3 && flags.contains("-p") {
+        println!("{:#?}", tree);
         return;
     }
+    println!("--- END PARSE\n");
 
     println!("--- BEGIN ANALYZE");
     let start = Instant::now();
     let mut analyzer = analyze::Analyzer::new(&mut workspace, &tree);
     analyzer.resolve().ok();
     let t_analyze = start.elapsed();
-    print!("{}", analyzer);
+    // print!("{}", analyzer);
     let mut definitions = analyzer.definitions;
     let overload_sets = analyzer.overload_sets;
     if workspace.has_errors() {
@@ -134,11 +130,10 @@ fn main() {
         println!("--- END LINK\n");
     }
 
-    println!("Tokenize {:>9.1?} ms", t_tokenize.as_secs_f64() * 1000.0);
     println!("Parse    {:>9.1?} ms", t_parse.as_secs_f64() * 1000.0);
     println!("Analyze  {:>9.1?} ms", t_analyze.as_secs_f64() * 1000.0);
     println!("Typecheck{:>9.1?} ms", t_typecheck.as_secs_f64() * 1000.0);
     println!("Generate {:>9.1?} ms", t_generate.as_secs_f64() * 1000.0);
-    let t_total = t_tokenize + t_parse + t_analyze + t_typecheck + t_generate;
+    let t_total = t_parse + t_analyze + t_typecheck + t_generate;
     println!("Total    {:>9.1?} ms", t_total.as_secs_f64() * 1000.0);
 }

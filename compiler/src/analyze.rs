@@ -1,5 +1,5 @@
 use crate::{
-    parse::{Node, NodeId, Tag, Tree},
+    parse::{ModuleKind, Node, NodeId, Tag, Tree},
     typecheck::BuiltInType,
     utils::assert_size,
     workspace::{Result, Workspace},
@@ -173,14 +173,37 @@ impl<'a> Analyzer<'a> {
             self.current = self.module_scopes[(i - root.lhs) as usize];
             self.collect_module_decls(module)?;
         }
+        let mut prelude_scope_index = None;
+        for (module_index, entry) in self.tree.modules.iter().enumerate() {
+            if let ModuleKind::Prelude = entry.kind {
+                prelude_scope_index = Some(self.module_scopes[module_index]);
+            }
+        }
         // Copy symbols from unnamed imports
         for (i, scope) in self.scopes.clone().iter().enumerate() {
+            if let Some(index) = prelude_scope_index {
+                if i != index {
+                    for (name, id) in self.scopes[index].symbols.clone().iter() {
+                        if let Err(diagnostic) =
+                            Self::define_symbol(self.tree, &mut self.scopes[i], name, *id)
+                        {
+                            self.workspace.diagnostics.push(diagnostic);
+                        }
+                    }
+                }
+            }
             for &import_scope_index in &scope.unnamed_imports.clone() {
                 for (name, id) in self.scopes[import_scope_index].symbols.clone().iter() {
-                    Self::define_symbol(self.tree, &mut self.scopes[i], name, *id)?;
+                    if let Err(diagnostic) =
+                        Self::define_symbol(self.tree, &mut self.scopes[i], name, *id)
+                    {
+                        self.workspace.diagnostics.push(diagnostic);
+                    }
                 }
                 for (name, ids) in self.scopes[import_scope_index].fn_symbols.clone().iter() {
-                    Self::define_function(&mut self.scopes[i], name, ids)?;
+                    if let Err(diagnostic) = Self::define_function(&mut self.scopes[i], name, ids) {
+                        self.workspace.diagnostics.push(diagnostic);
+                    }
                 }
             }
         }
@@ -277,6 +300,7 @@ impl<'a> Analyzer<'a> {
             let result = self.resolve_node(ni);
             if let Err(diagnostic) = result {
                 self.workspace.diagnostics.push(diagnostic);
+                return Ok(());
             }
         }
         Ok(())
@@ -303,11 +327,11 @@ impl<'a> Analyzer<'a> {
                 // access -> field
                 let container_decl_id = self.definitions.get_definition_id(
                     container_id,
-                    &format!(
+                    Diagnostic::error().with_message(format!(
                         "failed to find definition for identifier \"{:?}\".",
                         self.tree.node_lexeme(container_id)
-                    ),
-                );
+                    )),
+                )?;
                 // Check if the container we're accessing is a module.
                 match container.tag {
                     Tag::Access | Tag::Identifier => {
@@ -349,7 +373,7 @@ impl<'a> Analyzer<'a> {
                 }
 
                 // This doesn't need to be lookup() because structs are declared at the top level.
-                let struct_decl_id = self.get_container_definition(container_decl_id);
+                let struct_decl_id = self.get_container_definition(container_decl_id)?;
                 // Resolve type
                 if struct_decl_id != 0 {
                     let field_name = self.tree.name(node.rhs);
@@ -519,7 +543,7 @@ impl<'a> Analyzer<'a> {
     }
 
     /// Access: the lhs can be either another access or an identifier.
-    fn get_container_definition(&self, container_decl_id: NodeId) -> NodeId {
+    fn get_container_definition(&self, container_decl_id: NodeId) -> Result<NodeId> {
         let def_node = self.tree.node(container_decl_id);
         let type_node_id = match def_node.tag {
             // field -> struct decl
@@ -535,15 +559,14 @@ impl<'a> Analyzer<'a> {
         };
 
         if type_node_id == 0 {
-            return 0;
+            return Ok(0);
         }
-
         self.definitions.get_definition_id(
             type_node_id,
-            &format!(
+            Diagnostic::error().with_message(format!(
                 "failed to find struct definition for variable \"{}\".",
-                self.tree.node_lexeme(def_node.lhs)
-            ),
+                self.tree.name(def_node.lhs)
+            )),
         )
     }
 
@@ -659,15 +682,17 @@ impl<'a> Analyzer<'a> {
 }
 
 pub trait Lookup {
-    fn get_definition_id(&self, node_id: NodeId, msg: &str) -> NodeId;
+    fn get_definition_id(&self, node_id: NodeId, diagnostic: Diagnostic<usize>) -> Result<NodeId>;
 }
 
 impl Lookup for HashMap<NodeId, Definition> {
-    fn get_definition_id(&self, node_id: NodeId, msg: &str) -> NodeId {
-        let definition = self
-            .get(&node_id)
-            .unwrap_or_else(|| panic!("Definition not found: {}", msg));
-        definition.id()
+    fn get_definition_id(&self, node_id: NodeId, diagnostic: Diagnostic<usize>) -> Result<NodeId> {
+        let definition = self.get(&node_id);
+        if let Some(definition) = definition {
+            Ok(definition.id())
+        } else {
+            Err(diagnostic)
+        }
     }
 }
 
