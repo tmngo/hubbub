@@ -6,7 +6,6 @@ use crate::{
 use codespan_reporting::diagnostic::Diagnostic;
 use smallvec::SmallVec;
 use std::{collections::HashMap, hash::Hash};
-use thiserror::Error;
 
 /**
  * 1. Infer the type of each expression from the types of its components.
@@ -19,10 +18,6 @@ use thiserror::Error;
  *     - Typecheck child statements.
  *     - Check the overall correctness.
  */
-
-#[derive(Debug, Error)]
-#[error("{0}")]
-pub struct TypeError(String);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
