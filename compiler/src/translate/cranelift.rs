@@ -3,7 +3,7 @@ use crate::{
     builtin,
     parse::{Node, NodeId, NodeInfo, Tag},
     translate::input::{sizeof, Data, Input, Layout, Shape},
-    typecheck::{BuiltInType, Type as Typ, TypeId, TypeIds},
+    typecheck::{BuiltInType, Type as Typ, TypeId},
     workspace::Workspace,
 };
 use codespan_reporting::diagnostic::Diagnostic;
@@ -523,7 +523,12 @@ impl State {
                 assert_eq!(rhs.tag, Tag::Expressions);
                 let mut location_index = 0;
                 if let Val::Multiple(values) = self.compile_expr(data, c, rvalues_id) {
-                    let type_ids = data.type_ids(rvalues_id).all();
+                    let type_ids = &[data.type_id(rvalues_id)];
+                    let type_ids = if let Typ::Tuple { fields } = data.typ(rvalues_id) {
+                        fields.as_slice()
+                    } else {
+                        type_ids
+                    };
                     assert_eq!(type_ids.len(), values.len());
                     for (i, value) in values.iter().enumerate() {
                         let layout = &data.layouts[type_ids[i]];
@@ -851,27 +856,10 @@ impl State {
         // Assume one return value.
         // If the called function is generic, we need to get the return type based on the
         // arguments, not the call expression.
-        let return_types = data.type_ids(node_id);
-        let return_type = match return_types {
-            TypeIds::Single(t) => {
-                if let Typ::Parameter { index } = &data.types[*t] {
-                    let type_arguments = data
-                        .type_parameters
-                        .get(&definition.id())
-                        .unwrap()
-                        .get(&arg_type_ids)
-                        .unwrap();
-                    type_arguments[*index]
-                } else {
-                    if *t != BuiltInType::Void as TypeId {
-                        sig.returns.push(AbiParam::new(ty));
-                    }
-                    *t
-                }
-            }
-            TypeIds::Multiple(ts) => {
-                let mut return_type_id = return_types.first();
-                for ti in ts {
+        let return_type = match data.typ(node_id) {
+            Typ::Tuple { fields } => {
+                let mut return_type_id = fields[0];
+                for ti in fields {
                     let typ = &data.types[*ti];
 
                     let typ = if let Typ::Parameter { index } = typ {
@@ -892,6 +880,24 @@ impl State {
                 }
                 // dbg!(&data.types[return_type_id]);
                 return_type_id
+            }
+            _ => {
+                let t = data.type_id(node_id);
+                if let Typ::Parameter { index } = &data.types[t] {
+                    let type_arguments = data
+                        .type_parameters
+                        .get(&definition.id())
+                        .unwrap()
+                        .get(&arg_type_ids)
+                        .unwrap();
+                    type_arguments[*index]
+                } else {
+                    if t != BuiltInType::Void as TypeId {
+                        let ty = cl_type(data, c.ptr_type, &data.types[t]);
+                        sig.returns.push(AbiParam::new(ty));
+                    }
+                    t
+                }
             }
         };
 

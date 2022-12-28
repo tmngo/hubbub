@@ -509,7 +509,12 @@ impl<'ctx> Generator<'ctx> {
         for i in range {
             let ni = data.tree.node_index(i);
             let value = self.compile_expr(state, ni);
-            let type_ids = data.type_ids(ni).all();
+            let type_ids = &[data.type_id(ni)];
+            let type_ids = if let Typ::Tuple { fields } = data.typ(ni) {
+                fields.as_slice()
+            } else {
+                type_ids
+            };
             if type_ids.len() == 1 {
                 values.push(value);
             } else {
