@@ -337,6 +337,7 @@ impl<'a> Typechecker<'a> {
         node: &Node,
         parent_type_ids: Option<Vec<TypeId>>,
     ) -> Result<TypeId> {
+        let mut types = vec![];
         if let Some(type_ids) = parent_type_ids {
             for (index, i) in (node.lhs..node.rhs).enumerate() {
                 let result = self.infer_node_with_type(
@@ -349,6 +350,8 @@ impl<'a> Typechecker<'a> {
                 );
                 if let Err(diagnostic) = result {
                     self.workspace.diagnostics.push(diagnostic);
+                } else {
+                    types.push(result.unwrap());
                 }
             }
         } else {
@@ -356,10 +359,16 @@ impl<'a> Typechecker<'a> {
                 let result = self.infer_node(self.tree.node_index(i));
                 if let Err(diagnostic) = result {
                     self.workspace.diagnostics.push(diagnostic);
+                } else {
+                    types.push(result.unwrap())
                 }
             }
         }
-        Ok(BuiltInType::Void as TypeId)
+        match types.len() {
+            0 => Ok(BuiltInType::Void as TypeId),
+            1 => Ok(types[0]),
+            _ => Ok(self.add_tuple_type(types)),
+        }
     }
 
     fn infer_node(&mut self, node_id: NodeId) -> Result<TypeId> {
@@ -728,10 +737,48 @@ impl<'a> Typechecker<'a> {
                 })
             }
             Tag::Return => {
-                let fn_type = &self.types[self.current_fn_type_id.unwrap()];
-                dbg!(&self.types[7]);
-                let return_type_ids = fn_type.returns().clone();
-                self.infer_range_with_types(node, Some(return_type_ids))?
+                let fn_type = &self.types[self.current_fn_type_id.unwrap()].clone();
+                let return_types = fn_type.returns();
+                let expr_type_id = self.infer_range_with_types(node, Some(return_types.clone()))?;
+                if let Type::Tuple { fields } = &self.types[expr_type_id] {
+                    if fields.len() != fn_type.returns().len() {
+                        return Err(Diagnostic::error()
+                            .with_message(format!(
+                                "invalid number of return values: expected \"{:?}\", got \"{:?}\"",
+                                fn_type.returns().len(),
+                                fields.len()
+                            ))
+                            .with_labels(vec![self.tree.label(node.token)]));
+                    } else {
+                        for (index, ti) in return_types.iter().enumerate() {
+                            if fields[index] != *ti {
+                                return Err(Diagnostic::error()
+                                    .with_message(format!(
+                                        "mismatched types: expected type #{} to be \"{:?}\", got \"{:?}\"",
+                                        index+1, self.types[*ti], self.types[fields[index]]
+                                    ))
+                                    .with_labels(vec![self.tree.label(node.token)]));
+                            }
+                        }
+                    }
+                } else if return_types.len() > 1 {
+                    return Err(Diagnostic::error()
+                        .with_message(format!(
+                            "invalid number of return values: expected \"{:?}\", got \"{:?}\"",
+                            return_types.len(),
+                            1
+                        ))
+                        .with_labels(vec![self.tree.label(node.token)]));
+                } else if return_types.len() == 1 && return_types[0] != expr_type_id {
+                    return Err(Diagnostic::error()
+                        .with_message(format!(
+                            "mismatched types: expected \"{:?}\", got \"{:?}\"",
+                            self.types[return_types[0]], self.types[expr_type_id]
+                        ))
+                        .with_labels(vec![self.tree.label(node.token)]));
+                }
+
+                BuiltInType::Void as TypeId
             }
             Tag::Struct => {
                 if node.lhs != 0 {

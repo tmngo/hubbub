@@ -46,6 +46,10 @@ pub fn test(
     parser.add_module(parse::ModuleKind::Entry, "".to_string(), None, path);
     parser.parse();
     let tree = parser.tree();
+    if workspace.has_errors() {
+        workspace.print_errors();
+        panic!("Syntax error(s)")
+    }
     let formatted_tree = &format!("{:?}", tree);
     if !expected_tree.is_empty() {
         assert_eq!(
@@ -56,9 +60,13 @@ pub fn test(
     }
 
     let mut analyzer = Analyzer::new(&mut workspace, &tree);
-    analyzer.resolve().expect("Name resolution error");
+    analyzer.resolve().ok();
     let mut definitions = analyzer.definitions;
     let overload_sets = analyzer.overload_sets;
+    if workspace.has_errors() {
+        workspace.print_errors();
+        panic!("Name resolution error(s)")
+    }
 
     if expected_definitions != 0 {
         assert_eq!(
@@ -71,8 +79,12 @@ pub fn test(
     }
 
     let mut typechecker = Typechecker::new(&mut workspace, &tree, &mut definitions, &overload_sets);
-    typechecker.check().expect("Type error");
+    typechecker.check().ok();
     let (types, node_types, type_parameters) = typechecker.results();
+    if workspace.has_errors() {
+        workspace.print_errors();
+        panic!("Type error(s)")
+    }
     let input = Input::new(&tree, &definitions, &types, &node_types, type_parameters);
 
     test_backend(
