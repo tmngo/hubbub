@@ -4,7 +4,6 @@ use crate::{
     workspace::{Result, Workspace},
 };
 use codespan_reporting::diagnostic::Diagnostic;
-use smallvec::SmallVec;
 use std::{collections::HashMap, hash::Hash};
 
 /**
@@ -909,44 +908,59 @@ impl<'a> Typechecker<'a> {
                 let rvalues_id = self.tree.node_extra(node, 1);
 
                 let annotation = self.infer_node(annotation_id)?;
-                let annotation_ref = &annotation;
-                self.infer_node_with_type(
-                    rvalues_id,
-                    if annotation == BuiltInType::Void as TypeId {
-                        None
-                    } else {
-                        Some(annotation_ref)
-                    },
-                )?;
-
-                let mut r_ids = SmallVec::<[NodeId; 8]>::new();
-                let mut rtypes = Vec::<TypeId>::new();
-                let rvalues = self.tree.node(rvalues_id);
-                for i in self.tree.range(rvalues) {
-                    let ni = self.tree.node_index(i);
-                    let ti = &self.node_types[ni as usize];
-                    r_ids.push(ni);
-                    match &self.types[*ti] {
-                        Type::Tuple { fields } => rtypes.extend(fields),
-                        _ => rtypes.push(*ti),
+                if rvalues_id == 0 {
+                    // Set lhs types.
+                    for i in self.tree.range(identifiers) {
+                        let ni = self.tree.node_index(i);
+                        self.set_node_type(ni, annotation);
                     }
-                }
+                } else {
+                    // Set rhs types.
+                    self.infer_node_with_type(
+                        rvalues_id,
+                        if annotation == BuiltInType::Void as TypeId {
+                            None
+                        } else {
+                            Some(&annotation)
+                        },
+                    )?;
 
-                for (index, i) in self.tree.range(identifiers).enumerate() {
-                    let ni = self.tree.node_index(i);
-                    inferred_node_ids.push(ni);
-                    let rtype = rtypes[index];
-                    let inferred_type = infer_type(annotation, rtype)?;
-                    if rtype == BuiltInType::IntegerLiteral as TypeId {
-                        self.node_types[r_ids[index] as usize] = inferred_type;
+                    let mut rtypes = Vec::<TypeId>::new();
+                    let rvalues = self.tree.node(rvalues_id);
+                    for i in self.tree.range(rvalues) {
+                        let ni = self.tree.node_index(i);
+                        let ti = &self.node_types[ni as usize];
+                        match &self.types[*ti] {
+                            Type::Tuple { fields } => rtypes.extend(fields),
+                            _ => rtypes.push(*ti),
+                        }
+                        if *ti == BuiltInType::IntegerLiteral as TypeId {
+                            let inferred_type = infer_type(annotation, *ti)?;
+                            self.node_types[ni as usize] = inferred_type;
+                        }
                     }
-                    inferred_type_ids.push(inferred_type);
-                }
-                let tuple_type = self.add_tuple_type(rtypes);
-                self.set_node_type(rvalues_id, tuple_type);
 
+                    if self.tree.range(identifiers).len() != rtypes.len() {
+                        return Err(Diagnostic::error()
+                            .with_message(format!(
+                                "Expected {} initial values, got {}.",
+                                self.tree.range(identifiers).len(),
+                                rtypes.len()
+                            ))
+                            .with_labels(vec![self.tree.label(node.token)]));
+                    }
+
+                    // Set lhs types.
+                    for (i, ti) in self.tree.range(identifiers).zip(rtypes.iter()) {
+                        let ni = self.tree.node_index(i);
+                        let inferred_type = infer_type(annotation, *ti)?;
+                        self.set_node_type(ni, inferred_type);
+                    }
+
+                    let tuple_type = self.add_tuple_type(rtypes);
+                    self.set_node_type(rvalues_id, tuple_type);
+                }
                 BuiltInType::Void as TypeId
-                // infer_type(annotation, rtypes[0])?
             }
             _ => {
                 self.infer_node(node.lhs)?;
