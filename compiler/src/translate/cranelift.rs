@@ -609,12 +609,12 @@ impl State {
 
         match node.tag {
             // Variables
-            Tag::Access => self.locate_field(data, node_id).to_val(data, c, node_id),
-            Tag::Address => Val::Scalar(self.locate(data, node.lhs).get_addr(c)),
+            Tag::Access => self.locate_field(data, c, node_id).to_val(data, c, node_id),
+            Tag::Address => Val::Scalar(self.locate(data, c, node.lhs).get_addr(c)),
             Tag::Dereference => {
                 let flags = MemFlags::new();
                 let ptr_layout = data.layout(node.lhs);
-                let ptr = self.locate(data, node.lhs).load_value(
+                let ptr = self.locate(data, c, node.lhs).load_value(
                     data,
                     c,
                     flags,
@@ -636,7 +636,7 @@ impl State {
                 }
                 Val::Multiple(values)
             }
-            Tag::Identifier => self.locate(data, node_id).to_val(data, c, node_id),
+            Tag::Identifier => self.locate(data, c, node_id).to_val(data, c, node_id),
             Tag::Subscript => {
                 let lvalue = self.compile_lvalue(data, c, node_id);
                 lvalue.to_val(data, c, node_id)
@@ -742,12 +742,12 @@ impl State {
         let flags = MemFlags::new();
         match node.tag {
             // a.x = b
-            Tag::Access => self.locate_field(data, node_id),
+            Tag::Access => self.locate_field(data, c, node_id),
             // @a = b
             Tag::Dereference => {
                 // Layout of referenced variable
                 let ptr_layout = data.layout(node.lhs);
-                let ptr = self.locate(data, node.lhs).load_value(
+                let ptr = self.locate(data, c, node.lhs).load_value(
                     data,
                     c,
                     flags,
@@ -765,7 +765,7 @@ impl State {
                 } else {
                     unreachable!();
                 };
-                let base = self.locate(data, node.lhs).load_value(
+                let base = self.locate(data, c, node.lhs).load_value(
                     data,
                     c,
                     flags,
@@ -1002,10 +1002,10 @@ impl State {
         Val::Scalar(c.b.ins().iconst(ty, if negative { -value } else { value }))
     }
 
-    fn locate(&self, data: &Data, node_id: NodeId) -> Location {
+    fn locate(&self, data: &Data, c: &mut FnContext, node_id: NodeId) -> Location {
         let node = data.node(node_id);
         match node.tag {
-            Tag::Access => self.locate_field(data, node_id),
+            Tag::Access => self.locate_field(data, c, node_id),
             Tag::Identifier => self.locate_variable(data, node_id),
             _ => unreachable!("Cannot locate node with tag {:?}", node.tag),
         }
@@ -1019,7 +1019,7 @@ impl State {
         *self.locations.get(&def_id).expect("failed to get location")
     }
 
-    fn locate_field(&self, data: &Data, node_id: NodeId) -> Location {
+    fn locate_field(&self, data: &Data, c: &mut FnContext, node_id: NodeId) -> Location {
         let mut indices = Vec::new();
         let mut type_ids = Vec::new();
         let mut parent_id = node_id;
@@ -1042,7 +1042,19 @@ impl State {
             offset += layout.shape.offset(indices[i]) as i32;
         }
 
-        self.locate_variable(data, parent_id).offset(offset)
+        let mut location = self.locate_variable(data, parent_id);
+        // Dereference pointer values.
+        if let Typ::Pointer { .. } = &data.typ(parent_id) {
+            let ptr_value = location.load_value(
+                data,
+                c,
+                MemFlags::new(),
+                data.typ(parent_id),
+                data.layout(parent_id),
+            );
+            location = Location::pointer(ptr_value, 0)
+        }
+        location.offset(offset)
     }
 
     fn create_stack_slot(&mut self, data: &Data, c: &mut FnContext, node_id: u32) -> StackSlot {
@@ -1079,7 +1091,8 @@ pub fn cl_type(data: &Data, ptr_type: Type, typ: &Typ) -> Type {
             ptr_type,
             &data.types[data.active_type_parameters.unwrap()[*index]],
         ),
-        _ => unreachable!("Invalid type: {typ:?} is not a primitive Cranelift type."),
+        _ => ptr_type,
+        // _ => unreachable!("Invalid type: {typ:?} is not a primitive Cranelift type."),
     }
 }
 

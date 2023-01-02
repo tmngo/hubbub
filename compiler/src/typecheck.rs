@@ -393,12 +393,18 @@ impl<'a> Typechecker<'a> {
         let mut inferred_type_ids = vec![];
         let mut result: TypeId = match node.tag {
             Tag::Access => {
-                let ltype = self.infer_node(node.lhs)?;
+                let mut ltype = self.infer_node(node.lhs)?;
                 // Module access.
                 if ltype == BuiltInType::Void as TypeId {
                     return self.infer_node(node.rhs);
                 }
 
+                // Automatically dereference pointers.
+                while let Type::Pointer { typ, .. } = &self.types[ltype] {
+                    ltype = *typ;
+                }
+
+                // Resolve struct access based on types.
                 if let Some(&type_definition) = self.type_definitions.get(&ltype) {
                     let struct_decl = self.tree.node(type_definition);
                     assert_eq!(struct_decl.tag, Tag::Struct);
@@ -408,7 +414,7 @@ impl<'a> Typechecker<'a> {
                             self.definitions.insert(node_id, Definition::User(field_id));
                             let field = self.tree.node(field_id);
                             assert_eq!(field.tag, Tag::Field);
-                            let field_index = self.tree.node_index(field.rhs + 1);
+                            let field_index = self.tree.node_extra(field, 1);
                             self.definitions
                                 .insert(node.rhs, Definition::User(field_index));
                             break;
@@ -417,12 +423,19 @@ impl<'a> Typechecker<'a> {
                 }
 
                 // Struct access.
-                if let (Type::Struct { fields, .. }, Some(Definition::User(field_index))) =
-                    (&self.types[ltype as usize], self.definitions.get(&node.rhs))
-                {
-                    fields[*field_index as usize]
-                } else {
-                    return Err(Diagnostic::error().with_message("cannot access non-struct"));
+                let container_type = &self.types[ltype];
+                match (container_type, self.definitions.get(&node.rhs)) {
+                    (Type::Struct { fields, .. }, Some(Definition::User(field_index))) => {
+                        fields[*field_index as usize]
+                    }
+                    // (Type::Pointer { typ, .. }, Some(Definition::User(field_index))) => {
+                    //     if let Type::Struct { fields, .. } = se
+                    // }
+                    _ => {
+                        return Err(Diagnostic::error()
+                            .with_message(format!("type {:?} doesn't have fields", container_type))
+                            .with_labels(vec![self.tree.label(node.token)]));
+                    }
                 }
             }
             Tag::Address => {

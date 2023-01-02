@@ -325,13 +325,20 @@ impl<'a> Analyzer<'a> {
                 // The lhs of the Access is either an identfier, or another Access.
                 // identifier -> variable decl
                 // access -> field
-                let container_decl_id = self.definitions.get_definition_id(
+                let container_decl_id = if let Ok(id) = self.definitions.get_definition_id(
                     container_id,
                     Diagnostic::error().with_message(format!(
                         "failed to find definition for identifier \"{:?}\".",
                         self.tree.node_lexeme(container_id)
                     )),
-                )?;
+                ) {
+                    // Resolve now.
+                    id
+                } else {
+                    // Resolve later in typechecking.
+                    return Ok(());
+                };
+
                 // Check if the container we're accessing is a module.
                 match container.tag {
                     Tag::Access | Tag::Identifier => {
@@ -372,6 +379,7 @@ impl<'a> Analyzer<'a> {
                     }
                 }
 
+                /*
                 // This doesn't need to be lookup() because structs are declared at the top level.
                 let struct_decl_id = self.get_container_definition(container_decl_id)?;
                 // Resolve type
@@ -408,6 +416,7 @@ impl<'a> Analyzer<'a> {
                     self.definitions
                         .insert(node.rhs, Definition::User(field_index));
                 }
+                */
             }
             Tag::Add | Tag::Mul => {
                 let definition = self.lookup(id);
@@ -543,6 +552,7 @@ impl<'a> Analyzer<'a> {
     }
 
     /// Access: the lhs can be either another access or an identifier.
+    /*
     fn get_container_definition(&self, container_decl_id: NodeId) -> Result<NodeId> {
         let def_node = self.tree.node(container_decl_id);
         let type_node_id = match def_node.tag {
@@ -569,6 +579,7 @@ impl<'a> Analyzer<'a> {
             )),
         )
     }
+    */
 
     fn define_symbol(tree: &Tree, scope: &mut Scope<'a>, name: &'a str, id: u32) -> Result<()> {
         if let Err(err) = scope.symbols.try_insert(name, id) {

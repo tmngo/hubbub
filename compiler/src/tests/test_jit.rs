@@ -225,7 +225,7 @@ fn string() {
 }
 #[test]
 fn structs() {
-    test("structs", Test::AotAndJit, STRUCTS_TREE, 24, 7);
+    test("structs", Test::AotAndJit, STRUCTS_TREE, 12, 7);
 }
 #[test]
 fn unicode() {

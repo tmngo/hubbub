@@ -20,7 +20,11 @@ main :: () -> Int
 
     w: Wrapper
     w.ptr = p
-    w.ptr@ = 45
+    w.ptr@ = 30
+    sum = sum + w.ptr@
+
+    wptr := &w
+    wptr.ptr@ = 15
     sum = sum + w.ptr@
 
     mutate(p, 60)

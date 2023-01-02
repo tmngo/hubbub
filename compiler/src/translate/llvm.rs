@@ -561,7 +561,7 @@ impl<'ctx> Generator<'ctx> {
                     .get_definition_id(node_id, Diagnostic::error())
                     .expect("failed to lookup field definition");
                 let field = data.node(field_id);
-                let field_index = data.node_index(field.rhs + 1);
+                let field_index = data.tree.node_extra(field, 1);
                 match container {
                     BasicValueEnum::PointerValue(pointer) => {
                         let gep = builder.build_struct_gep(pointer, field_index, "").unwrap();
@@ -672,8 +672,12 @@ impl<'ctx> Generator<'ctx> {
                     .get_definition_id(node_id, Diagnostic::error())
                     .expect("failed to lookup field definition");
                 let field = data.node(field_id);
-                let field_index = data.node_index(field.rhs + 1);
-                let struct_ptr = self.compile_lvalue(state, node.lhs);
+                let field_index = data.tree.node_extra(field, 1);
+                let mut struct_ptr = self.compile_lvalue(state, node.lhs);
+                // Dereference pointer values.
+                if let Typ::Pointer { .. } = data.typ(node.lhs) {
+                    struct_ptr = builder.build_load(struct_ptr, "deref").into_pointer_value()
+                }
                 builder
                     .build_struct_gep(struct_ptr, field_index, "")
                     .unwrap()
