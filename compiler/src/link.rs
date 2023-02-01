@@ -34,7 +34,14 @@ pub fn link(workspace: &Workspace, object_filename: &str, output_filename: &str,
         .unwrap();
 
     let static_library_names = [
-        "advapi32", "bcrypt", "kernel32", "userenv", "ws2_32", "msvcrt",
+        "advapi32",
+        "bcrypt",
+        "kernel32",
+        "userenv",
+        "ws2_32",
+        "msvcrt",
+        "legacy_stdio_definitions",
+        "opengl32",
     ];
 
     // Static libs are found via absolute path or in PATH.
@@ -51,14 +58,20 @@ pub fn link(workspace: &Workspace, object_filename: &str, output_filename: &str,
                 .iter()
                 .map(|name| format!("{}.lib", name)),
         );
-        args.extend(workspace.library_files.iter().map(|file| {
-            compiler_dir
-                .join(file.as_str())
-                .with_extension("lib")
-                .into_os_string()
-                .into_string()
-                .unwrap()
-        }));
+        args.extend(
+            workspace
+                .library_files
+                .iter()
+                .filter(|file| !static_library_names.contains(&file.as_str()))
+                .map(|file| {
+                    compiler_dir
+                        .join(file.as_str())
+                        .with_extension("lib")
+                        .into_os_string()
+                        .into_string()
+                        .unwrap()
+                }),
+        );
     } else if tool.is_like_clang() {
         args.extend([
             format!("-o{}", output_filename),

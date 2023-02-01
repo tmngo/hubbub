@@ -15,6 +15,11 @@ pub extern "C" fn print_f64(value: f64) -> isize {
     0
 }
 
+pub extern "C" fn print_cstr(s: *const i8) {
+    let s = unsafe { std::ffi::CStr::from_ptr(s) };
+    println!("{}", s.to_str().unwrap());
+}
+
 pub extern "C" fn alloc(n: isize) -> *mut i8 {
     println!("builtin.rs:alloc(n={})", n);
     let layout = Layout::from_size_align(n as usize, 1).unwrap();

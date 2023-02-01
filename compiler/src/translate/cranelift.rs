@@ -87,6 +87,7 @@ impl<'a> Generator<'a> {
                 ("Base.print_int", builtin::print_int as *const u8),
                 ("Base.print_f32", builtin::print_f32 as *const u8),
                 ("Base.print_f64", builtin::print_f64 as *const u8),
+                ("Base.print_cstr", builtin::print_cstr as *const u8),
                 ("Base.alloc", builtin::alloc as *const u8),
                 ("Base.dealloc", builtin::dealloc as *const u8),
             ]);

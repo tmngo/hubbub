@@ -18,6 +18,12 @@ fn print_f64(value: f64) -> isize {
     0
 }
 
+#[export_name = "Base.print_cstr"]
+fn print_cstr(s: *const i8) {
+    let s = unsafe { std::ffi::CStr::from_ptr(s) };
+    println!("{}", s.to_str().unwrap());
+}
+
 #[export_name = "Base.alloc"]
 fn alloc(n: isize) -> *mut i8 {
     println!("lib.rs:alloc(n={})", n);
