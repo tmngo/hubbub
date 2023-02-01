@@ -51,7 +51,7 @@ fn main() {
     );
     parser.parse();
     let t_parse = start.elapsed();
-    let tree = parser.tree();
+    let mut tree = parser.tree();
     if workspace.has_errors() {
         workspace.print_errors();
         return;
@@ -79,7 +79,7 @@ fn main() {
     println!("--- BEGIN TYPECHECK");
     let start = Instant::now();
     let mut typechecker =
-        typecheck::Typechecker::new(&mut workspace, &tree, &mut definitions, &overload_sets);
+        typecheck::Typechecker::new(&mut workspace, &mut tree, &mut definitions, &overload_sets);
     typechecker.check().ok();
     let t_typecheck = start.elapsed();
     typechecker.print();

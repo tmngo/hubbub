@@ -128,7 +128,7 @@ type TypeParameters = HashMap<NodeId, HashMap<Vec<TypeId>, Vec<TypeId>>>;
 
 pub struct Typechecker<'a> {
     workspace: &'a mut Workspace,
-    tree: &'a Tree,
+    tree: &'a mut Tree,
     definitions: &'a mut HashMap<NodeId, Definition>,
     overload_sets: &'a HashMap<NodeId, Vec<Definition>>,
 
@@ -152,7 +152,7 @@ pub struct Typechecker<'a> {
 impl<'a> Typechecker<'a> {
     pub fn new(
         workspace: &'a mut Workspace,
-        tree: &'a Tree,
+        tree: &'a mut Tree,
         definitions: &'a mut HashMap<u32, Definition>,
         overload_sets: &'a HashMap<NodeId, Vec<Definition>>,
     ) -> Self {
@@ -263,6 +263,7 @@ impl<'a> Typechecker<'a> {
         for (tag, type_id) in fn_types {
             builtin_function_types.insert(tag, type_id);
         }
+        let node_count = tree.nodes.len();
         Self {
             workspace,
             tree,
@@ -280,7 +281,7 @@ impl<'a> Typechecker<'a> {
             current_fn_type_id: None,
             current_struct_id: 0,
             types,
-            node_types: vec![BuiltInType::Void as TypeId; tree.nodes.len()],
+            node_types: vec![BuiltInType::Void as TypeId; node_count],
         }
     }
 
@@ -290,7 +291,7 @@ impl<'a> Typechecker<'a> {
 
     ///
     pub fn check(&mut self) -> Result<()> {
-        let root = &self.tree.node(0);
+        let root = &self.tree.node(0).clone();
         // Resolve root declarations.
         for i in root.lhs..root.rhs {
             let module_id = self.tree.node_index(i);
@@ -386,7 +387,7 @@ impl<'a> Typechecker<'a> {
         if node_id == 0 {
             return Ok(BuiltInType::Void as TypeId);
         }
-        let node = self.tree.node(node_id);
+        let node = &self.tree.node(node_id).clone();
         // println!("[{}] - {:?}", node_id, node.tag);
         let current_type_id = self.node_types[node_id as usize];
         if current_type_id != BuiltInType::Void as TypeId {
@@ -714,22 +715,24 @@ impl<'a> Typechecker<'a> {
                 if type_parameters_id != 0 {
                     // Type parameters
                     let type_parameters = self.tree.node(type_parameters_id);
-                    for i in type_parameters.lhs..type_parameters.rhs {
+                    let lhs = type_parameters.lhs;
+                    for i in lhs..type_parameters.rhs {
                         let node_id = self.tree.node_index(i);
                         self.add_type(Type::Parameter {
-                            index: (i - type_parameters.lhs) as usize,
+                            index: (i - lhs) as usize,
                         });
                         self.set_node_type(node_id, self.types.len() - 1);
                     }
                 }
 
                 let parameters_id = self.tree.node_extra(node, 0);
-                let params = self.tree.node(parameters_id);
                 self.infer_node(parameters_id)?; // parameters
 
                 let returns_id = self.tree.node_extra(node, 1);
-                let rets = self.tree.node(returns_id);
                 let return_type = self.infer_node(returns_id)?; // returns
+
+                let params = self.tree.node(parameters_id);
+                let rets = self.tree.node(returns_id);
 
                 assert_eq!(params.tag, Tag::Parameters);
                 for i in params.lhs..params.rhs {
@@ -798,10 +801,11 @@ impl<'a> Typechecker<'a> {
             Tag::Struct => {
                 if node.lhs != 0 {
                     let type_parameters = self.tree.node(node.lhs);
-                    for i in type_parameters.lhs..type_parameters.rhs {
+                    let lhs = type_parameters.lhs;
+                    for i in lhs..type_parameters.rhs {
                         let node_id = self.tree.node_index(i);
                         let param_type = self.add_type(Type::Parameter {
-                            index: (i - type_parameters.lhs) as usize,
+                            index: (i - lhs) as usize,
                         });
                         self.set_node_type(node_id, param_type);
                     }
@@ -919,7 +923,7 @@ impl<'a> Typechecker<'a> {
             Tag::VariableDecl => {
                 // lhs: type-expr
                 // rhs: init-expr
-                let identifiers = self.tree.node(node.lhs);
+                let identifiers = &self.tree.node(node.lhs).clone();
                 let annotation_id = self.tree.node_extra(node, 0);
                 let rvalues_id = self.tree.node_extra(node, 1);
 
@@ -1070,14 +1074,10 @@ impl<'a> Typechecker<'a> {
             }
             Definition::User(definition_id) => {
                 let fn_decl = self.tree.node(*definition_id);
-                let prototype = self.tree.node(fn_decl.lhs);
+                let prototype = &self.tree.node(fn_decl.lhs).clone();
                 match prototype.tag {
                     Tag::Prototype => {
                         if prototype.lhs != 0 {
-                            let type_parameters = self.tree.node(prototype.lhs);
-                            let parameters = self.tree.node(self.tree.node_extra(prototype, 0));
-                            let returns_id = self.tree.node_extra(prototype, 1);
-                            let returns = self.tree.node(returns_id);
                             let mut flat_argument_types = vec![];
                             for (node_id, arg_type_ids) in argument_types {
                                 if let Type::Tuple { fields } = &self.types[arg_type_ids] {
@@ -1094,6 +1094,10 @@ impl<'a> Typechecker<'a> {
                                     flat_argument_types.push(arg_type_ids);
                                 }
                             }
+                            let type_parameters = self.tree.node(prototype.lhs);
+                            let parameters = self.tree.node(self.tree.node_extra(prototype, 0));
+                            let returns_id = self.tree.node_extra(prototype, 1);
+                            let returns = self.tree.node(returns_id);
                             let mut type_arguments = vec![
                                 BuiltInType::None as TypeId;
                                 self.tree.range(type_parameters).count()

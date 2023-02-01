@@ -45,7 +45,7 @@ pub fn test(
     }
     parser.add_module(parse::ModuleKind::Entry, "".to_string(), None, path);
     parser.parse();
-    let tree = parser.tree();
+    let mut tree = parser.tree();
     if workspace.has_errors() {
         workspace.print_errors();
         panic!("Syntax error(s)")
@@ -78,7 +78,8 @@ pub fn test(
         );
     }
 
-    let mut typechecker = Typechecker::new(&mut workspace, &tree, &mut definitions, &overload_sets);
+    let mut typechecker =
+        Typechecker::new(&mut workspace, &mut tree, &mut definitions, &overload_sets);
     typechecker.check().ok();
     let (types, node_types, type_parameters) = typechecker.results();
     if workspace.has_errors() {
