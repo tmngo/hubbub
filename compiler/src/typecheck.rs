@@ -85,25 +85,36 @@ impl Type {
 pub type TypeId = usize;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum BuiltInType {
+pub enum T {
     None,
     Never,
     Void,
     Any,
     Boolean,
 
-    Integer8,
-    Integer16,
-    Integer32,
-    Integer64,
-    Unsigned8,
-    Unsigned16,
-    Unsigned32,
-    Unsigned64,
+    I8,
+    I16,
+    I32,
+    I64,
+    CI8,
+    CI16,
+    CI32,
+    CI64,
+
+    U8,
+    U16,
+    U32,
+    U64,
+    CU8,
+    CU16,
+    CU32,
+    CU64,
+
+    F32,
+    F64,
 
     IntegerLiteral,
-    Float32,
-    Float64,
+
     Type,
     Array,
     Pointer,
@@ -113,8 +124,8 @@ pub enum BuiltInType {
     Count,
 
     // Prelude types
-    PointerUnsigned8,
-    // String = BuiltInType::Count as isize + 4,
+    PointerU8,
+    // String = T::Count as isize + 4,
 }
 
 enum CallResult {
@@ -156,79 +167,79 @@ impl<'a> Typechecker<'a> {
         definitions: &'a mut HashMap<u32, Definition>,
         overload_sets: &'a HashMap<NodeId, Vec<Definition>>,
     ) -> Self {
-        let mut types = vec![Type::None; BuiltInType::Count as usize];
-        // types[BuiltInType::None as TypeId] = Type::None;
-        types[BuiltInType::Void as TypeId] = Type::Void;
-        types[BuiltInType::Never as TypeId] = Type::Never;
-        types[BuiltInType::Any as TypeId] = Type::Any;
-        types[BuiltInType::Boolean as TypeId] = Type::Boolean;
+        let mut types = vec![Type::None; T::Count as usize];
+        // types[T::None as TypeId] = Type::None;
+        types[T::Void as TypeId] = Type::Void;
+        types[T::Never as TypeId] = Type::Never;
+        types[T::Any as TypeId] = Type::Any;
+        types[T::Boolean as TypeId] = Type::Boolean;
         // Signed integers
-        types[BuiltInType::Integer8 as TypeId] = Type::Numeric {
+        types[T::I8 as TypeId] = Type::Numeric {
             floating: false,
             signed: true,
             bytes: 1,
         };
-        types[BuiltInType::Integer16 as TypeId] = Type::Numeric {
+        types[T::I16 as TypeId] = Type::Numeric {
             floating: false,
             signed: true,
             bytes: 2,
         };
-        types[BuiltInType::Integer32 as TypeId] = Type::Numeric {
+        types[T::I32 as TypeId] = Type::Numeric {
             floating: false,
             signed: true,
             bytes: 4,
         };
-        types[BuiltInType::Integer64 as TypeId] = Type::Numeric {
+        types[T::I64 as TypeId] = Type::Numeric {
             floating: false,
             signed: true,
             bytes: 8,
         };
         // Unsigned integers
-        types[BuiltInType::Unsigned8 as TypeId] = Type::Numeric {
+        types[T::U8 as TypeId] = Type::Numeric {
             floating: false,
             signed: false,
             bytes: 1,
         };
-        types[BuiltInType::Unsigned16 as TypeId] = Type::Numeric {
+        types[T::U16 as TypeId] = Type::Numeric {
             floating: false,
             signed: false,
             bytes: 2,
         };
-        types[BuiltInType::Unsigned32 as TypeId] = Type::Numeric {
+        types[T::U32 as TypeId] = Type::Numeric {
             floating: false,
             signed: false,
             bytes: 4,
         };
-        types[BuiltInType::Unsigned64 as TypeId] = Type::Numeric {
+        types[T::U64 as TypeId] = Type::Numeric {
             floating: false,
             signed: false,
             bytes: 8,
         };
         // Floating-point numbers
-        types[BuiltInType::Float32 as TypeId] = Type::Numeric {
+        types[T::F32 as TypeId] = Type::Numeric {
             floating: true,
             signed: true,
             bytes: 4,
         };
-        types[BuiltInType::Float64 as TypeId] = Type::Numeric {
+        types[T::F64 as TypeId] = Type::Numeric {
             floating: true,
             signed: true,
             bytes: 8,
         };
-        types[BuiltInType::Type as TypeId] = Type::Type;
+        types[T::Type as TypeId] = Type::Type;
 
         // Set up string type.
         // types.push(Type::Pointer {
-        //     typ: BuiltInType::Unsigned8 as TypeId,
+        //     typ: T::U8 as TypeId,
         //     is_generic: false,
         // });
         // let ptr_u8_type = types.len() - 1;
 
         let pointer_types = HashMap::new();
-        // let pointer_types = HashMap::from([(BuiltInType::Unsigned8 as TypeId, ptr_u8_type)]);
+        // let pointer_types = HashMap::from([(T::U8 as TypeId, ptr_u8_type)]);
 
-        // types[BuiltInType::String as TypeId] = Type::Struct {
-        //     fields: vec![ptr_u8_type, BuiltInType::Integer as TypeId],
+        // types[T::String as TypeId] = Type::Struct {
+        //     fields: vec![ptr_u8_type, T::Integer as TypeId],
         //     is_generic: false,
         // };
 
@@ -242,17 +253,14 @@ impl<'a> Typechecker<'a> {
         // ];
         let mut builtin_function_types = HashMap::new();
         let binary_int_op_type = Type::Function {
-            parameters: vec![
-                BuiltInType::Integer64 as TypeId,
-                BuiltInType::Integer64 as TypeId,
-            ],
-            returns: vec![BuiltInType::Integer64 as TypeId],
+            parameters: vec![T::I64 as TypeId, T::I64 as TypeId],
+            returns: vec![T::I64 as TypeId],
         };
         types.push(binary_int_op_type);
         let binary_int_op_type_id = types.len() - 1;
         types.push(Type::Function {
-            parameters: vec![BuiltInType::Any as TypeId],
-            returns: vec![BuiltInType::Integer64 as TypeId],
+            parameters: vec![T::Any as TypeId],
+            returns: vec![T::I64 as TypeId],
         });
         let sizeof_type_id = types.len() - 1;
         let fn_types = [
@@ -281,7 +289,7 @@ impl<'a> Typechecker<'a> {
             current_fn_type_id: None,
             current_struct_id: 0,
             types,
-            node_types: vec![BuiltInType::Void as TypeId; node_count],
+            node_types: vec![T::Void as TypeId; node_count],
         }
     }
 
@@ -310,7 +318,7 @@ impl<'a> Typechecker<'a> {
     }
 
     fn infer_declaration_type(&mut self, node_id: NodeId) -> Result<()> {
-        if node_id == 0 || self.node_types[node_id as usize] != BuiltInType::Void as TypeId {
+        if node_id == 0 || self.node_types[node_id as usize] != T::Void as TypeId {
             return Ok(());
         }
         let node = self.tree.node(node_id);
@@ -368,7 +376,7 @@ impl<'a> Typechecker<'a> {
             }
         }
         match types.len() {
-            0 => Ok(BuiltInType::Void as TypeId),
+            0 => Ok(T::Void as TypeId),
             1 => Ok(types[0]),
             _ => Ok(self.add_tuple_type(types)),
         }
@@ -385,12 +393,12 @@ impl<'a> Typechecker<'a> {
         parent_type_id: Option<&TypeId>,
     ) -> Result<TypeId> {
         if node_id == 0 {
-            return Ok(BuiltInType::Void as TypeId);
+            return Ok(T::Void as TypeId);
         }
         let node = &self.tree.node(node_id).clone();
         // println!("[{}] - {:?}", node_id, node.tag);
         let current_type_id = self.node_types[node_id as usize];
-        if current_type_id != BuiltInType::Void as TypeId {
+        if current_type_id != T::Void as TypeId {
             return Ok(current_type_id);
         }
         let mut inferred_node_ids = vec![];
@@ -399,7 +407,7 @@ impl<'a> Typechecker<'a> {
             Tag::Access => {
                 let mut ltype = self.infer_node(node.lhs)?;
                 // Module access.
-                if ltype == BuiltInType::Void as TypeId {
+                if ltype == T::Void as TypeId {
                     return self.infer_node(node.rhs);
                 }
 
@@ -488,10 +496,10 @@ impl<'a> Typechecker<'a> {
                     if !returns.is_empty() {
                         self.add_tuple_type(returns.clone())
                     } else {
-                        BuiltInType::Void as TypeId
+                        T::Void as TypeId
                     }
                 } else {
-                    BuiltInType::Void as TypeId
+                    T::Void as TypeId
                 }
             }
             Tag::Div
@@ -520,7 +528,7 @@ impl<'a> Typechecker<'a> {
                 // }
                 let ltype = self.infer_node(node.lhs)?;
                 let rtype = self.infer_node_with_type(node.rhs, Some(&ltype))?;
-                // if is_integer(ltype) && rtype == BuiltInType::IntegerLiteral as TypeId {
+                // if is_integer(ltype) && rtype == T::IntegerLiteral as TypeId {
                 //     self.node_types[node.rhs as usize] = ltype;
                 // } else
 
@@ -555,7 +563,7 @@ impl<'a> Typechecker<'a> {
                         ))
                         .with_labels(vec![self.tree.label(node.token)]));
                 }
-                BuiltInType::Void as TypeId
+                T::Void as TypeId
             }
             Tag::Block | Tag::Expressions | Tag::IfElse | Tag::Module | Tag::Parameters => {
                 self.infer_range(node)?
@@ -592,7 +600,7 @@ impl<'a> Typechecker<'a> {
                     if !returns.is_empty() {
                         self.add_tuple_type(returns.clone())
                     } else {
-                        BuiltInType::Void as TypeId
+                        T::Void as TypeId
                     }
                 } else {
                     // Callee type is not a function (e.g. a cast).
@@ -638,10 +646,10 @@ impl<'a> Typechecker<'a> {
                 let ltype = self.infer_node(node.lhs)?;
                 let rtype = self.infer_node(node.rhs)?;
                 if ltype != rtype {
-                    if is_integer(ltype) && rtype == BuiltInType::IntegerLiteral as TypeId {
+                    if is_integer(ltype) && rtype == T::IntegerLiteral as TypeId {
                         self.node_types[node.rhs as usize] = ltype;
                         return Ok(ltype);
-                    } else if ltype == BuiltInType::IntegerLiteral as TypeId && is_integer(rtype) {
+                    } else if ltype == T::IntegerLiteral as TypeId && is_integer(rtype) {
                         self.node_types[node.lhs as usize] = rtype;
                         return Ok(rtype);
                     }
@@ -651,13 +659,13 @@ impl<'a> Typechecker<'a> {
                             self.types[ltype], self.types[rtype]
                         ))
                         .with_labels(vec![self.tree.label(node.token)]));
-                } else if ltype == BuiltInType::IntegerLiteral as TypeId
-                    && rtype == BuiltInType::IntegerLiteral as TypeId
+                } else if ltype == T::IntegerLiteral as TypeId
+                    && rtype == T::IntegerLiteral as TypeId
                 {
-                    self.node_types[node.lhs as usize] = BuiltInType::Integer64 as TypeId;
-                    self.node_types[node.rhs as usize] = BuiltInType::Integer64 as TypeId;
+                    self.node_types[node.lhs as usize] = T::I64 as TypeId;
+                    self.node_types[node.rhs as usize] = T::I64 as TypeId;
                 }
-                BuiltInType::Boolean as TypeId
+                T::Boolean as TypeId
             }
             Tag::Not => self.infer_node(node.lhs)?,
             Tag::Identifier => {
@@ -688,23 +696,23 @@ impl<'a> Typechecker<'a> {
                         //         returns: vec![ptr_type],
                         //     })
                         // }
-                        _ => BuiltInType::Void as TypeId,
+                        _ => T::Void as TypeId,
                     }
                 } else {
-                    BuiltInType::Void as TypeId
+                    T::Void as TypeId
                 }
             }
             Tag::IntegerLiteral => match parent_type_id {
                 Some(type_id) if is_integer(*type_id) => *type_id,
-                _ => BuiltInType::IntegerLiteral as TypeId,
+                _ => T::IntegerLiteral as TypeId,
             },
-            Tag::FloatLiteral => BuiltInType::Float32 as TypeId,
-            Tag::True | Tag::False => BuiltInType::Boolean as TypeId,
+            Tag::FloatLiteral => T::F32 as TypeId,
+            Tag::True | Tag::False => T::Boolean as TypeId,
             Tag::Negation => {
                 if let Some(type_id) = parent_type_id {
                     self.infer_node_with_type(node.lhs, Some(type_id))?
                 } else {
-                    self.infer_node_with_type(node.lhs, Some(&(BuiltInType::Integer64 as TypeId)))?
+                    self.infer_node_with_type(node.lhs, Some(&(T::I64 as TypeId)))?
                 }
             }
             Tag::Prototype => {
@@ -745,7 +753,7 @@ impl<'a> Typechecker<'a> {
                         returns.push(self.node_types[ni]);
                     }
                 } else if rets.tag == Tag::Identifier
-                    || rets.tag == Tag::Type && return_type != BuiltInType::Void as TypeId
+                    || rets.tag == Tag::Type && return_type != T::Void as TypeId
                 {
                     returns.push(return_type);
                 }
@@ -796,7 +804,7 @@ impl<'a> Typechecker<'a> {
                         .with_labels(vec![self.tree.label(node.token)]));
                 }
 
-                BuiltInType::Void as TypeId
+                T::Void as TypeId
             }
             Tag::Struct => {
                 if node.lhs != 0 {
@@ -826,18 +834,18 @@ impl<'a> Typechecker<'a> {
                 let is_generic = fields.iter().any(|&type_id| self.is_generic(type_id));
                 let struct_type = Type::Struct { fields, is_generic };
                 let type_id = if self.tree.name(node_id) == "String" {
-                    self.types[BuiltInType::String as TypeId] = struct_type;
-                    BuiltInType::String as TypeId
+                    self.types[T::String as TypeId] = struct_type;
+                    T::String as TypeId
                 } else {
                     self.add_type(struct_type)
                 };
                 self.type_definitions.insert(type_id, node_id);
                 type_id
             }
-            Tag::StringLiteral => BuiltInType::String as TypeId,
+            Tag::StringLiteral => T::String as TypeId,
             Tag::Subscript => {
                 let array_type = self.infer_node(node.lhs)?;
-                self.infer_node_with_type(node.rhs, Some(&(BuiltInType::Integer64 as TypeId)))?;
+                self.infer_node_with_type(node.rhs, Some(&(T::I64 as TypeId)))?;
                 if let Type::Array { typ, .. } = self.types[array_type] {
                     typ
                 } else {
@@ -853,7 +861,7 @@ impl<'a> Typechecker<'a> {
                 let definition = self.definitions.get(&node_id).unwrap();
                 match definition {
                     Definition::BuiltIn(builtin) => match builtin {
-                        BuiltInType::Array => {
+                        T::Array => {
                             // Map concrete type arguments to an array type.
                             // Expect two type parameters.
                             assert_eq!(node.tag, Tag::Type);
@@ -880,7 +888,7 @@ impl<'a> Typechecker<'a> {
                             let length = token_str.parse::<i64>().unwrap();
                             self.add_array_type(value_type, length as usize)
                         }
-                        BuiltInType::Pointer => {
+                        T::Pointer => {
                             // Map concrete type argument to a pointer type.
                             // Expect one type parameter
                             if node.rhs - node.lhs != 1 {
@@ -938,7 +946,7 @@ impl<'a> Typechecker<'a> {
                     // Set rhs types.
                     self.infer_node_with_type(
                         rvalues_id,
-                        if annotation == BuiltInType::Void as TypeId {
+                        if annotation == T::Void as TypeId {
                             None
                         } else {
                             Some(&annotation)
@@ -954,7 +962,7 @@ impl<'a> Typechecker<'a> {
                             Type::Tuple { fields } => rtypes.extend(fields),
                             _ => rtypes.push(*ti),
                         }
-                        if *ti == BuiltInType::IntegerLiteral as TypeId {
+                        if *ti == T::IntegerLiteral as TypeId {
                             let inferred_type = infer_type(annotation, *ti)?;
                             self.node_types[ni as usize] = inferred_type;
                         }
@@ -980,12 +988,12 @@ impl<'a> Typechecker<'a> {
                     let tuple_type = self.add_tuple_type(rtypes);
                     self.set_node_type(rvalues_id, tuple_type);
                 }
-                BuiltInType::Void as TypeId
+                T::Void as TypeId
             }
             _ => {
                 self.infer_node(node.lhs)?;
                 self.infer_node(node.rhs)?;
-                BuiltInType::Void as TypeId
+                T::Void as TypeId
             }
         };
 
@@ -1010,10 +1018,10 @@ impl<'a> Typechecker<'a> {
         let ltype = self.infer_node(node.lhs)?;
         let rtype = self.infer_node(node.rhs)?;
         if ltype != rtype {
-            if is_integer(ltype) && rtype == BuiltInType::IntegerLiteral as TypeId {
+            if is_integer(ltype) && rtype == T::IntegerLiteral as TypeId {
                 self.node_types[node.rhs as usize] = ltype;
                 return Ok(ltype);
-            } else if ltype == BuiltInType::IntegerLiteral as TypeId && is_integer(rtype) {
+            } else if ltype == T::IntegerLiteral as TypeId && is_integer(rtype) {
                 self.node_types[node.lhs as usize] = rtype;
                 return Ok(rtype);
             }
@@ -1083,12 +1091,9 @@ impl<'a> Typechecker<'a> {
                                 if let Type::Tuple { fields } = &self.types[arg_type_ids] {
                                     flat_argument_types.extend(fields);
                                 } else {
-                                    if arg_type_ids == BuiltInType::IntegerLiteral as TypeId {
-                                        self.set_node_type(
-                                            node_id,
-                                            BuiltInType::Integer64 as TypeId,
-                                        );
-                                        flat_argument_types.push(BuiltInType::Integer64 as TypeId);
+                                    if arg_type_ids == T::IntegerLiteral as TypeId {
+                                        self.set_node_type(node_id, T::I64 as TypeId);
+                                        flat_argument_types.push(T::I64 as TypeId);
                                         continue;
                                     }
                                     flat_argument_types.push(arg_type_ids);
@@ -1098,17 +1103,15 @@ impl<'a> Typechecker<'a> {
                             let parameters = self.tree.node(self.tree.node_extra(prototype, 0));
                             let returns_id = self.tree.node_extra(prototype, 1);
                             let returns = self.tree.node(returns_id);
-                            let mut type_arguments = vec![
-                                BuiltInType::None as TypeId;
-                                self.tree.range(type_parameters).count()
-                            ];
+                            let mut type_arguments =
+                                vec![T::None as TypeId; self.tree.range(type_parameters).count()];
                             for (pi, i) in self.tree.range(parameters).enumerate() {
                                 let ni = self.tree.node_index(i);
                                 let ti = self.node_types[ni as usize];
                                 let arg_type = flat_argument_types[pi];
                                 if let Type::Parameter { index } = self.types[ti] {
                                     let param_type = type_arguments[index];
-                                    if param_type == BuiltInType::None as TypeId {
+                                    if param_type == T::None as TypeId {
                                         type_arguments[index] = arg_type;
                                     } else if arg_type != param_type {
                                         return Err(Diagnostic::error().with_message(format!(
@@ -1242,9 +1245,9 @@ impl<'a> Typechecker<'a> {
             for &arg_type in &self.type_ids(*arg_type_ids) {
                 let param_type = parameter_types[parameter_index];
                 parameter_index += 1;
-                if arg_type != param_type && param_type != BuiltInType::Any as TypeId {
+                if arg_type != param_type && param_type != T::Any as TypeId {
                     // Check if untyped argument is compatible with parameter.
-                    if is_integer(param_type) && arg_type == BuiltInType::IntegerLiteral as TypeId {
+                    if is_integer(param_type) && arg_type == T::IntegerLiteral as TypeId {
                         untyped_arguments.push((node_id, param_type));
                         continue;
                     }
@@ -1432,20 +1435,18 @@ impl<'a> Typechecker<'a> {
 }
 
 fn is_integer(type_id: TypeId) -> bool {
-    type_id >= BuiltInType::Integer8 as TypeId && type_id <= BuiltInType::Integer64 as TypeId
-        || type_id >= BuiltInType::Unsigned8 as TypeId
-            && type_id <= BuiltInType::Unsigned64 as TypeId
+    type_id >= T::I8 as TypeId && type_id <= T::I64 as TypeId
+        || type_id >= T::U8 as TypeId && type_id <= T::U64 as TypeId
 }
 
 fn infer_type(annotation_type: TypeId, value_type: TypeId) -> Result<TypeId> {
-    let void = BuiltInType::Void as TypeId;
-    if annotation_type != void
-        && (value_type == void || value_type == BuiltInType::IntegerLiteral as TypeId)
+    let void = T::Void as TypeId;
+    if annotation_type != void && (value_type == void || value_type == T::IntegerLiteral as TypeId)
     {
         // Explicit type based on annotation.
         Ok(annotation_type)
-    } else if annotation_type == void && value_type == BuiltInType::IntegerLiteral as TypeId {
-        Ok(BuiltInType::Integer64 as TypeId)
+    } else if annotation_type == void && value_type == T::IntegerLiteral as TypeId {
+        Ok(T::I64 as TypeId)
     } else if annotation_type == void && value_type != void {
         // Infer type based on rvalue.
         Ok(value_type)

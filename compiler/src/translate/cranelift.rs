@@ -3,7 +3,7 @@ use crate::{
     builtin,
     parse::{Node, NodeId, NodeInfo, Tag},
     translate::input::{sizeof, Data, Input, Layout, Shape},
-    typecheck::{BuiltInType, Type as Typ, TypeId},
+    typecheck::{Type as Typ, TypeId, T},
     workspace::Workspace,
 };
 use codespan_reporting::diagnostic::Diagnostic;
@@ -893,7 +893,7 @@ impl State {
                         .unwrap();
                     type_arguments[*index]
                 } else {
-                    if t != BuiltInType::Void as TypeId {
+                    if t != T::Void as TypeId {
                         let ty = cl_type(data, c.ptr_type, &data.types[t]);
                         sig.returns.push(AbiParam::new(ty));
                     }
@@ -919,7 +919,7 @@ impl State {
         //     .unwrap_or_else(|| self.module.declare_func_in_func(callee, c.b.func));
 
         let call = c.b.ins().call(local_callee, &args);
-        if return_type != BuiltInType::Void as TypeId {
+        if return_type != T::Void as TypeId {
             let return_values = c.b.inst_results(call);
             if return_values.len() == 1 {
                 Val::Scalar(return_values[0])

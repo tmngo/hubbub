@@ -2,7 +2,7 @@ use crate::{
     analyze::{BuiltInFunction, Definition, Lookup},
     parse::{Node, NodeId, Tag},
     translate::input::{sizeof, Data, Input, Layout},
-    typecheck::{BuiltInType, Type as Typ, TypeId},
+    typecheck::{Type as Typ, TypeId, T},
 };
 use codespan_reporting::diagnostic::Diagnostic;
 use inkwell::{
@@ -806,7 +806,7 @@ impl<'ctx> Generator<'ctx> {
             .collect::<Vec<BasicMetadataValueEnum>>();
         let argslice = argslice.as_slice();
         let call_site_value = builder.build_call(callee, argslice, &name);
-        if return_type != BuiltInType::Void as TypeId {
+        if return_type != T::Void as TypeId {
             call_site_value
                 .try_as_basic_value()
                 .left()

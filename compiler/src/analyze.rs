@@ -1,6 +1,6 @@
 use crate::{
     parse::{ModuleKind, Node, NodeId, Tag, Tree},
-    typecheck::BuiltInType,
+    typecheck::T,
     utils::assert_size,
     workspace::{Result, Workspace},
 };
@@ -28,7 +28,7 @@ pub struct Analyzer<'a> {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Definition {
-    BuiltIn(BuiltInType),
+    BuiltIn(T),
     BuiltInFunction(BuiltInFunction),
     User(NodeId),
     Foreign(u32),
@@ -111,23 +111,23 @@ pub trait Resolve {
 impl<'a> Analyzer<'a> {
     pub fn new(workspace: &'a mut Workspace, tree: &'a Tree) -> Self {
         let builtins = HashMap::from([
-            ("Void", Definition::BuiltIn(BuiltInType::Void)),
-            ("Bool", Definition::BuiltIn(BuiltInType::Boolean)),
-            ("i8", Definition::BuiltIn(BuiltInType::Integer8)),
-            ("i16", Definition::BuiltIn(BuiltInType::Integer16)),
-            ("i32", Definition::BuiltIn(BuiltInType::Integer32)),
-            ("i64", Definition::BuiltIn(BuiltInType::Integer64)),
-            ("Int", Definition::BuiltIn(BuiltInType::Integer64)),
-            ("u8", Definition::BuiltIn(BuiltInType::Unsigned8)),
-            ("u16", Definition::BuiltIn(BuiltInType::Unsigned16)),
-            ("u32", Definition::BuiltIn(BuiltInType::Unsigned32)),
-            ("u64", Definition::BuiltIn(BuiltInType::Unsigned64)),
-            ("f32", Definition::BuiltIn(BuiltInType::Float32)),
-            ("f64", Definition::BuiltIn(BuiltInType::Float64)),
-            ("Float", Definition::BuiltIn(BuiltInType::Float32)),
-            // ("String", Definition::BuiltIn(BuiltInType::String)),
-            ("Pointer", Definition::BuiltIn(BuiltInType::Pointer)),
-            ("Array", Definition::BuiltIn(BuiltInType::Array)),
+            ("Void", Definition::BuiltIn(T::Void)),
+            ("Bool", Definition::BuiltIn(T::Boolean)),
+            ("i8", Definition::BuiltIn(T::I8)),
+            ("i16", Definition::BuiltIn(T::I16)),
+            ("i32", Definition::BuiltIn(T::I32)),
+            ("i64", Definition::BuiltIn(T::I64)),
+            ("Int", Definition::BuiltIn(T::I64)),
+            ("u8", Definition::BuiltIn(T::U8)),
+            ("u16", Definition::BuiltIn(T::U16)),
+            ("u32", Definition::BuiltIn(T::U32)),
+            ("u64", Definition::BuiltIn(T::U64)),
+            ("f32", Definition::BuiltIn(T::F32)),
+            ("f64", Definition::BuiltIn(T::F64)),
+            ("Float", Definition::BuiltIn(T::F32)),
+            // ("String", Definition::BuiltIn(T::String)),
+            ("Pointer", Definition::BuiltIn(T::Pointer)),
+            ("Array", Definition::BuiltIn(T::Array)),
             ("+", Definition::BuiltInFunction(BuiltInFunction::Add)),
             ("*", Definition::BuiltInFunction(BuiltInFunction::Mul)),
             (
