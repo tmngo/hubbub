@@ -21,6 +21,7 @@ use std::{collections::HashMap, hash::Hash};
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     None,
+    Never,
     Void,
     Any,
     Boolean,
@@ -86,6 +87,7 @@ pub type TypeId = usize;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum BuiltInType {
     None,
+    Never,
     Void,
     Any,
     Boolean,
@@ -157,6 +159,7 @@ impl<'a> Typechecker<'a> {
         let mut types = vec![Type::None; BuiltInType::Count as usize];
         // types[BuiltInType::None as TypeId] = Type::None;
         types[BuiltInType::Void as TypeId] = Type::Void;
+        types[BuiltInType::Never as TypeId] = Type::Never;
         types[BuiltInType::Any as TypeId] = Type::Any;
         types[BuiltInType::Boolean as TypeId] = Type::Boolean;
         // Signed integers
