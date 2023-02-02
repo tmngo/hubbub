@@ -109,7 +109,9 @@ impl<'a> Data<'a> {
                     let ni = self.node_index(i);
                     let typ = self.typ(ni);
                     let ti = match typ {
-                        Typ::Parameter { index } => dbg!(type_parameters).as_ref().unwrap()[*index],
+                        Typ::Parameter { index, .. } => {
+                            dbg!(type_parameters).as_ref().unwrap()[*index]
+                        }
                         _ => self.type_id(ni),
                     };
                     write!(full_name, "{},", ti).ok();

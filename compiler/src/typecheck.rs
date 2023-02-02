@@ -51,6 +51,7 @@ pub enum Type {
     },
     Parameter {
         index: usize,
+        binding: TypeId,
     },
     Numeric {
         floating: bool,
@@ -728,6 +729,7 @@ impl<'a> Typechecker<'a> {
                         let node_id = self.tree.node_index(i);
                         self.add_type(Type::Parameter {
                             index: (i - lhs) as usize,
+                            binding: T::Void as TypeId,
                         });
                         self.set_node_type(node_id, self.types.len() - 1);
                     }
@@ -814,6 +816,7 @@ impl<'a> Typechecker<'a> {
                         let node_id = self.tree.node_index(i);
                         let param_type = self.add_type(Type::Parameter {
                             index: (i - lhs) as usize,
+                            binding: T::Void as TypeId,
                         });
                         self.set_node_type(node_id, param_type);
                     }

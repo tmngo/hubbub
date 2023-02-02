@@ -863,7 +863,7 @@ impl State {
                 for ti in fields {
                     let typ = &data.types[*ti];
 
-                    let typ = if let Typ::Parameter { index } = typ {
+                    let typ = if let Typ::Parameter { index, .. } = typ {
                         let type_arguments = data
                             .type_parameters
                             .get(&definition.id())
@@ -884,7 +884,7 @@ impl State {
             }
             _ => {
                 let t = data.type_id(node_id);
-                if let Typ::Parameter { index } = &data.types[t] {
+                if let Typ::Parameter { index, .. } = &data.types[t] {
                     let type_arguments = data
                         .type_parameters
                         .get(&definition.id())
@@ -1087,7 +1087,7 @@ pub fn cl_type(data: &Data, ptr_type: Type, typ: &Typ) -> Type {
                 }
             }
         }
-        Typ::Parameter { index } => cl_type(
+        Typ::Parameter { index, .. } => cl_type(
             data,
             ptr_type,
             &data.types[data.active_type_parameters.unwrap()[*index]],

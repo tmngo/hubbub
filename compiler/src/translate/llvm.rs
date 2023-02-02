@@ -964,7 +964,7 @@ pub fn llvm_type<'ctx>(context: &'ctx Context, data: &Data, type_id: usize) -> B
                 &types[type_id]
             ),
         },
-        Typ::Parameter { index } => {
+        Typ::Parameter { index, .. } => {
             llvm_type(context, data, data.active_type_parameters.unwrap()[*index])
         }
         _ => unreachable!(
