@@ -2,7 +2,7 @@ use crate::{
     analyze::{BuiltInFunction, Definition, Lookup},
     parse::{Node, NodeId, Tag},
     translate::input::{sizeof, Data, Input, Layout},
-    typecheck::{Type as Typ, TypeId, T},
+    types::{Type as Typ, TypeId, T},
 };
 use codespan_reporting::diagnostic::Diagnostic;
 use inkwell::{
@@ -269,8 +269,8 @@ impl<'ctx> Generator<'ctx> {
         let fn_type = ret_type.fn_type(argslice, false);
         let fn_value = self.module.add_function(name, fn_type, None);
 
-        println!("{}", crate::format_red!("{:?}", fn_value.get_name()));
-        dbg!(fn_type);
+        // println!("{}", crate::format_red!("{:?}", fn_value.get_name()));
+        // dbg!(fn_type);
 
         fn_value
     }
@@ -327,7 +327,6 @@ impl<'ctx> Generator<'ctx> {
         let node = data.node(node_id);
         match node.tag {
             Tag::Assign => {
-                assert_eq!(data.type_id(node.lhs), data.type_id(node.rhs));
                 let rvalue = self.compile_expr(state, node.rhs);
                 let lvalue = self.compile_lvalue(state, node.lhs);
                 let lvalue = self.builder.build_pointer_cast(
@@ -427,10 +426,10 @@ impl<'ctx> Generator<'ctx> {
             Tag::VariableDecl => {
                 // lhs: expressions
                 // rhs: expressions
-                let lhs = data.tree.node(node.lhs);
-                assert_eq!(lhs.tag, Tag::Expressions);
+                let identifiers = data.tree.node(node.lhs);
+                assert_eq!(identifiers.tag, Tag::Expressions);
                 let mut locs = vec![];
-                for i in lhs.lhs..lhs.rhs {
+                for i in data.tree.range(identifiers) {
                     let ni = data.tree.node_index(i);
                     let type_id = data.type_id(ni);
                     let llvm_type = llvm_type(self.context, data, type_id);
@@ -589,6 +588,20 @@ impl<'ctx> Generator<'ctx> {
             Tag::Subscript => {
                 let lvalue = self.compile_lvalue(state, node_id);
                 builder.build_load(lvalue, "subscript")
+            }
+            Tag::Conversion => {
+                let x = self.compile_expr(state, node.lhs).into_int_value();
+                let from_type =
+                    llvm_type(self.context, data, data.type_id(node.lhs)).into_int_type();
+                let to_type = llvm_type(self.context, data, data.type_id(node_id)).into_int_type();
+                (if to_type.get_bit_width() < from_type.get_bit_width() {
+                    builder.build_int_truncate(x, to_type, "trunc")
+                } else if data.typ(node_id).is_signed() {
+                    builder.build_int_s_extend(x, to_type, "sext")
+                } else {
+                    builder.build_int_z_extend(x, to_type, "zext")
+                })
+                .as_basic_value_enum()
             }
             // Function calls
             Tag::Add | Tag::Mul => self.compile_call(state, node_id, node_id, true),
@@ -789,7 +802,7 @@ impl<'ctx> Generator<'ctx> {
         let callee = self
             .module
             .get_function(&name)
-            .unwrap_or_else(|| panic!("failed to get module function \"{}\"", name));
+            .unwrap_or_else(|| panic!("failed to get module function \"{}\"", &name));
 
         // Assume one return value.
         let return_type = data.type_id(node_id);
@@ -825,7 +838,7 @@ impl<'ctx> Generator<'ctx> {
         let data = &self.data;
         let node = data.tree.node(node_id);
         match built_in_function {
-            BuiltInFunction::Add => {
+            BuiltInFunction::Add | BuiltInFunction::AddI8 => {
                 let a = self.compile_expr(state, node.lhs).into_int_value();
                 let b = self.compile_expr(state, node.rhs).into_int_value();
                 self.builder.build_int_add(a, b, "int_add").into()
@@ -841,6 +854,11 @@ impl<'ctx> Generator<'ctx> {
                 let type_id = data.type_id(first_arg_id);
                 let value = sizeof(data.types, type_id) as u64;
                 self.context.i64_type().const_int(value, false).into()
+            }
+            BuiltInFunction::SubI64 => {
+                let a = self.compile_expr(state, node.lhs).into_int_value();
+                let b = self.compile_expr(state, node.rhs).into_int_value();
+                self.builder.build_int_sub(a, b, "int_sub").into()
             }
         }
     }
@@ -948,7 +966,7 @@ pub fn llvm_type<'ctx>(context: &'ctx Context, data: &Data, type_id: usize) -> B
             }
             context.struct_type(&field_types, false).into()
         }
-        Typ::Void => context.struct_type(&[], false).into(),
+        Typ::Void | Typ::None => context.struct_type(&[], false).into(),
         Typ::Boolean => context.bool_type().into(),
         Typ::Numeric {
             floating, bytes, ..

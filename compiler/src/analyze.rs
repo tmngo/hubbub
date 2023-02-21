@@ -1,6 +1,6 @@
 use crate::{
     parse::{ModuleKind, Node, NodeId, Tag, Tree},
-    typecheck::T,
+    types::T,
     utils::assert_size,
     workspace::{Result, Workspace},
 };
@@ -16,6 +16,7 @@ pub struct Analyzer<'a> {
     tree: &'a Tree,
 
     builtins: HashMap<&'a str, Definition>,
+    builtin_functions: HashMap<&'a str, Vec<Definition>>,
     current: usize,
     foreign: Scope<'a>,
     module_scopes: Vec<usize>,
@@ -54,8 +55,10 @@ impl Definition {
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum BuiltInFunction {
     Add,
+    AddI8,
     Mul,
     SizeOf,
+    SubI64,
 }
 
 // Assert that Tag size <= 1 byte
@@ -128,13 +131,19 @@ impl<'a> Analyzer<'a> {
             // ("String", Definition::BuiltIn(T::String)),
             ("Pointer", Definition::BuiltIn(T::Pointer)),
             ("Array", Definition::BuiltIn(T::Array)),
-            ("+", Definition::BuiltInFunction(BuiltInFunction::Add)),
             ("*", Definition::BuiltInFunction(BuiltInFunction::Mul)),
             (
                 "sizeof",
                 Definition::BuiltInFunction(BuiltInFunction::SizeOf),
             ),
         ]);
+        let builtin_functions = HashMap::from([(
+            "+",
+            vec![
+                Definition::BuiltInFunction(BuiltInFunction::AddI8),
+                Definition::BuiltInFunction(BuiltInFunction::Add),
+            ],
+        )]);
         let foreign = Scope::from(
             [
                 // ("DisplayHelloFromMyDLL", 9),
@@ -148,6 +157,7 @@ impl<'a> Analyzer<'a> {
             workspace,
             tree,
             builtins,
+            builtin_functions,
             current: 0,
             foreign,
             module_scopes: vec![],
@@ -616,7 +626,7 @@ impl<'a> Analyzer<'a> {
                 return Definition::User(index);
             }
             if let Some(definitions) = self.scopes[scope_index].get_fn(name) {
-                overload_set.extend(definitions);
+                overload_set.extend(definitions.clone());
             }
             // Check if the name is defined in imported scopes.
             // for &import_scope_index in &self.scopes[scope_index].unnamed_imports {
@@ -633,9 +643,13 @@ impl<'a> Analyzer<'a> {
                         _ => unreachable!(),
                     }
                 }
+                if let Some(definitions) = self.builtin_functions.get(name) {
+                    overload_set.extend(definitions.clone());
+                }
                 if let Some(&index) = self.foreign.get(name) {
                     return Definition::Foreign(index);
                 }
+                // If the overload_set is of length one, return the single definition.
                 return match overload_set.len() {
                     0 => Definition::NotFound,
                     1 => overload_set[0],

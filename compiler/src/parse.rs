@@ -1,6 +1,7 @@
 use crate::{
     link::get_module_dir,
     tokenize::{Tag as TokenTag, Token, Tokenizer},
+    types::{TypeId, T},
     utils::assert_size,
     workspace::{Result, Workspace},
 };
@@ -94,38 +95,43 @@ pub const _ASSERT_TAG_SIZE: () = assert_size::<Tag>(1);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Tag {
-    Access,         // lhs, rhs
-    Add,            // lhs, rhs
-    Address,        // expr
-    LogicalAnd,     // lhs, rhs
-    LogicalOr,      // lhs, rhs
-    Assign,         // lhs, rhs
-    AssignAdd,      // lhs, rhs
-    Block,          // start..end [Stmt]
-    BlockDirect,    //
-    BitwiseAnd,     // expr
-    BitwiseNot,     // expr
-    BitwiseOr,      // lhs, rhs
-    BitwiseShiftL,  //
-    BitwiseShiftR,  //
-    BitwiseXor,     // lhs, rhs
-    Break,          //
-    Call,           // func_expr, arguments: Expressions
-    Continue,       //
-    Equality,       // lhs, rhs
-    Expressions,    // start..end [Expr]
-    Dereference,    // expr
-    Factorial,      // expr
-    False,          //
-    Field,          // type_expr
-    FloatLiteral,   //
-    FunctionDecl,   // prototype, block
-    Greater,        // lhs, rhs
-    GreaterEqual,   // lhs, rhs
-    Grouping,       // expr
-    Identifier,     //
-    If,             // condition, block
-    IfElse,         // start..end [If]
+    Access,     // lhs, rhs
+    Add,        // lhs, rhs
+    Address,    // expr
+    LogicalAnd, // lhs, rhs
+    LogicalOr,  // lhs, rhs
+    /// lhs, rhs
+    Assign,
+    AssignAdd,     // lhs, rhs
+    Block,         // start..end [Stmt]
+    BlockDirect,   //
+    BitwiseAnd,    // expr
+    BitwiseNot,    // expr
+    BitwiseOr,     // lhs, rhs
+    BitwiseShiftL, //
+    BitwiseShiftR, //
+    BitwiseXor,    // lhs, rhs
+    Break,         //
+    Call,          // func_expr, arguments: Expressions
+    Continue,      //
+    Conversion,    // lhs
+    Equality,      // lhs, rhs
+    Expressions,   // start..end [Expr]
+    Dereference,   // expr
+    Factorial,     // expr
+    False,         //
+    Field,         // type_expr
+    FloatLiteral,  //
+    /// lhs: prototype, rhs: block
+    FunctionDecl,
+    Greater,      // lhs, rhs
+    GreaterEqual, // lhs, rhs
+    Grouping,     // expr
+    Identifier,   //
+    /// lhs?: condition, rhs?: block
+    If,
+    /// start..end [If]
+    IfElse,
     Import,         // lhs, rhs
     Inequality,     // lhs, rhs
     IntegerLiteral, //
@@ -140,18 +146,22 @@ pub enum Tag {
     Parameters,     // start..end [Field]
     /// lhs: type_parameters, rhs: (parameters, returns)
     Prototype,
-    Return,         // expr
-    Root,           // start..end [Decl]
-    StringLiteral,  //
-    Struct,         // start..end [Field]
-    Sub,            // lhs, rhs
-    Subscript,      // lhs, rhs
+    Return,        // expr
+    Root,          // start..end [Decl]
+    StringLiteral, //
+    /// lhs?: TypeParameters, rhs: (start, end) [Field]
+    Struct, // start..end [Field]
+    Sub,           // lhs, rhs
+    /// lhs, rhs
+    Subscript,
     True,           //
     Type,           // expr
     TypeParameter,  // start..end [Identifier]
     TypeParameters, // start..end [Identifier]
-    VariableDecl,   // type_expr, init_expr
-    While,          // condition, block
+    /// lhs: identifiers, rhs: (type_expr, init_expr)
+    VariableDecl,
+    /// lhs: condition, rhs: block
+    While,
 }
 
 // pub struct Node2 {
@@ -200,7 +210,7 @@ pub enum Tag {
 // }
 
 // Assert that Node size <= 16 bytes
-pub const _ASSERT_NODE_SIZE: () = assert_size::<Node>(16);
+pub const _ASSERT_NODE_SIZE: () = assert_size::<Node>(24);
 // pub const _ASSERT_NODE_2_SIZE: () = assert_size::<Node2>(16);
 // pub const _ASSERT_NODE_DATA_SIZE: () = assert_size::<Data>(12);
 
@@ -212,6 +222,7 @@ pub type NodeId = u32;
 pub struct Node1 {
     pub tag: Tag,
     pub token: TokenId,
+    pub ty: usize,
     pub lhs: u32,
     pub rhs: u32,
 }
@@ -359,6 +370,7 @@ impl<'w> Parser<'w> {
                 nodes: vec![Node {
                     tag: Tag::Root,
                     token: 0,
+                    ty: T::None as TypeId,
                     lhs: 0,
                     rhs: 0,
                 }],
@@ -389,6 +401,7 @@ impl<'w> Parser<'w> {
         self.tree.nodes[0] = Node {
             tag: Tag::Root,
             token: 0,
+            ty: T::None as TypeId,
             lhs: range.start,
             rhs: range.end,
         };
@@ -646,7 +659,9 @@ impl<'w> Parser<'w> {
     fn parse_identifier_list(&mut self) -> Result<NodeId> {
         let range = parse_while!(
             self,
-            self.token_isnt(TokenTag::Colon) && !self.token_is(TokenTag::ColonEqual),
+            self.token_isnt(TokenTag::Colon)
+                && !self.token_is(TokenTag::ColonColon)
+                && !self.token_is(TokenTag::ColonEqual),
             {
                 let identifier_token = self.expect_token(TokenTag::Identifier)?;
                 self.match_token(TokenTag::Comma);
@@ -699,7 +714,7 @@ impl<'w> Parser<'w> {
                     init_expr = self.parse_expr_list()?;
                 }
             }
-            TokenTag::ColonEqual => {
+            TokenTag::ColonColon | TokenTag::ColonEqual => {
                 init_expr = self.parse_expr_list()?;
             }
             _ => unreachable!("expected one of :, ::, or := in variable declaration"),
@@ -789,8 +804,9 @@ impl<'w> Parser<'w> {
                 node
             }
             TokenTag::While => self.parse_stmt_while(),
+            // Variable declarations and assignments don't start with a keyword.
             _ => match self.next_tag(1) {
-                TokenTag::Colon | TokenTag::ColonEqual | TokenTag::Comma => {
+                TokenTag::Colon | TokenTag::ColonColon | TokenTag::ColonEqual | TokenTag::Comma => {
                     // self.shift_token();
                     self.parse_decl_variable()
                 }
@@ -1089,6 +1105,7 @@ impl<'w> Parser<'w> {
         self.tree.nodes.push(Node {
             tag,
             token,
+            ty: T::None as TypeId,
             lhs,
             rhs,
         });
@@ -1201,25 +1218,29 @@ impl<'w> Parser<'w> {
     fn skip_to_next_statement(&mut self) {
         while !self.is_at_end() {
             match self.current_tag() {
+                // These tokens indicate the beginning of a statement.
                 TokenTag::Block
                 | TokenTag::Break
                 | TokenTag::Continue
                 | TokenTag::If
                 | TokenTag::Return
                 | TokenTag::While => return,
+                // A new line starting with an identifier is probably a statement.
                 TokenTag::Identifier
                     if self.previous_tag().expect("cannot get previous token tag")
                         == TokenTag::Newline =>
                 {
                     return;
                 }
-                _ => match self.next_tag(1) {
-                    TokenTag::Colon | TokenTag::ColonEqual | TokenTag::Comma | TokenTag::Equal => {
-                        dbg!(self.current_tag());
-                        return;
-                    }
-                    _ => self.shift_token(),
-                },
+                // These tokens indicate a declaration.
+                // _ => match self.next_tag(1) {
+                //     TokenTag::Colon | TokenTag::ColonEqual | TokenTag::Comma | TokenTag::Equal => {
+                //         dbg!(self.current_tag());
+                //         return;
+                //     }
+                // _ => self.shift_token(),
+                // },
+                _ => self.shift_token(),
             };
         }
     }
@@ -1315,6 +1336,17 @@ impl Tree {
         &mut self.nodes[id as usize]
     }
 
+    pub fn add_node(&mut self, tag: Tag, token: TokenId, lhs: u32, rhs: u32) -> NodeId {
+        self.nodes.push(Node {
+            tag,
+            token,
+            ty: T::None as TypeId,
+            lhs,
+            rhs,
+        });
+        (self.nodes.len() - 1) as NodeId
+    }
+
     pub fn lchild(&self, parent: &Node) -> &Node {
         &self.nodes[parent.lhs as usize]
     }
@@ -1384,6 +1416,14 @@ impl Tree {
         token.to_str(source)
     }
 
+    pub fn is_decl_const(&self, id: NodeId) -> bool {
+        let node = self.node(id);
+        dbg!(node);
+        let token = self.node_token(node);
+        dbg!(token);
+        node.tag == Tag::VariableDecl && token.tag == TokenTag::ColonColon
+    }
+
     pub fn name(&self, id: NodeId) -> &str {
         let node = self.node(id);
         let token_index = match node.tag {
@@ -1393,6 +1433,7 @@ impl Tree {
             Tag::Module => node.token as i32 + 1,
             Tag::Struct => node.token as i32 - 2,
             Tag::VariableDecl => node.token as i32 - 1,
+            _ if node.token == 0 => return "",
             _ => node.token as i32,
         } as usize;
         let token = &self.tokens[token_index];
@@ -1493,6 +1534,9 @@ impl Tree {
             write!(f, "{id}. ")?;
         }
         write!(f, "{tag:?}")?;
+        if include_ids && node.ty != 0 {
+            write!(f, " ({})", node.ty)?;
+        }
 
         match tag {
             // Multiple children, multiple lines.
@@ -1501,9 +1545,16 @@ impl Tree {
             | Tag::IfElse
             | Tag::Module
             | Tag::Parameters
-            | Tag::Struct
             | Tag::Return
             | Tag::TypeParameters => {
+                for i in self.range(node) {
+                    self.pretty_print_node(f, self.node_index(i), indentation, include_ids)?;
+                }
+            }
+            Tag::Struct => {
+                if include_ids {
+                    write!(f, " \"{}\"", self.name(id))?;
+                }
                 for i in self.range(node) {
                     self.pretty_print_node(f, self.node_index(i), indentation, include_ids)?;
                 }
@@ -1525,6 +1576,13 @@ impl Tree {
                 for i in self.range(node) {
                     self.pretty_print_node(f, self.node_index(i), indentation, include_ids)?;
                 }
+            }
+            Tag::FunctionDecl => {
+                if include_ids {
+                    write!(f, " \"{}\"", self.name(id))?;
+                }
+                self.pretty_print_node(f, node.lhs, indentation, include_ids)?;
+                self.pretty_print_node(f, node.rhs, indentation, include_ids)?;
             }
             // One or two children.
             _ => {

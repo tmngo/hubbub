@@ -1,5 +1,5 @@
 main :: () -> Int
-    y := 1
+    y : i64 = 1
     y = xorshift(y)
     y = xorshift(y)
     y = xorshift(y)
@@ -9,7 +9,8 @@ main :: () -> Int
     return y
 end
 
-xorshift :: (a: Int) -> Int
+xorshift :: (c: i64) -> i64
+    a : Int = c
     a = a << 7 ^ a
     a = a >> 9 ^ a
     a = a << 8 ^ a

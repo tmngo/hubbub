@@ -3,7 +3,7 @@ use crate::{
     builtin,
     parse::{Node, NodeId, NodeInfo, Tag},
     translate::input::{sizeof, Data, Input, Layout, Shape},
-    typecheck::{Type as Typ, TypeId, T},
+    types::{Type as Typ, TypeId, T},
     workspace::Workspace,
 };
 use codespan_reporting::diagnostic::Diagnostic;
@@ -417,7 +417,6 @@ impl State {
             Tag::Assign => {
                 // lhs: expr
                 // rhs: expr
-                assert_eq!(data.type_id(node.lhs), data.type_id(node.rhs));
                 let layout = data.layout(node.rhs);
                 let rvalue = self.compile_expr_value(data, c, node.rhs);
                 let flags = MemFlags::new();
@@ -506,12 +505,14 @@ impl State {
             Tag::VariableDecl => {
                 // lhs: expressions
                 // rhs: expressions
-                let lhs = data.tree.node(node.lhs);
-                assert_eq!(lhs.tag, Tag::Expressions);
+                let identifiers = data.tree.node(node.lhs);
+                assert_eq!(identifiers.tag, Tag::Expressions);
                 let mut locs = vec![];
-                for i in lhs.lhs..lhs.rhs {
+                let mut ltypes = vec![];
+                for i in data.tree.range(identifiers) {
                     let ni = data.tree.node_index(i);
                     let slot = self.create_stack_slot(data, c, ni);
+                    ltypes.push(data.type_id(ni));
                     let location = Location::stack(slot, 0);
                     self.locations.insert(ni, location);
                     locs.push(location);
@@ -641,6 +642,18 @@ impl State {
             Tag::Subscript => {
                 let lvalue = self.compile_lvalue(data, c, node_id);
                 lvalue.to_val(data, c, node_id)
+            }
+            Tag::Conversion => {
+                let x = self.compile_expr_value(data, c, node.lhs);
+                let from_type = cl_type(data, c.ptr_type, data.typ(node.lhs));
+                let to_type = cl_type(data, c.ptr_type, data.typ(node_id));
+                if to_type.bytes() < from_type.bytes() {
+                    Val::Scalar(c.b.ins().ireduce(to_type, x))
+                } else if data.typ(node_id).is_signed() {
+                    Val::Scalar(c.b.ins().sextend(to_type, x))
+                } else {
+                    Val::Scalar(c.b.ins().uextend(to_type, x))
+                }
             }
             // Function calls
             Tag::Add | Tag::Mul => self.compile_call(data, c, node_id, node_id, true),
@@ -893,7 +906,7 @@ impl State {
                         .unwrap();
                     type_arguments[*index]
                 } else {
-                    if t != T::Void as TypeId {
+                    if t > T::Void as TypeId {
                         let ty = cl_type(data, c.ptr_type, &data.types[t]);
                         sig.returns.push(AbiParam::new(ty));
                     }
@@ -919,7 +932,7 @@ impl State {
         //     .unwrap_or_else(|| self.module.declare_func_in_func(callee, c.b.func));
 
         let call = c.b.ins().call(local_callee, &args);
-        if return_type != T::Void as TypeId {
+        if return_type > T::Void as TypeId {
             let return_values = c.b.inst_results(call);
             if return_values.len() == 1 {
                 Val::Scalar(return_values[0])
@@ -940,7 +953,7 @@ impl State {
     ) -> Val {
         let node = data.tree.node(node_id);
         match built_in_function {
-            BuiltInFunction::Add => {
+            BuiltInFunction::Add | BuiltInFunction::AddI8 => {
                 let a = self.compile_expr_value(data, c, node.lhs);
                 let b = self.compile_expr_value(data, c, node.rhs);
                 Val::Scalar(c.b.ins().iadd(a, b))
@@ -956,6 +969,11 @@ impl State {
                 let type_id = data.type_id(first_arg_id);
                 let value = sizeof(data.types, type_id) as i64;
                 Val::Scalar(c.b.ins().iconst(c.ptr_type, value))
+            }
+            BuiltInFunction::SubI64 => {
+                let a = self.compile_expr_value(data, c, node.lhs);
+                let b = self.compile_expr_value(data, c, node.rhs);
+                Val::Scalar(c.b.ins().isub(a, b))
             }
         }
     }
@@ -1059,7 +1077,12 @@ impl State {
     }
 
     fn create_stack_slot(&mut self, data: &Data, c: &mut FnContext, node_id: u32) -> StackSlot {
-        let size = sizeof(data.types, data.type_id(node_id));
+        let type_id = if let Typ::Parameter { binding, .. } = data.typ(node_id) {
+            *binding
+        } else {
+            data.type_id(node_id)
+        };
+        let size = sizeof(data.types, type_id);
         c.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, size))
     }
 }

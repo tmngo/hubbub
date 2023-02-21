@@ -16,6 +16,7 @@ mod tests;
 mod tokenize;
 mod translate;
 mod typecheck;
+mod types;
 mod utils;
 mod workspace;
 
@@ -80,18 +81,19 @@ fn main() {
     let start = Instant::now();
     let mut typechecker =
         typecheck::Typechecker::new(&mut workspace, &mut tree, &mut definitions, &overload_sets);
-    typechecker.check().ok();
+    typechecker.typecheck();
     let t_typecheck = start.elapsed();
     typechecker.print();
-    let (types, node_types, type_parameters) = typechecker.results();
+    let (types, type_parameters) = typechecker.results();
+    dbg!(&type_parameters);
+    println!("{:#?}", tree);
     if workspace.has_errors() {
         workspace.print_errors();
         return;
     }
     println!("--- END TYPECHECK\n");
 
-    let input =
-        translate::input::Input::new(&tree, &definitions, &types, &node_types, type_parameters);
+    let input = translate::input::Input::new(&tree, &definitions, &types, type_parameters);
 
     println!("--- BEGIN GENERATE");
     let start = Instant::now();
