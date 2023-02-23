@@ -66,7 +66,7 @@ pub fn link(workspace: &Workspace, object_filename: &str, output_filename: &str,
                 .map(|file| {
                     compiler_dir
                         .join(file.as_str())
-                        .with_extension("lib")
+                        .with_extension("dll.lib")
                         .into_os_string()
                         .into_string()
                         .unwrap()
