@@ -747,6 +747,7 @@ impl<'a> Typechecker<'a> {
                 // self.set_node_type(node_id, T::IntegerLiteral as TypeId)
             }
             Tag::True | Tag::False => self.set(node_id, T::Boolean as TypeId),
+            Tag::FloatLiteral => self.set(node_id, T::F32 as TypeId),
             _ => {
                 panic!("infer: {:?}", node.tag);
                 // if node.lhs != 0 {
@@ -1238,7 +1239,7 @@ impl<'a> Typechecker<'a> {
                     .map(|i| self.tree.node_index(i))
                     .collect();
                 self.resolve_call(callee_id, &argument_ids)?;
-                let callee_type = self.infer(callee_id)?;
+                self.infer(callee_id)?;
 
                 // 3. Finalize callee
                 self.check(callee_id)?;
@@ -1272,7 +1273,7 @@ impl<'a> Typechecker<'a> {
                     self.get(callee_id),
                     "{:?} {:?}",
                     &self.types[type_id],
-                    &self.types[callee_type]
+                    &self.types[self.get(callee_id)]
                 );
                 // self.finalize(node.rhs)?;
 
@@ -1287,7 +1288,7 @@ impl<'a> Typechecker<'a> {
                 }
 
                 // 4. Set return type.
-
+                let callee_type = self.get(callee_id);
                 let type_id = if let Type::Function {
                     parameters: _,
                     returns,
@@ -1352,6 +1353,7 @@ impl<'a> Typechecker<'a> {
             }
             // Literal expressions
             Tag::IntegerLiteral => {}
+            Tag::FloatLiteral => {}
             Tag::True | Tag::False => {}
             Tag::StringLiteral => {}
             _ => {
@@ -1582,6 +1584,17 @@ impl<'a> Typechecker<'a> {
                     concrete.push(c);
                 }
                 self.add_tuple_type(concrete)
+            }
+            Type::Function {
+                parameters,
+                returns,
+            } => {
+                let parameters = parameters.iter().map(|&t| self.fullconcrete(t)).collect();
+                let returns = returns.iter().map(|&t| self.fullconcrete(t)).collect();
+                self.add_function_type(Type::Function {
+                    parameters,
+                    returns,
+                })
             }
             _ => unreachable!("Unexpected type! {:?}", &self.types[t]),
         }
