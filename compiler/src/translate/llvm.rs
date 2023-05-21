@@ -331,7 +331,7 @@ impl<'ctx> Generator<'ctx> {
                 let lvalue = self.compile_lvalue(state, node.lhs);
                 let lvalue = self.builder.build_pointer_cast(
                     lvalue,
-                    rvalue.get_type().ptr_type(AddressSpace::Generic),
+                    rvalue.get_type().ptr_type(AddressSpace::default()),
                     "ptr_cast",
                 );
                 self.builder.build_store(lvalue, rvalue);
@@ -536,6 +536,8 @@ impl<'ctx> Generator<'ctx> {
         let (data, builder) = (&self.data, &self.builder);
         let node = data.node(node_id);
 
+        let value_type = llvm_type(self.context, data, data.type_id(node_id));
+
         macro_rules! compile_binary_expr {
             ($inst:ident, $name:literal) => {{
                 let (lhs, rhs) = self.compile_children(state, node);
@@ -563,8 +565,17 @@ impl<'ctx> Generator<'ctx> {
                 let field_index = data.tree.node_extra(field, 1);
                 match container {
                     BasicValueEnum::PointerValue(pointer) => {
-                        let gep = builder.build_struct_gep(pointer, field_index, "").unwrap();
-                        self.builder.build_load(gep, "")
+                        // Automatically deref.
+                        let field_type = llvm_type(self.context, data, data.type_id(node_id));
+                        let gep = builder
+                            .build_struct_gep(
+                                field_type.into_pointer_type(),
+                                pointer,
+                                field_index,
+                                "",
+                            )
+                            .unwrap();
+                        self.builder.build_load(value_type, gep, "")
                     }
                     BasicValueEnum::StructValue(value) => {
                         builder.build_extract_value(value, field_index, "").unwrap()
@@ -575,19 +586,20 @@ impl<'ctx> Generator<'ctx> {
             Tag::Address => self.locate(state, node.lhs).base.into(),
             Tag::Dereference => {
                 let location = self.compile_lvalue(state, node.lhs);
+                let ptr_type = llvm_type(self.context, data, data.type_id(node.lhs));
                 let ptr = builder
-                    .build_load(location, "pointer_value")
+                    .build_load(ptr_type, location, "pointer_value")
                     .into_pointer_value();
-                builder.build_load(ptr, "deref")
+                builder.build_load(value_type, ptr, "deref")
             }
             Tag::Identifier => {
                 let name = data.tree.name(node_id);
                 let location = self.locate(state, node_id);
-                builder.build_load(location.base, name)
+                builder.build_load(value_type, location.base, name)
             }
             Tag::Subscript => {
                 let lvalue = self.compile_lvalue(state, node_id);
-                builder.build_load(lvalue, "subscript")
+                builder.build_load(value_type, lvalue, "subscript")
             }
             Tag::Conversion => {
                 let x = self.compile_expr(state, node.lhs).into_int_value();
@@ -679,7 +691,9 @@ impl<'ctx> Generator<'ctx> {
         let (data, builder) = (&self.data, &self.builder);
         let node = data.node(node_id);
         match node.tag {
+            // a.x = b
             Tag::Access => {
+                // Return the location of the struct field.
                 let field_id = data
                     .definitions
                     .get_definition_id(node_id, Diagnostic::error())
@@ -687,31 +701,40 @@ impl<'ctx> Generator<'ctx> {
                 let field = data.node(field_id);
                 let field_index = data.tree.node_extra(field, 1);
                 let mut struct_ptr = self.compile_lvalue(state, node.lhs);
-                // Dereference pointer values.
-                if let Typ::Pointer { .. } = data.typ(node.lhs) {
-                    struct_ptr = builder.build_load(struct_ptr, "deref").into_pointer_value()
-                }
+                let a_type = llvm_type(self.context, data, data.type_id(node.lhs));
+                let struct_ty = if let Typ::Pointer { typ, .. } = data.typ(node.lhs) {
+                    // Dereference pointer values.
+                    let load = builder.build_load(a_type, struct_ptr, "deref");
+                    struct_ptr = load.into_pointer_value();
+                    llvm_type(self.context, data, *typ)
+                } else {
+                    a_type
+                };
                 builder
-                    .build_struct_gep(struct_ptr, field_index, "")
+                    .build_struct_gep(struct_ty, struct_ptr, field_index, "")
                     .unwrap()
             }
             // @a = b
             Tag::Dereference => {
+                // Return the pointer location.
                 let location = self.compile_lvalue(state, node.lhs);
+                let a_type = llvm_type(self.context, data, data.type_id(node.lhs));
                 builder
-                    .build_load(location, "pointer_value")
+                    .build_load(a_type, location, "deref_lvalue")
                     .into_pointer_value()
             }
             // a = b
             Tag::Identifier => self.locate(state, node_id).base,
+            // a[i] = b
             Tag::Subscript => {
+                // Return the location of the array element.
                 let array_ptr = self.compile_lvalue(state, node.lhs);
                 let index_value = self.compile_expr(state, node.rhs).into_int_value();
-                let zero = self.context.i64_type().const_int(0, false);
                 // Offset for 1-based indexing.
                 let base_offset = self.context.i64_type().const_int(1, false);
                 let index_value = builder.build_int_sub(index_value, base_offset, "int_sub");
-                unsafe { builder.build_gep(array_ptr, &[zero, index_value], "gep") }
+                let element_type = llvm_type(self.context, data, data.type_id(node_id));
+                unsafe { builder.build_gep(element_type, array_ptr, &[index_value], "gep") }
             }
             _ => unreachable!("Invalid lvalue {:?} for assignment", node.tag),
         }
@@ -957,7 +980,7 @@ pub fn llvm_type<'ctx>(context: &'ctx Context, data: &Data, type_id: usize) -> B
             .array_type(*length as u32)
             .into(),
         Typ::Pointer { typ, .. } => llvm_type(context, data, *typ)
-            .ptr_type(AddressSpace::Generic)
+            .ptr_type(AddressSpace::default())
             .into(),
         Typ::Struct { fields, .. } => {
             let mut field_types = Vec::with_capacity(fields.len());
