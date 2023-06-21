@@ -450,14 +450,13 @@ impl<'ctx> Generator<'ctx> {
                 }
             }
             Tag::Return => {
-                if node.lhs == node.rhs {
-                    println!("returning none");
+                if node.lhs == 0 {
                     let unit_value = self.context.const_struct(&[], false).as_basic_value_enum();
                     builder.build_return(Some(&unit_value));
                 } else {
-                    println!("returning some");
                     let mut return_values = Vec::new();
-                    for i in node.lhs..node.rhs {
+                    let expressions = data.tree.node(node.lhs);
+                    for i in data.tree.range(expressions) {
                         let val = self.compile_expr(state, data.node_index(i));
                         return_values.push(val);
                     }

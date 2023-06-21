@@ -132,7 +132,8 @@ pub enum Tag {
     If,
     /// start..end [If]
     IfElse,
-    Import,         // lhs, rhs
+    /// lhs?: alias, rhs: module name
+    Import,
     Inequality,     // lhs, rhs
     IntegerLiteral, //
     Invalid,        //
@@ -683,7 +684,7 @@ impl<'w> Parser<'w> {
     fn parse_expr_list(&mut self) -> Result<NodeId> {
         let range = parse_while!(
             self,
-            self.token_isnt(TokenTag::Newline) && self.token_isnt(TokenTag::Semicolon),
+            self.token_isnt(TokenTag::Newline) && !self.token_is(TokenTag::Semicolon),
             {
                 let expr = self.parse_expr()?;
                 // println!("{:?}", format!("{}", TreeNode(&self.tree, expr)));
@@ -691,6 +692,9 @@ impl<'w> Parser<'w> {
                 expr
             }
         );
+        if range.is_empty() {
+            return Ok(0);
+        }
         let first = self.tree.node_index(range.start);
         let first_identifer = self.tree.node(first);
         self.add_node(
@@ -792,16 +796,8 @@ impl<'w> Parser<'w> {
             TokenTag::If => self.parse_stmt_if(),
             TokenTag::Return => {
                 let token = self.shift_token();
-                let range = parse_while!(
-                    self,
-                    self.token_isnt(TokenTag::Newline) && !self.token_is(TokenTag::Semicolon),
-                    {
-                        let expr = self.parse_expr()?;
-                        self.match_token(TokenTag::Comma);
-                        expr
-                    }
-                );
-                let node = self.add_node(Tag::Return, token, range.start, range.end);
+                let expr_list = self.parse_expr_list()?;
+                let node = self.add_node(Tag::Return, token, expr_list, 0);
                 self.expect_tokens(&[TokenTag::Newline, TokenTag::Semicolon])?;
                 node
             }
@@ -1382,7 +1378,7 @@ impl Tree {
         let node_name = self.name(id);
         let module_token_id = self.token_source(node.token).1;
         if let Some(module) = self.token_module(module_token_id) {
-            if module.name == "GLFW" || module.name.is_empty() {
+            if module.name == "GLFW" || module.name.is_empty() || module.name.starts_with('<') {
                 return node_name.to_string();
             }
             format!("{}.{}", &module.name, node_name)
@@ -1432,7 +1428,13 @@ impl Tree {
             Tag::Access => node.token as i32 + 1,
             Tag::Field => node.token as i32 - 1,
             Tag::FunctionDecl => node.token as i32 - 1,
-            Tag::Module => node.token as i32 + 1,
+            Tag::Module => {
+                if let Some(module) = self.token_module(node.token) {
+                    return &module.name;
+                } else {
+                    return "";
+                }
+            }
             Tag::Struct => node.token as i32 - 2,
             Tag::VariableDecl => node.token as i32 - 1,
             _ if node.token == 0 => return "",
@@ -1463,7 +1465,7 @@ impl Tree {
 
     pub fn token_module(&self, token_id: TokenId) -> Option<&Module> {
         if token_id == 0 {
-            return None;
+            return self.modules.first();
         }
         // Gets the index of the first element of the second partition.
         // This is the first module where m.first_token_id >= token_id
@@ -1542,13 +1544,13 @@ impl Tree {
 
         match tag {
             // Multiple children, multiple lines.
-            Tag::Block
-            | Tag::Expressions
-            | Tag::IfElse
-            | Tag::Module
-            | Tag::Parameters
-            | Tag::Return
-            | Tag::TypeParameters => {
+            Tag::Module => {
+                write!(f, " \"{}\"", self.name(id))?;
+                for i in self.range(node) {
+                    self.pretty_print_node(f, self.node_index(i), indentation, include_ids)?;
+                }
+            }
+            Tag::Block | Tag::Expressions | Tag::IfElse | Tag::Parameters | Tag::TypeParameters => {
                 for i in self.range(node) {
                     self.pretty_print_node(f, self.node_index(i), indentation, include_ids)?;
                 }
@@ -1623,7 +1625,7 @@ impl Tree {
                 write!(f, ")")?;
             }
             // Multiple children, single line.
-            Tag::Return | Tag::Type | Tag::TypeParameters => {
+            Tag::Type | Tag::TypeParameters => {
                 write!(f, "({:?}", tag)?;
                 for i in node.lhs..node.rhs {
                     write!(f, " ")?;

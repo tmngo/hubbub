@@ -542,12 +542,18 @@ impl State {
                 }
             }
             Tag::Return => {
-                let mut return_values = Vec::new();
-                for i in node.lhs..node.rhs {
-                    let ni = data.node_index(i);
-                    let val = self.compile_expr_value(data, c, ni);
-                    return_values.push(val);
-                }
+                let return_values = if node.lhs == 0 {
+                    Vec::new()
+                } else {
+                    let expressions = data.tree.node(node.lhs);
+                    data.tree
+                        .range(expressions)
+                        .map(|i| {
+                            let ni = data.node_index(i);
+                            self.compile_expr_value(data, c, ni)
+                        })
+                        .collect()
+                };
                 c.b.ins().return_(&return_values[..]);
                 self.filled_blocks.insert(c.b.current_block().unwrap());
             }

@@ -44,7 +44,7 @@ pub fn test(
             get_module_dir().join("Prelude.hb"),
         )
     }
-    parser.add_module(parse::ModuleKind::Entry, "".to_string(), None, path);
+    parser.add_module(parse::ModuleKind::Entry, "<main>".to_string(), None, path);
     parser.parse();
     let mut tree = parser.tree();
     if workspace.has_errors() {

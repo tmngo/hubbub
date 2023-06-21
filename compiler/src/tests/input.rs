@@ -1,6 +1,6 @@
 #[cfg(test)]
 pub const STRUCTS_TREE: &str = r#"
-Module
+Module "<main>"
   Struct
     Field
       Identifier "x"
@@ -42,19 +42,20 @@ Module
           Identifier "y"
         IntegerLiteral "4"
       Return
-        Add
-          Access
+        Expressions
+          Add
             Access
-              Identifier "segment"
-              Identifier "a"
-            Identifier "x"
-          Access
-            Identifier "point"
-            Identifier "y""#;
+              Access
+                Identifier "segment"
+                Identifier "a"
+              Identifier "x"
+            Access
+              Identifier "point"
+              Identifier "y""#;
 
 #[cfg(test)]
 pub const FIBONACCI_TREE: &str = r#"
-Module
+Module "<main>"
   FunctionDecl
     Prototype
       Parameters
@@ -70,21 +71,23 @@ Module
           IntegerLiteral "2"
         Block
           Return
-            Identifier "n"
+            Expressions
+              Identifier "n"
       Return
-        Add
-          Call
-            Identifier "fib"
-            Expressions
-              Sub
-                Identifier "n"
-                IntegerLiteral "1"
-          Call
-            Identifier "fib"
-            Expressions
-              Sub
-                Identifier "n"
-                IntegerLiteral "2"
+        Expressions
+          Add
+            Call
+              Identifier "fib"
+              Expressions
+                Sub
+                  Identifier "n"
+                  IntegerLiteral "1"
+            Call
+              Identifier "fib"
+              Expressions
+                Sub
+                  Identifier "n"
+                  IntegerLiteral "2"
   FunctionDecl
     Prototype
       Parameters
@@ -100,4 +103,5 @@ Module
             Expressions
               IntegerLiteral "7"
       Return
-        Identifier "x""#;
+        Expressions
+          Identifier "x""#;

@@ -439,7 +439,7 @@ impl<'a> Analyzer<'a> {
                 self.resolve_range(node)?;
                 self.exit_scope();
             }
-            Tag::Expressions | Tag::IfElse | Tag::Return => {
+            Tag::Expressions | Tag::IfElse => {
                 self.resolve_range(node)?;
             }
             Tag::Field => {

@@ -39,13 +39,13 @@ fn main() {
     let mut parser = parse::Parser::new(&mut workspace);
     parser.add_module(
         parse::ModuleKind::Prelude,
-        "".to_string(),
+        "<prelude>".to_string(),
         None,
         get_module_dir().join("Prelude.hb"),
     );
     parser.add_module(
         parse::ModuleKind::Entry,
-        "".to_string(),
+        "<main>".to_string(),
         None,
         src_filename.into(),
     );

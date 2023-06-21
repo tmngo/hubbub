@@ -16,7 +16,12 @@ pub enum Test {
 pub fn test_parse(test: Test, source: &str, expected: &str) {
     let mut workspace = Workspace::new();
     let mut parser = Parser::new(&mut workspace);
-    parser.add_module_from_source(ModuleKind::Entry, "".to_string(), None, source.to_string());
+    parser.add_module_from_source(
+        ModuleKind::Entry,
+        "<main>".to_string(),
+        None,
+        source.to_string(),
+    );
 
     match test {
         Test::File => {
@@ -93,7 +98,7 @@ f :: (a: Int, b: Int) -> Int
 end
         ",
         r#"
-Module
+Module "<main>"
   FunctionDecl
     Prototype
       Parameters
@@ -116,7 +121,8 @@ Module
               Identifier "a"
               Identifier "b"
       Return
-        Identifier "c""#,
+        Expressions
+          Identifier "c""#,
     );
 }
 
@@ -137,7 +143,7 @@ end // End of line comment.
 // Comment 6.
 ",
         r#"
-Module
+Module "<main>"
   FunctionDecl
     Prototype
       Parameters
@@ -150,7 +156,8 @@ Module
         Expressions
           IntegerLiteral "3"
       Return
-        Identifier "x""#,
+        Expressions
+          Identifier "x""#,
     );
 }
 
@@ -290,7 +297,7 @@ func :: (a: Int64, b: Pointer{Int64}) -> (Int64, Array{Int64})
     return 0
 end",
         r#"
-Module
+Module "<main>"
   FunctionDecl
     Prototype
       Parameters
@@ -317,7 +324,8 @@ Module
           Type "Array"
             Identifier "Int64"
       Return
-        IntegerLiteral "0""#,
+        Expressions
+          IntegerLiteral "0""#,
     )
 }
 
@@ -347,7 +355,7 @@ main :: () -> Int
 end\
       ",
         r#"
-Module
+Module "<main>"
   Import
     Identifier "Math"
     StringLiteral ""Math""
@@ -368,8 +376,9 @@ Module
             Expressions
               IntegerLiteral "3"
       Return
-        IntegerLiteral "0"
-Module
+        Expressions
+          IntegerLiteral "0"
+Module "Math"
   FunctionDecl
     Prototype
       Parameters
@@ -380,11 +389,12 @@ Module
         Identifier "Int"
     Block
       Return
-        Mul
+        Expressions
           Mul
-            Identifier "a"
-            Identifier "a"
-          Identifier "a""#,
+            Mul
+              Identifier "a"
+              Identifier "a"
+            Identifier "a""#,
     )
 }
 
@@ -401,7 +411,7 @@ main :: ()
     return 0
 end",
         r#"
-Module
+Module "<main>"
   FunctionDecl
     Prototype
       Parameters
@@ -427,7 +437,8 @@ Module
         Identifier "a"
         IntegerLiteral "0"
       Return
-        IntegerLiteral "0""#,
+        Expressions
+          IntegerLiteral "0""#,
     );
 }
 
@@ -446,7 +457,7 @@ main :: () -> Int64
 end
     ",
         r#"
-Module
+Module "<main>"
   FunctionDecl
     Prototype
       Parameters
@@ -473,7 +484,8 @@ Module
               Identifier "k"
               IntegerLiteral "1"
       Return
-        Identifier "k""#,
+        Expressions
+          Identifier "k""#,
     )
 }
 
@@ -493,7 +505,7 @@ Vector3 :: struct
     z: Float
 end",
         r#"
-Module
+Module "<main>"
   Struct
     Field
       Identifier "x"
@@ -603,7 +615,7 @@ equals :: {T} (a: T, b: T) -> Int
 end
     ",
         r#"
-Module
+Module "<main>"
   FunctionDecl
     Prototype
       TypeParameters
@@ -625,10 +637,12 @@ Module
             Identifier "b"
           Block
             Return
-              IntegerLiteral "1"
+              Expressions
+                IntegerLiteral "1"
         If
           Block
             Return
-              IntegerLiteral "0""#,
+              Expressions
+                IntegerLiteral "0""#,
     )
 }
