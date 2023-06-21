@@ -1,6 +1,6 @@
 use crate::{
     analyze::Analyzer,
-    link::{get_module_dir, link, set_default_absolute_module_path},
+    link::{get_module_dir, link},
     parse::{self, Parser},
     tests::input::*,
     translate::{cranelift::Generator, input::Input, llvm},
@@ -27,8 +27,9 @@ pub fn test(
     expected_definitions: usize,
     expected_exit_code: i64,
 ) {
-    set_default_absolute_module_path();
-    let path = Path::new("../examples/tests/")
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let path = Path::new(&manifest_dir)
+        .join("../examples/tests/")
         .join(filename)
         .with_extension("hb");
 
@@ -137,7 +138,7 @@ pub fn test_backend(
 
             let result = generator.compile_nodes(obj_path);
             assert!(
-                result.contains(&expected_exit_code),
+                result.is_some_and(|x| x == expected_exit_code),
                 "expected main() to return {:?}, got {:?}",
                 expected_exit_code,
                 result.expect("main() returned nothing")
@@ -158,7 +159,7 @@ pub fn test_backend(
             .expect("failed to execute");
         let exit_code = output.status.code();
         assert!(
-            exit_code.contains(&(expected_exit_code as i32)),
+            exit_code.is_some_and(|x| x == expected_exit_code as i32),
             "expected main() to return {:?}, got {:?}",
             expected_exit_code,
             exit_code.expect("main() returned nothing")

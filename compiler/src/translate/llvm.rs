@@ -21,6 +21,7 @@ use inkwell::{
 };
 use std::{collections::HashMap, path::Path};
 
+#[allow(dead_code)]
 struct Generator<'ctx> {
     context: &'ctx Context,
     module: Module<'ctx>,
@@ -926,7 +927,7 @@ impl<'ctx> Generator<'ctx> {
         let token_str = data.tree.node_lexeme(node_id);
         // dbg!(token_str);
         let value = token_str.parse::<i64>().unwrap();
-        let typ = &data.types[type_id as usize];
+        let typ = &data.types[type_id];
         let llvm_type = llvm_type(self.context, data, type_id);
         llvm_type
             .into_int_type()
@@ -1018,12 +1019,12 @@ pub fn llvm_type<'ctx>(context: &'ctx Context, data: &Data, type_id: usize) -> B
 #[derive(Copy, Clone, Debug)]
 pub struct Location<'ctx> {
     base: PointerValue<'ctx>,
-    offset: i32,
+    _offset: i32,
 }
 
 impl<'ctx> Location<'ctx> {
-    fn new(base: PointerValue<'ctx>, offset: i32) -> Self {
-        Self { base, offset }
+    fn new(base: PointerValue<'ctx>, _offset: i32) -> Self {
+        Self { base, _offset }
     }
     // fn offset(self, extra_offset: i32) -> Self {
     //     Location {

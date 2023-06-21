@@ -1058,7 +1058,7 @@ impl State {
         let mut offset = 0;
         for i in (0..indices.len()).rev() {
             let layout = &data.layouts[type_ids[i]];
-            offset += layout.shape.offset(indices[i]) as i32;
+            offset += layout.shape.offset(indices[i]);
         }
 
         let mut location = self.locate_variable(data, parent_id);
@@ -1127,6 +1127,7 @@ pub struct Location {
     offset: i32,
 }
 
+#[allow(dead_code)]
 #[derive(Copy, Clone, Debug)]
 enum LocationBase {
     Pointer(Value),

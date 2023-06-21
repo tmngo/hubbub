@@ -178,6 +178,7 @@ impl<'a> Tokenizer<'a> {
     }
 
     ///
+    #[allow(dead_code)]
     pub fn tokenize(&mut self) -> Vec<Token> {
         let mut tokens: Vec<Token> = Vec::new();
         loop {
@@ -446,6 +447,7 @@ impl<'a> Tokenizer<'a> {
     }
 }
 
+#[allow(dead_code)]
 pub fn print(source: &str, tokens: &[Token]) {
     for (i, token) in tokens.iter().enumerate() {
         println!(

@@ -1,8 +1,7 @@
 #![feature(map_try_insert)]
-#![feature(option_result_contains)]
 
 use crate::{
-    link::{get_module_dir, link, set_default_absolute_module_path},
+    link::{get_module_dir, link},
     workspace::Workspace,
 };
 use std::{collections::HashSet, env, path::Path, time::Instant};
@@ -21,11 +20,11 @@ mod utils;
 mod workspace;
 
 fn main() {
-    set_default_absolute_module_path();
     let args: Vec<String> = env::args().collect();
     let flags: HashSet<&str> = HashSet::from_iter(args.iter().skip(2).map(|s| s.as_str()));
     if args.len() == 1 {
         println!("USAGE: hubbub.exe file");
+        println!("Module directory: {}", get_module_dir().display());
         return;
     }
     let filename = &args[1];

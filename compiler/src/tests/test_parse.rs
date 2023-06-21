@@ -1,8 +1,11 @@
 use crate::{
-    link::set_default_absolute_module_path,
-    parse::{ModuleKind, Parser},
+    analyze::Analyzer,
+    parse::{ModuleKind, NodeId, Parser},
+    typecheck::Typechecker,
+    types::Type,
     workspace::Workspace,
 };
+use std::{collections::HashMap, fmt::Write};
 
 pub enum Test {
     File,
@@ -11,7 +14,6 @@ pub enum Test {
 }
 
 pub fn test_parse(test: Test, source: &str, expected: &str) {
-    set_default_absolute_module_path();
     let mut workspace = Workspace::new();
     let mut parser = Parser::new(&mut workspace);
     parser.add_module_from_source(ModuleKind::Entry, "".to_string(), None, source.to_string());
@@ -35,6 +37,49 @@ pub fn test_parse(test: Test, source: &str, expected: &str) {
         "expected:\n{}\n\ngot:\n{}\n",
         expected, &result
     );
+}
+
+pub fn check_types(source: &str, expected: HashMap<NodeId, Type>) {
+    let mut workspace = Workspace::new();
+
+    let mut parser = Parser::new(&mut workspace);
+    parser.add_module_from_source(ModuleKind::Entry, "".to_string(), None, source.to_string());
+    parser.parse();
+    let mut tree = parser.tree();
+    if workspace.has_errors() {
+        workspace.print_errors();
+        panic!("Syntax error(s)")
+    }
+
+    let mut analyzer = Analyzer::new(&mut workspace, &tree);
+    analyzer.resolve().ok();
+    let mut definitions = analyzer.definitions;
+    let overload_sets = analyzer.overload_sets;
+    if workspace.has_errors() {
+        workspace.print_errors();
+        panic!("Name resolution error(s)")
+    }
+
+    let mut typechecker =
+        Typechecker::new(&mut workspace, &mut tree, &mut definitions, &overload_sets);
+    typechecker.typecheck();
+    typechecker.print();
+    let (types, _) = typechecker.results();
+    for (node_id, ty) in &expected {
+        let type_id = tree.node(*node_id).ty;
+        assert_eq!(
+            *ty, types[type_id],
+            "expected:\n{:?}\n\ngot:\n{:?}\n",
+            *ty, types[type_id]
+        );
+    }
+    let mut type_output = String::new();
+    write!(type_output, "{:#?}", tree).ok();
+    println!("{}", type_output);
+    if workspace.has_errors() {
+        workspace.print_errors();
+        panic!("Type error(s)")
+    }
 }
 
 #[test]

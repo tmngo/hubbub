@@ -285,7 +285,7 @@ pub enum ModuleKind {
 enum Associativity {
     Left,
     None,
-    Right,
+    _Right,
 }
 
 #[derive(Copy, Clone)]
@@ -495,7 +495,8 @@ impl<'w> Parser<'w> {
         alias: Option<String>,
         path: PathBuf,
     ) {
-        let source = std::fs::read_to_string(&path).unwrap();
+        let source = std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("{}: {}", err, path.display()));
         self.tree.modules.push(Module {
             kind,
             name: module_name,
@@ -511,6 +512,7 @@ impl<'w> Parser<'w> {
         );
     }
 
+    #[allow(dead_code)]
     pub fn add_module_from_source(
         &mut self,
         kind: ModuleKind,
@@ -970,7 +972,7 @@ impl<'w> Parser<'w> {
             //     _ => {}
             // }
             // Recursively parse the right-hand side.
-            let right_precedence = if let Associativity::Right = op.associativity {
+            let right_precedence = if let Associativity::_Right = op.associativity {
                 op.precedence - 1
             } else {
                 op.precedence + 1

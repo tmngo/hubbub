@@ -1,5 +1,4 @@
 use crate::workspace::Workspace;
-use std::io::{self, Write};
 use std::{env, path, process::Command};
 use target_lexicon::Triple;
 
@@ -33,6 +32,7 @@ pub fn link(workspace: &Workspace, object_filename: &str, output_filename: &str,
         .into_string()
         .unwrap();
 
+    // rustflags = ["-C", "target-feature=+crt-static", "--print=native-static-libs"]
     let static_library_names = [
         "advapi32",
         "bcrypt",
@@ -40,6 +40,7 @@ pub fn link(workspace: &Workspace, object_filename: &str, output_filename: &str,
         "userenv",
         "ws2_32",
         "msvcrt",
+        "ntdll",
         "legacy_stdio_definitions",
         "opengl32",
     ];
@@ -93,12 +94,13 @@ pub fn link(workspace: &Workspace, object_filename: &str, output_filename: &str,
 
     let output = command.output().expect("failed to link");
     println!("Status:  {}", output.status);
-    io::stdout().write_all(&output.stdout).unwrap();
-    io::stderr().write_all(&output.stderr).unwrap();
+    println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+    println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
     assert!(output.status.success());
 }
 
 // #[cfg(not(windows))]
+#[allow(dead_code)]
 pub fn link_gcc(object_filename: &str, output_filename: &str) {
     let mut command = Command::new("gcc");
     command.args([
@@ -113,26 +115,27 @@ pub fn link_gcc(object_filename: &str, output_filename: &str) {
 
     let output = command.output().expect("failed to link");
     println!("Status:  {}", output.status);
-    io::stdout().write_all(&output.stdout).unwrap();
-    io::stderr().write_all(&output.stderr).unwrap();
+    println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+    println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
     assert!(output.status.success());
 }
 
-pub fn set_default_absolute_module_path() {
-    let manifest_dir = env::var("CARGO_MANIFEST_DIR")
-        .unwrap_or_else(|_| "C:/Users/Tim/Projects/hubbub/compiler".to_string());
-    let modules_path = path::Path::new(&manifest_dir).with_file_name("modules");
-    env::set_var("ABSOLUTE_MODULE_PATH", modules_path);
+#[cfg(test)]
+/// Look for the module directory relative to the cargo manifest.
+pub fn get_module_dir() -> path::PathBuf {
+    if let Ok(manifest_dir) = env::var("CARGO_MANIFEST_DIR") {
+        path::Path::new(&manifest_dir).with_file_name("modules")
+    } else {
+        panic!("Failed to get test module directory!")
+    }
 }
 
+#[cfg(not(test))]
+/// Look for the module directory next to the compiler exe.
 pub fn get_module_dir() -> path::PathBuf {
-    if let Ok(value) = env::var("ABSOLUTE_MODULE_PATH") {
-        path::PathBuf::from(value)
-    } else {
-        env::current_exe()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("modules")
-    }
+    env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("modules")
 }
