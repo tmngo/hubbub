@@ -30,4 +30,4 @@ poll-events :: () #foreign "glfwPollEvents"
 
 gl-clear-color :: (red: f32, green: f32, blue: f32, alpha: f32) #foreign "glClearColor"
 
-gl-clear :: (mask: u32) #foreign "glClear"
+gl-clear :: (mask: i32) #foreign "glClear"

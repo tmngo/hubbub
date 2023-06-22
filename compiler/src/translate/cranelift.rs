@@ -621,7 +621,8 @@ impl State {
             Tag::Address => Val::Scalar(self.locate(data, c, node.lhs).get_addr(c)),
             Tag::Dereference => {
                 let flags = MemFlags::new();
-                let ptr_layout = data.layout(node.lhs);
+                let ptr_layout = &data.layout2(node.lhs);
+                // Load pointer
                 let ptr = self.locate(data, c, node.lhs).load_value(
                     data,
                     c,
@@ -629,6 +630,7 @@ impl State {
                     data.typ(node.lhs),
                     ptr_layout,
                 );
+                // Load value
                 Location::pointer(ptr, 0).to_val(data, c, node_id)
             }
             Tag::Expressions => {
@@ -766,7 +768,7 @@ impl State {
             // @a = b
             Tag::Dereference => {
                 // Layout of referenced variable
-                let ptr_layout = data.layout(node.lhs);
+                let ptr_layout = &data.layout2(node.lhs);
                 let ptr = self.locate(data, c, node.lhs).load_value(
                     data,
                     c,
@@ -843,7 +845,7 @@ impl State {
             }
             Definition::Foreign(_) => data.tree.name(callee_id).to_string(),
             Definition::Resolved(id) => data.mangle_function_declaration(*id, true, None),
-            Definition::BuiltIn(built_in_type) => {
+            Definition::BuiltInType(built_in_type) => {
                 let args = data.node(node.rhs);
                 let ni = data.node_index(args.lhs);
                 let arg = self.compile_expr_value(data, c, ni);
@@ -903,21 +905,11 @@ impl State {
             }
             _ => {
                 let t = data.type_id(node_id);
-                if let Typ::Parameter { index, .. } = &data.types[t] {
-                    let type_arguments = data
-                        .type_parameters
-                        .get(&definition.id())
-                        .unwrap()
-                        .get(&arg_type_ids)
-                        .unwrap();
-                    type_arguments[*index]
-                } else {
-                    if t > T::Void as TypeId {
-                        let ty = cl_type(data, c.ptr_type, &data.types[t]);
-                        sig.returns.push(AbiParam::new(ty));
-                    }
-                    t
+                if t > T::Void as TypeId {
+                    let ty = cl_type(data, c.ptr_type, &data.types[t]);
+                    sig.returns.push(AbiParam::new(ty));
                 }
+                t
             }
         };
 
@@ -1088,7 +1080,7 @@ impl State {
         } else {
             data.type_id(node_id)
         };
-        let size = sizeof(data.types, type_id);
+        let size = data.sizeof(type_id);
         c.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, size))
     }
 }
@@ -1116,11 +1108,12 @@ pub fn cl_type(data: &Data, ptr_type: Type, typ: &Typ) -> Type {
                 }
             }
         }
-        Typ::Parameter { index, .. } => cl_type(
+        Typ::TypeParameter { index, .. } => cl_type(
             data,
             ptr_type,
             &data.types[data.active_type_parameters.unwrap()[*index]],
         ),
+        Typ::Parameter { binding, .. } => cl_type(data, ptr_type, &data.types[*binding]),
         _ => ptr_type,
         // _ => unreachable!("Invalid type: {typ:?} is not a primitive Cranelift type."),
     }

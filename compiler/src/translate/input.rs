@@ -68,6 +68,40 @@ impl<'a> Data<'a> {
         &self.layouts[self.type_id(node_id)]
     }
 
+    pub fn layout2(&self, node_id: NodeId) -> Layout {
+        let t = self.type_id(node_id);
+        match self.typ(node_id) {
+            Typ::TypeParameter { index, .. } => {
+                let t = self.active_type_parameters.unwrap()[*index];
+                let ty = &self.types[t];
+                Layout::new(self.types, ty, self.sizeof(t))
+            }
+            _ => Layout::new(self.types, self.typ(node_id), self.sizeof(t)), // _ => self.layout(node_id).clone(), // _ => unreachable!("Invalid type: {typ:?} is not a primitive Cranelift type."),
+        }
+    }
+
+    /// Returns the size of a type in bytes.
+    pub fn sizeof(&self, t: TypeId) -> u32 {
+        match &self.types[t] {
+            Typ::Void => 0,
+            Typ::Array { typ, length, .. } => (self.sizeof(*typ) as usize * length) as u32,
+            Typ::Struct { fields, .. } => {
+                let mut size = 0;
+                for f in fields {
+                    size += self.sizeof(*f);
+                }
+                size
+            }
+            Typ::Numeric { bytes, .. } => *bytes as u32,
+            Typ::Boolean => 1,
+            Typ::TypeParameter { index, .. } => {
+                self.sizeof(self.active_type_parameters.unwrap()[*index])
+            }
+            Typ::Parameter { .. } => panic!(),
+            _ => 8,
+        }
+    }
+
     pub fn mangle_function_declaration(
         &self,
         node_id: NodeId,

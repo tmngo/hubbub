@@ -783,7 +783,7 @@ impl<'ctx> Generator<'ctx> {
                 data.mangle_function_declaration(*id, true, Some(&arg_type_ids))
             }
             Definition::Resolved(id) => data.mangle_function_declaration(*id, true, None),
-            Definition::BuiltIn(built_in_type) => {
+            Definition::BuiltInType(built_in_type) => {
                 let node = data.tree.node(node_id);
                 let args = data.node(node.rhs);
                 let ni = data.node_index(args.lhs);
@@ -1005,9 +1005,10 @@ pub fn llvm_type<'ctx>(context: &'ctx Context, data: &Data, type_id: usize) -> B
                 &types[type_id]
             ),
         },
-        Typ::Parameter { index, .. } => {
+        Typ::TypeParameter { index, .. } => {
             llvm_type(context, data, data.active_type_parameters.unwrap()[*index])
         }
+        Typ::Parameter { binding, .. } => llvm_type(context, data, *binding),
         _ => unreachable!(
             "Invalid type: {:?} is not a valid LLVM type.",
             &types[type_id]

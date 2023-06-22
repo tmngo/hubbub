@@ -29,7 +29,7 @@ pub struct Analyzer<'a> {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Definition {
-    BuiltIn(T),
+    BuiltInType(T),
     BuiltInFunction(BuiltInFunction),
     User(NodeId),
     Foreign(u32),
@@ -41,7 +41,7 @@ pub enum Definition {
 impl Definition {
     pub fn id(&self) -> NodeId {
         match self {
-            Definition::BuiltIn(id) => *id as NodeId,
+            Definition::BuiltInType(id) => *id as NodeId,
             Definition::BuiltInFunction(id) => *id as NodeId,
             Definition::User(id)
             | Definition::Foreign(id)
@@ -114,23 +114,23 @@ pub trait Resolve {
 impl<'a> Analyzer<'a> {
     pub fn new(workspace: &'a mut Workspace, tree: &'a Tree) -> Self {
         let builtins = HashMap::from([
-            ("Void", Definition::BuiltIn(T::Void)),
-            ("Bool", Definition::BuiltIn(T::Boolean)),
-            ("i8", Definition::BuiltIn(T::I8)),
-            ("i16", Definition::BuiltIn(T::I16)),
-            ("i32", Definition::BuiltIn(T::I32)),
-            ("i64", Definition::BuiltIn(T::I64)),
-            ("Int", Definition::BuiltIn(T::I64)),
-            ("u8", Definition::BuiltIn(T::U8)),
-            ("u16", Definition::BuiltIn(T::U16)),
-            ("u32", Definition::BuiltIn(T::U32)),
-            ("u64", Definition::BuiltIn(T::U64)),
-            ("f32", Definition::BuiltIn(T::F32)),
-            ("f64", Definition::BuiltIn(T::F64)),
-            ("Float", Definition::BuiltIn(T::F32)),
+            ("Void", Definition::BuiltInType(T::Void)),
+            ("Bool", Definition::BuiltInType(T::Boolean)),
+            ("i8", Definition::BuiltInType(T::I8)),
+            ("i16", Definition::BuiltInType(T::I16)),
+            ("i32", Definition::BuiltInType(T::I32)),
+            ("i64", Definition::BuiltInType(T::I64)),
+            ("Int", Definition::BuiltInType(T::I64)),
+            ("u8", Definition::BuiltInType(T::U8)),
+            ("u16", Definition::BuiltInType(T::U16)),
+            ("u32", Definition::BuiltInType(T::U32)),
+            ("u64", Definition::BuiltInType(T::U64)),
+            ("f32", Definition::BuiltInType(T::F32)),
+            ("f64", Definition::BuiltInType(T::F64)),
+            ("Float", Definition::BuiltInType(T::F32)),
             // ("String", Definition::BuiltIn(T::String)),
-            ("Pointer", Definition::BuiltIn(T::Pointer)),
-            ("Array", Definition::BuiltIn(T::Array)),
+            ("Pointer", Definition::BuiltInType(T::Pointer)),
+            ("Array", Definition::BuiltInType(T::Array)),
             ("*", Definition::BuiltInFunction(BuiltInFunction::Mul)),
             (
                 "sizeof",
@@ -542,7 +542,7 @@ impl<'a> Analyzer<'a> {
         match definition {
             Definition::User(_)
             | Definition::Overload(_)
-            | Definition::BuiltIn(_)
+            | Definition::BuiltInType(_)
             | Definition::BuiltInFunction(_)
             | Definition::Resolved(_) => {
                 self.definitions.insert(node_id, definition);
@@ -638,7 +638,7 @@ impl<'a> Analyzer<'a> {
             if scope_index == 0 {
                 if let Some(&definition) = self.builtins.get(name) {
                     match definition {
-                        Definition::BuiltIn(_) => return definition,
+                        Definition::BuiltInType(_) => return definition,
                         Definition::BuiltInFunction(_) => overload_set.push(definition),
                         _ => unreachable!(),
                     }

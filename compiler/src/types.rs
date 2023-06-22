@@ -1,3 +1,8 @@
+use std::rc::Rc;
+
+pub type TypeId = usize;
+pub type TypeIds = Rc<[TypeId]>;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     None,
@@ -7,15 +12,16 @@ pub enum Type {
     Boolean,
     // IntegerLiteral,
     // String,
-    Type,
-
+    Type {
+        ty: TypeId,
+    },
     Array {
         typ: TypeId,
         length: usize,
         is_generic: bool,
     },
     Function {
-        parameters: Vec<TypeId>,
+        parameters: TypeIds,
         returns: Vec<TypeId>,
     },
     Pointer {
@@ -33,11 +39,21 @@ pub enum Type {
         index: usize,
         binding: TypeId,
     },
+    TypeParameter {
+        index: usize,
+        binding: TypeId,
+    },
     Numeric {
         literal: bool,
         floating: bool,
         signed: bool,
         bytes: u8,
+    },
+    NumericLiteral {
+        floating: bool,
+        signed: bool,
+        min: TypeId,
+        max: TypeId,
     },
 }
 
@@ -50,6 +66,24 @@ pub fn integer_type(literal: bool, signed: bool, bytes: u8) -> Type {
     }
 }
 
+pub fn integer_literal_type(x: i64) -> Type {
+    let min = if (-128..=127).contains(&x) {
+        T::I8
+    } else if (-32768..=32767).contains(&x) {
+        T::I16
+    } else if (-2147483648..=2147483647).contains(&x) {
+        T::I32
+    } else {
+        T::I64
+    } as TypeId;
+    Type::NumericLiteral {
+        floating: false,
+        signed: true,
+        min,
+        max: T::I64 as TypeId,
+    }
+}
+
 pub fn float_type(literal: bool, bytes: u8) -> Type {
     Type::Numeric {
         literal,
@@ -59,7 +93,7 @@ pub fn float_type(literal: bool, bytes: u8) -> Type {
     }
 }
 impl Type {
-    pub fn parameters(&self) -> &Vec<TypeId> {
+    pub fn parameters(&self) -> &TypeIds {
         if let Type::Function { parameters, .. } = self {
             parameters
         } else {
@@ -79,16 +113,24 @@ impl Type {
             _ => unreachable!("is_signed is only valid for integer types: got {:?}", self),
         }
     }
-    pub fn fields(&self) -> &Vec<TypeId> {
-        if let Type::Tuple { fields } = self {
-            fields
+    pub fn min_max_mut(&mut self) -> (&mut TypeId, &mut TypeId) {
+        if let Type::NumericLiteral {
+            ref mut min,
+            ref mut max,
+            ..
+        } = self
+        {
+            (min, max)
         } else {
             unreachable!()
         }
     }
-    pub fn binding(&self) -> TypeId {
-        if let Type::Parameter { binding, .. } = self {
-            *binding
+    pub fn binding_mut(&mut self) -> &mut TypeId {
+        if let Type::Parameter {
+            ref mut binding, ..
+        } = self
+        {
+            binding
         } else {
             unreachable!()
         }
@@ -97,13 +139,11 @@ impl Type {
         match self {
             Type::Array { typ, .. } => *typ,
             Type::Pointer { typ, .. } => *typ,
+            Type::Type { ty, .. } => *ty,
             _ => unreachable!("can only get element types for pointers and arrays"),
         }
     }
 }
-
-pub type TypeId = usize;
-pub type TypeRef = Option<TypeId>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum T {

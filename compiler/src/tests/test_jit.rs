@@ -209,18 +209,18 @@ fn negation() {
 fn overload() {
     test("overload", Test::AotAndJit, "", 0, 10);
 }
-// #[test]
-// fn parapoly() {
-//     test("parapoly", Test::AotAndJit, "", 0, 0);
-// }
+#[test]
+fn parapoly() {
+    test("parapoly", Test::AotAndJit, "", 0, 0);
+}
 #[test]
 fn pointer() {
     test("pointer", Test::AotAndJit, "", 0, 158);
 }
-// #[test]
-// fn polystructs() {
-//     test("polystructs", Test::AotAndJit, "", 0, 12);
-// }
+#[test]
+fn polystructs() {
+    test("polystructs", Test::AotAndJit, "", 0, 12);
+}
 #[test]
 fn sharedlib() {
     test("sharedlib", Test::AotAndJit, "", 0, 1);
