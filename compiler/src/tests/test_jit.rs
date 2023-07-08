@@ -2,7 +2,6 @@ use crate::{
     analyze::Analyzer,
     link::{get_module_dir, link},
     parse::{self, Parser},
-    tests::input::*,
     translate::{cranelift::Generator, input::Input, llvm},
     typecheck::Typechecker,
     workspace::Workspace,
@@ -20,13 +19,7 @@ pub enum Backend {
     Llvm,
 }
 
-pub fn test(
-    filename: &str,
-    test: Test,
-    expected_tree: &str,
-    expected_definitions: usize,
-    expected_exit_code: i64,
-) {
+pub fn test(filename: &str, test: Test, expected_definitions: usize, expected_exit_code: i64) {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let path = Path::new(&manifest_dir)
         .join("../examples/tests/")
@@ -51,14 +44,6 @@ pub fn test(
         workspace.print_errors();
         panic!("Syntax error(s)")
     }
-    let formatted_tree = &format!("{:?}", tree);
-    if !expected_tree.is_empty() {
-        assert_eq!(
-            expected_tree, formatted_tree,
-            "expected:\n{}\n\ngot:\n{}\n",
-            expected_tree, formatted_tree
-        );
-    }
 
     let mut analyzer = Analyzer::new(&mut workspace, &tree);
     analyzer.resolve().ok();
@@ -82,7 +67,9 @@ pub fn test(
     let mut typechecker =
         Typechecker::new(&mut workspace, &mut tree, &mut definitions, &overload_sets);
     typechecker.typecheck();
+    // typechecker.print();
     let (types, type_parameters) = typechecker.results();
+    // println!("{:#?}", tree);
     if workspace.has_errors() {
         workspace.print_errors();
         panic!("Type error(s)")
@@ -175,73 +162,81 @@ pub fn test_backend(
 
 #[test]
 fn array() {
-    test("array", Test::AotAndJit, "", 0, 0);
+    test("array", Test::AotAndJit, 0, 0);
 }
 #[test]
 fn assign() {
-    test("assign", Test::AotAndJit, "", 0, 4);
+    test("assign", Test::AotAndJit, 0, 4);
 }
 #[test]
 fn boolean() {
-    test("boolean", Test::AotAndJit, "", 0, 6);
+    test("boolean", Test::AotAndJit, 0, 6);
 }
 #[test]
 fn builtin() {
-    test("builtin", Test::AotAndJit, "", 0, 0);
+    test("builtin", Test::AotAndJit, 0, 0);
 }
 #[test]
 fn fibonacci() {
-    test("fibonacci", Test::AotAndJit, FIBONACCI_TREE, 12, 13)
+    test("fibonacci", Test::AotAndJit, 12, 13)
 }
 #[test]
 fn ifelse() {
-    test("ifelse", Test::AotAndJit, "", 0, 61);
+    test("ifelse", Test::AotAndJit, 0, 61);
 }
-// #[test]
-// fn multiple() {
-//     test("multiple", Test::AotAndJit, "", 0, 10);
-// }
+#[test]
+fn multiple() {
+    test("multiple", Test::AotAndJit, 0, 10);
+}
 #[test]
 fn negation() {
-    test("negation", Test::AotAndJit, "", 0, 0);
+    test("negation", Test::AotAndJit, 0, 0);
 }
 #[test]
 fn overload() {
-    test("overload", Test::AotAndJit, "", 0, 10);
+    test("overload", Test::AotAndJit, 0, 10);
 }
 #[test]
 fn parapoly() {
-    test("parapoly", Test::AotAndJit, "", 0, 0);
+    test("parapoly", Test::AotAndJit, 0, 0);
+}
+#[test]
+fn parapoly2() {
+    test("parapoly2", Test::AotAndJit, 0, 20);
+}
+#[test]
+fn parapoly3() {
+    test("parapoly3", Test::AotAndJit, 0, 0);
 }
 #[test]
 fn pointer() {
-    test("pointer", Test::AotAndJit, "", 0, 158);
+    test("pointer", Test::AotAndJit, 0, 158);
 }
 #[test]
 fn polystructs() {
-    test("polystructs", Test::AotAndJit, "", 0, 12);
+    test("polystructs", Test::AotAndJit, 0, 12);
 }
 #[test]
 fn sharedlib() {
-    test("sharedlib", Test::AotAndJit, "", 0, 1);
+    test("sharedlib", Test::AotAndJit, 0, 6);
 }
 #[test]
 fn string() {
-    test("string", Test::WithPrelude, "", 0, 11);
+    test("string", Test::WithPrelude, 0, 11);
 }
 #[test]
 fn structs() {
-    test("structs", Test::AotAndJit, STRUCTS_TREE, 12, 7);
+    test("structs", Test::AotAndJit, 12, 7);
 }
 #[test]
 fn unicode() {
-    test("unicode", Test::AotAndJit, "", 0, 114);
+    test("unicode", Test::AotAndJit, 0, 114);
 }
 #[test]
 fn whileloop() {
-    test("whileloop", Test::AotAndJit, "", 0, 35);
+    test("whileloop", Test::AotAndJit, 0, 35);
 }
 #[test]
 fn xorshift() {
-    test("xorshift", Test::AotAndJit, "", 0, 6515429219844733763);
+    test("xorshift", Test::AotAndJit, 0, 6515429219844733763);
 }

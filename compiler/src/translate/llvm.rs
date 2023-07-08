@@ -51,7 +51,8 @@ pub fn compile(input: &Input, use_jit: bool, obj_filename: &Path) {
     let layouts = input
         .types
         .iter()
-        .map(|typ| Layout::new(input.types, typ, 8))
+        .enumerate()
+        .map(|(t, _)| Layout::new(input.types, t))
         .collect();
     let data = Data::new(input, layouts);
     let target_data = execution_engine.get_target_data();
@@ -136,17 +137,21 @@ impl<'ctx> Generator<'ctx> {
                         if !self.data.type_parameters.contains_key(&ni) {
                             continue;
                         }
-                        for (arg_types, var_types) in self.data.type_parameters.get(&ni).unwrap() {
-                            self.data.active_type_parameters = Some(var_types);
-                            let name =
-                                self.data
-                                    .mangle_function_declaration(ni, true, Some(arg_types));
+                        for type_arguments in self.data.type_parameters.get(&ni).unwrap().values() {
+                            self.data.active_type_parameters.push(type_arguments);
+                            let name = self.data.mangle_function_declaration(
+                                ni,
+                                true,
+                                type_arguments,
+                                None,
+                            );
                             self.compile_function_signature(node.lhs, &name);
+                            self.data.active_type_parameters.pop();
                         }
                         continue;
                     }
                     // let is_overloaded = self.data.definitions.contains_key(&ni);
-                    let name = self.data.mangle_function_declaration(ni, true, None);
+                    let name = self.data.mangle_function_declaration(ni, true, &[], None);
                     self.compile_function_signature(node.lhs, &name);
                 };
             }
@@ -171,12 +176,16 @@ impl<'ctx> Generator<'ctx> {
                         if !self.data.type_parameters.contains_key(&ni) {
                             continue;
                         }
-                        for (arg_types, var_types) in self.data.type_parameters.get(&ni).unwrap() {
-                            self.data.active_type_parameters = Some(var_types);
-                            let name =
-                                self.data
-                                    .mangle_function_declaration(ni, true, Some(arg_types));
+                        for type_arguments in self.data.type_parameters.get(&ni).unwrap().values() {
+                            self.data.active_type_parameters.push(type_arguments);
+                            let name = self.data.mangle_function_declaration(
+                                ni,
+                                true,
+                                type_arguments,
+                                None,
+                            );
                             self.compile_function_decl(state, ni, name);
+                            self.data.active_type_parameters.pop();
                         }
                         continue;
                     }
@@ -184,7 +193,7 @@ impl<'ctx> Generator<'ctx> {
                     if node.rhs == 0 {
                         continue;
                     }
-                    let name = self.data.mangle_function_declaration(ni, true, None);
+                    let name = self.data.mangle_function_declaration(ni, true, &[], None);
                     let fn_value = self.compile_function_decl(state, ni, name);
                     let fn_name = self.data.tree.name(ni);
                     if fn_name == "main" {
@@ -428,7 +437,6 @@ impl<'ctx> Generator<'ctx> {
                 // lhs: expressions
                 // rhs: expressions
                 let identifiers = data.tree.node(node.lhs);
-                assert_eq!(identifiers.tag, Tag::Expressions);
                 let mut locs = vec![];
                 for i in data.tree.range(identifiers) {
                     let ni = data.tree.node_index(i);
@@ -443,8 +451,7 @@ impl<'ctx> Generator<'ctx> {
                 if rvalues_id == 0 {
                     return;
                 }
-                let rhs = data.tree.node(rvalues_id);
-                assert_eq!(rhs.tag, Tag::Expressions);
+                let _rhs = data.tree.node(rvalues_id);
                 for (i, value) in self.compile_exprs(state, rvalues_id).iter().enumerate() {
                     builder.build_store(locs[i].base, *value);
                 }
@@ -566,10 +573,12 @@ impl<'ctx> Generator<'ctx> {
                 match container {
                     BasicValueEnum::PointerValue(pointer) => {
                         // Automatically deref.
-                        let field_type = llvm_type(self.context, data, data.type_id(node_id));
+                        let struct_type =
+                            llvm_type(self.context, data, data.typ(node.lhs).element_type());
+                        // Returns the pointer to the struct field.
                         let gep = builder
                             .build_struct_gep(
-                                field_type.into_pointer_type(),
+                                struct_type.as_basic_type_enum(),
                                 pointer,
                                 field_index,
                                 "",
@@ -760,6 +769,14 @@ impl<'ctx> Generator<'ctx> {
         let (data, builder) = (&self.data, &self.builder);
 
         let node = data.tree.node(node_id);
+        let mut type_arguments = vec![];
+        if !binary {
+            let callee = data.node(node.lhs);
+            for i in data.tree.range(callee) {
+                let ni = data.tree.node_index(i);
+                type_arguments.push(data.type_id(ni));
+            }
+        }
         let arg_ids = if binary {
             vec![node.lhs, node.rhs]
         } else {
@@ -780,9 +797,19 @@ impl<'ctx> Generator<'ctx> {
             Definition::User(id) | Definition::Foreign(id) | Definition::Overload(id) => {
                 let arg_type_ids: Vec<TypeId> =
                     arg_ids.iter().map(|ni| data.type_id(*ni)).collect();
-                data.mangle_function_declaration(*id, true, Some(&arg_type_ids))
+                if let Some(map) = data.type_parameters.get(id) {
+                    let key = if !type_arguments.is_empty() {
+                        &type_arguments
+                    } else {
+                        &arg_type_ids
+                    };
+                    let solution = map.get(key).unwrap();
+                    data.mangle_function_declaration(*id, true, solution, None)
+                } else {
+                    data.mangle_function_declaration(*id, true, &[], Some(&arg_type_ids))
+                }
             }
-            Definition::Resolved(id) => data.mangle_function_declaration(*id, true, None),
+            Definition::Resolved(id) => data.mangle_function_declaration(*id, true, &[], None),
             Definition::BuiltInType(built_in_type) => {
                 let node = data.tree.node(node_id);
                 let args = data.node(node.rhs);
@@ -926,14 +953,10 @@ impl<'ctx> Generator<'ctx> {
         let token_str = data.tree.node_lexeme(node_id);
         // dbg!(token_str);
         let value = token_str.parse::<i64>().unwrap();
-        let typ = &data.types[type_id];
         let llvm_type = llvm_type(self.context, data, type_id);
         llvm_type
             .into_int_type()
-            .const_int(
-                if negative { -value } else { value } as u64,
-                typ.is_signed(),
-            )
+            .const_int(if negative { -value } else { value } as u64, true)
             .into()
     }
 
@@ -1005,9 +1028,18 @@ pub fn llvm_type<'ctx>(context: &'ctx Context, data: &Data, type_id: usize) -> B
                 &types[type_id]
             ),
         },
-        Typ::TypeParameter { index, .. } => {
-            llvm_type(context, data, data.active_type_parameters.unwrap()[*index])
+        Typ::Tuple { fields, .. } => {
+            let mut field_types = Vec::with_capacity(fields.len());
+            for id in fields {
+                field_types.push(llvm_type(context, data, *id))
+            }
+            context.struct_type(&field_types, false).into()
         }
+        Typ::TypeParameter { index, .. } => llvm_type(
+            context,
+            data,
+            data.active_type_parameters.last().unwrap()[*index],
+        ),
         Typ::Parameter { binding, .. } => llvm_type(context, data, *binding),
         _ => unreachable!(
             "Invalid type: {:?} is not a valid LLVM type.",

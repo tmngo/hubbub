@@ -7,13 +7,16 @@ use crate::{
     workspace::Workspace,
 };
 use codespan_reporting::diagnostic::Diagnostic;
-use cranelift::prelude::{
-    codegen::{ir::StackSlot, Context},
-    isa::{lookup, TargetFrontendConfig},
-    settings,
-    types::{F32, F64, I16, I32, I64, I8},
-    AbiParam, Block, Configurable, FunctionBuilder, FunctionBuilderContext, InstBuilder, IntCC,
-    MemFlags, Signature, StackSlotData, StackSlotKind, Type, Value, Variable,
+use cranelift::{
+    codegen::ir::ArgumentPurpose,
+    prelude::{
+        codegen::{ir::StackSlot, Context},
+        isa::{lookup, TargetFrontendConfig},
+        settings,
+        types::{F32, F64, I16, I32, I64, I8},
+        AbiParam, Block, Configurable, FunctionBuilder, FunctionBuilderContext, InstBuilder, IntCC,
+        MemFlags, Signature, StackSlotData, StackSlotKind, Type, Value, Variable,
+    },
 };
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataContext, FuncId, Linkage, Module};
@@ -123,7 +126,7 @@ impl<'a> Generator<'a> {
             .types
             .iter()
             .enumerate()
-            .map(|(i, typ)| Layout::new(input.types, typ, sizeof(input.types, i)))
+            .map(|(t, _)| Layout::new(input.types, t))
             .collect();
 
         Self {
@@ -147,18 +150,18 @@ impl<'a> Generator<'a> {
         signature: &mut Signature,
         parameters: &Node,
         returns_id: NodeId,
-        t: Type,
+        ptr_type: Type,
     ) {
         for i in parameters.lhs..parameters.rhs {
             // Tag::Field
             let ni = data.tree.node_index(i);
             let size = sizeof(data.types, data.type_id(ni));
-            let t = if size <= 8 {
-                cl_type(data, t, data.typ(ni))
+            let param = if size <= 8 {
+                AbiParam::new(cl_type(data, ptr_type, data.typ(ni)))
             } else {
-                t
+                AbiParam::special(ptr_type, ArgumentPurpose::StructArgument(size))
             };
-            signature.params.push(AbiParam::new(t));
+            signature.params.push(param);
         }
         if returns_id != 0 {
             let returns = data.node(returns_id);
@@ -167,9 +170,9 @@ impl<'a> Generator<'a> {
                 let ni = data.tree.node_index(i);
                 let size = sizeof(data.types, data.type_id(ni));
                 let t = if size <= 8 {
-                    cl_type(data, t, data.typ(ni))
+                    cl_type(data, ptr_type, data.typ(ni))
                 } else {
-                    t
+                    ptr_type
                 };
                 signature.returns.push(AbiParam::new(t));
             }
@@ -183,6 +186,7 @@ impl<'a> Generator<'a> {
         let mut fn_ids = Vec::new();
         let mut main_id = None;
 
+        // Compile function signatures.
         for i in root.lhs..root.rhs {
             let module_index = self.data.node_index(i);
             let module = self.data.node(module_index);
@@ -199,30 +203,34 @@ impl<'a> Generator<'a> {
                         if !self.data.type_parameters.contains_key(&ni) {
                             continue;
                         }
-                        for (arg_types, var_types) in self.data.type_parameters.get(&ni).unwrap() {
-                            self.data.active_type_parameters = Some(var_types);
-                            let name =
-                                self.data
-                                    .mangle_function_declaration(ni, true, Some(arg_types));
+                        for type_arguments in self.data.type_parameters.get(&ni).unwrap().values() {
+                            self.data.active_type_parameters.push(type_arguments);
+                            let name = self.data.mangle_function_declaration(
+                                ni,
+                                true,
+                                type_arguments,
+                                None,
+                            );
                             Self::compile_function_signature(
                                 &mut self.state,
                                 &self.data,
                                 ni,
                                 &name,
                             );
+                            self.data.active_type_parameters.pop();
                         }
                         continue;
                     }
                     if node.rhs == 0 {
                         // continue;
                     }
-                    self.data.active_type_parameters = None;
-                    let name = self.data.mangle_function_declaration(ni, true, None);
+                    let name = self.data.mangle_function_declaration(ni, true, &[], None);
                     Self::compile_function_signature(&mut self.state, &self.data, ni, &name);
                 };
             }
         }
 
+        // Compile function bodies.
         for i in root.lhs..root.rhs {
             let module_index = self.data.node_index(i);
             let module = self.data.node(module_index);
@@ -241,11 +249,14 @@ impl<'a> Generator<'a> {
                         if !self.data.type_parameters.contains_key(&ni) {
                             continue;
                         }
-                        for (arg_types, var_types) in self.data.type_parameters.get(&ni).unwrap() {
-                            self.data.active_type_parameters = Some(var_types);
-                            let name =
-                                self.data
-                                    .mangle_function_declaration(ni, true, Some(arg_types));
+                        for type_arguments in self.data.type_parameters.get(&ni).unwrap().values() {
+                            self.data.active_type_parameters.push(type_arguments);
+                            let name = self.data.mangle_function_declaration(
+                                ni,
+                                true,
+                                type_arguments,
+                                None,
+                            );
                             Self::compile_function_decl(
                                 &self.data,
                                 &mut self.ctx,
@@ -255,6 +266,7 @@ impl<'a> Generator<'a> {
                                 ni,
                                 name,
                             );
+                            self.data.active_type_parameters.pop();
                         }
                         continue;
                     }
@@ -262,8 +274,7 @@ impl<'a> Generator<'a> {
                     if node.rhs == 0 {
                         continue;
                     }
-                    self.data.active_type_parameters = None;
-                    let name = self.data.mangle_function_declaration(ni, true, None);
+                    let name = self.data.mangle_function_declaration(ni, true, &[], None);
                     let fn_id = Self::compile_function_decl(
                         &self.data,
                         &mut self.ctx,
@@ -621,7 +632,7 @@ impl State {
             Tag::Address => Val::Scalar(self.locate(data, c, node.lhs).get_addr(c)),
             Tag::Dereference => {
                 let flags = MemFlags::new();
-                let ptr_layout = &data.layout2(node.lhs);
+                let ptr_layout = &data.layout2(data.type_id(node_id));
                 // Load pointer
                 let ptr = self.locate(data, c, node.lhs).load_value(
                     data,
@@ -743,7 +754,7 @@ impl State {
 
                 // Build string struct on stack.
                 let length_value = c.b.ins().iconst(ty, length as i64);
-                let layout = &Layout::new_scalar(8, 0);
+                let layout = &Layout::new_scalar(8);
                 Location::stack(slot, 0).store(c, data_ptr, MemFlags::new(), layout);
                 Location::stack(slot, 8).store(c, length_value, MemFlags::new(), layout);
 
@@ -768,7 +779,7 @@ impl State {
             // @a = b
             Tag::Dereference => {
                 // Layout of referenced variable
-                let ptr_layout = &data.layout2(node.lhs);
+                let ptr_layout = &data.layout2(data.type_id(node.lhs));
                 let ptr = self.locate(data, c, node.lhs).load_value(
                     data,
                     c,
@@ -826,7 +837,19 @@ impl State {
                 .map(|i| data.node_index(i))
                 .collect()
         };
+
+        let mut type_arguments = vec![];
         let mut arg_type_ids = vec![];
+        // let mut type_arg_type_ids = vec![];
+
+        if !binary {
+            let callee = data.node(node.lhs);
+            for i in data.tree.range(callee) {
+                let ni = data.tree.node_index(i);
+                type_arguments.push(data.type_id(ni));
+            }
+        }
+
         for ni in &arg_ids {
             arg_type_ids.push(data.type_id(*ni));
         }
@@ -841,10 +864,20 @@ impl State {
             }
             Definition::User(id) | Definition::Overload(id) => {
                 // assert_eq!(&arg_type_ids, data.typ(callee_id).parameters());
-                data.mangle_function_declaration(*id, true, Some(&arg_type_ids))
+                if let Some(map) = data.type_parameters.get(id) {
+                    let key = if !type_arguments.is_empty() {
+                        &type_arguments
+                    } else {
+                        &arg_type_ids
+                    };
+                    let solution = map.get(key).unwrap();
+                    data.mangle_function_declaration(*id, true, solution, None)
+                } else {
+                    data.mangle_function_declaration(*id, true, &[], Some(&arg_type_ids))
+                }
             }
             Definition::Foreign(_) => data.tree.name(callee_id).to_string(),
-            Definition::Resolved(id) => data.mangle_function_declaration(*id, true, None),
+            Definition::Resolved(id) => data.mangle_function_declaration(*id, true, &[], None),
             Definition::BuiltInType(built_in_type) => {
                 let args = data.node(node.rhs);
                 let ni = data.node_index(args.lhs);
@@ -855,6 +888,8 @@ impl State {
                 let to_type = cl_type(data, c.ptr_type, to_typ);
                 return if to_type.bytes() < from_type.bytes() {
                     Val::Scalar(c.b.ins().ireduce(to_type, arg))
+                } else if ti == data.type_id(ni) {
+                    Val::Scalar(arg)
                 } else if to_typ.is_signed() {
                     Val::Scalar(c.b.ins().sextend(to_type, arg))
                 } else {
@@ -906,7 +941,7 @@ impl State {
             _ => {
                 let t = data.type_id(node_id);
                 if t > T::Void as TypeId {
-                    let ty = cl_type(data, c.ptr_type, &data.types[t]);
+                    let ty = cl_type_with(data, c.ptr_type, &data.types[t], Some(&&type_arguments));
                     sig.returns.push(AbiParam::new(ty));
                 }
                 t
@@ -1049,7 +1084,11 @@ impl State {
                 .expect("failed to lookup field definition") as usize;
             indices.push(field_index);
             parent_id = parent.lhs;
-            type_ids.push(data.type_id(parent_id));
+            if let Typ::Pointer { typ, .. } = data.typ(parent_id) {
+                type_ids.push(*typ)
+            } else {
+                type_ids.push(data.type_id(parent_id))
+            }
             parent = data.node(parent_id);
         }
 
@@ -1086,6 +1125,15 @@ impl State {
 }
 
 pub fn cl_type(data: &Data, ptr_type: Type, typ: &Typ) -> Type {
+    cl_type_with(data, ptr_type, typ, data.active_type_parameters.last())
+}
+
+pub fn cl_type_with(
+    data: &Data,
+    ptr_type: Type,
+    typ: &Typ,
+    type_arguments: Option<&&Vec<TypeId>>,
+) -> Type {
     match typ {
         Typ::Boolean => I8,
         Typ::Pointer { .. } => ptr_type,
@@ -1108,11 +1156,9 @@ pub fn cl_type(data: &Data, ptr_type: Type, typ: &Typ) -> Type {
                 }
             }
         }
-        Typ::TypeParameter { index, .. } => cl_type(
-            data,
-            ptr_type,
-            &data.types[data.active_type_parameters.unwrap()[*index]],
-        ),
+        Typ::TypeParameter { index, .. } => {
+            cl_type(data, ptr_type, &data.types[type_arguments.unwrap()[*index]])
+        }
         Typ::Parameter { binding, .. } => cl_type(data, ptr_type, &data.types[*binding]),
         _ => ptr_type,
         // _ => unreachable!("Invalid type: {typ:?} is not a primitive Cranelift type."),
@@ -1210,6 +1256,8 @@ impl Location {
                 if layout.size <= 8 {
                     ins.stack_store(value, stack_slot, self.offset);
                 } else {
+                    let align = layout.align as u8;
+                    // let align = dbg!((layout.size as i64 & -(layout.size as i64)) as u8);
                     let src_addr = value;
                     let dest_addr = ins.stack_addr(ty, stack_slot, self.offset);
                     c.b.emit_small_memory_copy(
@@ -1217,8 +1265,8 @@ impl Location {
                         dest_addr,
                         src_addr,
                         layout.size as u64,
-                        8,
-                        8,
+                        align,
+                        align,
                         true,
                         MemFlags::new(),
                     );

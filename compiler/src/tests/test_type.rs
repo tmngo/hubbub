@@ -56,6 +56,12 @@ pub fn check_types(source: &str, expected: &[(NodeId, Type)]) {
     }
 }
 
+const T_I8: Type = Type::Numeric {
+    literal: false,
+    floating: false,
+    signed: true,
+    bytes: 1,
+};
 const T_I16: Type = Type::Numeric {
     literal: false,
     floating: false,
@@ -372,6 +378,77 @@ main :: () -> i32
     ptr := &z
     c := deref(ptr)
     return 0
+end
+",
+        &[],
+    )
+}
+
+#[test]
+fn infer_parapoly_nested() {
+    check_types(
+        "
+deref :: {T}(ptr: Pointer{Pointer{T}}) -> Pointer{T}
+    return ptr@
+end
+
+main :: () -> i32
+    a := false
+    b := 4
+    aptr := &a
+    bptr := &b
+    aa := deref(&aptr)
+    bb := deref(&bptr)
+    return 0
+end
+",
+        &[],
+    )
+}
+
+#[test]
+fn infer_parapoly_no_args() {
+    check_types(
+        "
+zero :: {T}() -> T
+    return 0
+end
+
+main :: () -> i32
+    x := zero{i8}()
+    y := zero{i32}()
+    return x
+end
+",
+        &[(22, T_I8), (31, T_I32)],
+    )
+}
+
+#[test]
+fn infer_parapoly_struct() {
+    check_types(
+        "
+Counter :: struct {T}
+    data: T
+    count: i32
+end
+
+make-counter :: () -> Counter{Int}
+    c: Counter{Int}
+    c.count = i32(0)
+    return c
+end
+
+update :: {T} (c: Pointer{Counter{T}}, data: T)
+    c.data = data
+    c.count = i32(c.count + 1)
+    return
+end
+
+main :: () -> i32
+    c := make-counter()
+    update(&c, 365)
+    return c.count
 end
 ",
         &[],

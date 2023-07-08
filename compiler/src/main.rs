@@ -56,6 +56,8 @@ fn main() {
         workspace.print_errors();
         return;
     }
+    // println!("{:#?}", tree);
+
     if args.len() == 3 && flags.contains("-p") {
         println!("{:#?}", tree);
         return;

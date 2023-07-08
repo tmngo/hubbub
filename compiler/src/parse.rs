@@ -112,16 +112,17 @@ pub enum Tag {
     BitwiseShiftR, //
     BitwiseXor,    // lhs, rhs
     Break,         //
-    Call,          // func_expr, arguments: Expressions
-    Continue,      //
-    Conversion,    // lhs
-    Equality,      // lhs, rhs
-    Expressions,   // start..end [Expr]
-    Dereference,   // expr
-    Factorial,     // expr
-    False,         //
-    Field,         // type_expr
-    FloatLiteral,  //
+    /// lhs: Identifer | Type, rhs: Expressions
+    Call,
+    Continue,     //
+    Conversion,   // lhs
+    Equality,     // lhs, rhs
+    Expressions,  // start..end [Expr]
+    Dereference,  // expr
+    Factorial,    // expr
+    False,        //
+    Field,        // type_expr
+    FloatLiteral, //
     /// lhs: prototype, rhs: block
     FunctionDecl,
     Greater,      // lhs, rhs
@@ -147,18 +148,23 @@ pub enum Tag {
     Parameters,     // start..end [Field]
     /// lhs: type_parameters, rhs: (parameters, returns)
     Prototype,
-    Return,        // expr
-    Root,          // start..end [Decl]
+    /// lhs: expressions
+    Return,
+    /// start..end [Decl]
+    Root,
     StringLiteral, //
     /// lhs?: TypeParameters, rhs: (start, end) [Field]
-    Struct, // start..end [Field]
-    Sub,           // lhs, rhs
+    Struct,
+    /// lhs, rhs
+    Sub,
     /// lhs, rhs
     Subscript,
-    True,           //
-    Type,           // expr
-    TypeParameter,  // start..end [Identifier]
-    TypeParameters, // start..end [Identifier]
+    True,
+    /// start..end
+    Type,
+    TypeParameter, // start..end [Identifier]
+    /// start..end [Identifier]
+    TypeParameters,
     /// lhs: identifiers, rhs: (type_expr, init_expr)
     VariableDecl,
     /// lhs: condition, rhs: block

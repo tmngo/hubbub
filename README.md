@@ -23,6 +23,12 @@ msbuild /m -p:Configuration=Release INSTALL.vcxproj
 $env:LLVM_SYS_150_PREFIX="C:\Users\Tim\AppData\Local\llvmenv\llvm-15.0.7-x86_64-windows-msvc-release-mt"
 ```
 
+## Links
+
+ - [Crafting Interpreters](https://craftinginterpreters.com/contents.html)
+ - [Reconstructing Typescript](https://jaked.org/blog/2021-09-07-Reconstructing-TypeScript-part-0)
+ - [Bidirectional Typechecking](https://www.cl.cam.ac.uk/~nk480/bidir-survey.pdf)
+
 <!-- ```sh
 git clone https://github.com/llvm/llvm-project -b release/15.x --depth 1 "C:/Users/Tim/AppData/Local/llvmenv/llvm-project-15"
 ```

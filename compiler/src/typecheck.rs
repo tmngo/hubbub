@@ -20,7 +20,7 @@ use std::{collections::HashMap, rc::Rc, time::Instant};
  */
 
 type TypeMap<P = Vec<TypeId>> = HashMap<P, TypeId>;
-type TypeParameters = HashMap<NodeId, HashMap<Vec<TypeId>, Vec<TypeId>>>;
+pub type TypeParameters = HashMap<NodeId, HashMap<Vec<TypeId>, Vec<TypeId>>>;
 
 pub struct Typechecker<'a> {
     workspace: &'a mut Workspace,
@@ -481,23 +481,29 @@ impl<'a> Typechecker<'a> {
                     //     self.new_type_variable()
                     // };
 
-                    // Set lhs types
-                    for i in self.tree.range(identifiers) {
-                        let ni = self.tree.node_index(i);
-                        self.set(ni, annotation_t);
-                    }
+                    if self.tree.range(identifiers).len() > 1 && rtypes.len() == 1 {
+                        let mut identifier_ts = vec![];
+                        for i in self.tree.range(identifiers) {
+                            let ni = self.tree.node_index(i);
+                            let t = self.new_type_variable();
+                            self.set(ni, t);
+                            identifier_ts.push(t);
+                        }
+                        let t = self.add_tuple_type(identifier_ts);
+                        self.set(node.lhs, t);
+                        self.narrow(t, rtypes[0]);
+                    } else {
+                        // Set lhs types
+                        for i in self.tree.range(identifiers) {
+                            let ni = self.tree.node_index(i);
+                            self.set(ni, annotation_t);
+                        }
 
-                    for (i, rtype) in self.tree.range(identifiers).zip(rtypes.iter()) {
-                        let ni = self.tree.node_index(i);
-                        let ltype = self.get(ni);
-                        // self.set(ni, *rtype);
-                        self.narrow(ltype, *rtype);
-                        // if let Some(unified_type) = self.unify(*rtype, ltype) {
-                        //     // Fixes subtraction, breaks boolean.hb
-                        //     // self.set_node_type(ni, unified_type);
-                        // } else {
-                        //     panic!()
-                        // }
+                        for (i, rtype) in self.tree.range(identifiers).zip(rtypes.iter()) {
+                            let ni = self.tree.node_index(i);
+                            let ltype = self.get(ni);
+                            self.narrow(ltype, *rtype);
+                        }
                     }
 
                     // Set tuple type
@@ -535,6 +541,14 @@ impl<'a> Typechecker<'a> {
                     let return_t = self.add_tuple_type(self.types[fn_t].returns().clone());
                     self.narrow(expr_type, return_t);
 
+                    if let Type::Tuple { .. } = &self.types[return_t] {
+                    } else {
+                        let expressions = self.tree.node(node.lhs);
+                        let ni = self.tree.node_index(expressions.lhs);
+                        self.narrow(self.get(ni), return_t);
+                        self.set(ni, return_t);
+                    }
+
                     // Coerce
                     // let expr_list = self.tree.node(node.lhs);
                     // let fn_return_types = self.type_ids(fn_return_type);
@@ -571,6 +585,14 @@ impl<'a> Typechecker<'a> {
                 }
             }
             Tag::Call => {
+                // Type arguments
+                let callee = self.tree.node(node.lhs);
+                if let Tag::Type = callee.tag {
+                    for i in self.tree.range(callee) {
+                        let ni = self.tree.node_index(i);
+                        self.infer(ni)?;
+                    }
+                }
                 // Argument expressions
                 self.infer(node.rhs)?;
                 // Use a type variable since we can't figure out the type yet
@@ -1159,6 +1181,9 @@ impl<'a> Typechecker<'a> {
             }
             Tag::Address => {
                 self.check(node.lhs)?;
+                let value_t = self.get(node.lhs);
+                let pointer_t = self.add_pointer_type(value_t);
+                self.set(node_id, pointer_t);
                 // TODO: check for lvalue
             }
             Tag::Dereference => {
@@ -1324,7 +1349,11 @@ impl<'a> Typechecker<'a> {
                     .map(|i| self.tree.node_index(i))
                     .collect();
                 self.resolve_call(callee_id, &argument_ids)?;
-                if is_none(self.get(callee_id)) || self.tree.node(callee_id).tag == Tag::Type {
+
+                let callee = self.tree.node(callee_id);
+                if is_none(self.get(callee_id))
+                    || (callee.tag == Tag::Type && callee.lhs == callee.rhs)
+                {
                     self.infer(callee_id)?;
                 }
 
@@ -1728,126 +1757,126 @@ impl<'a> Typechecker<'a> {
                 let prototype = &self.tree.node(fn_decl.lhs).clone();
                 match prototype.tag {
                     Tag::Prototype => {
-                        if prototype.lhs != 0 {
-                            // Parametric procedure
-                            let mut flat_argument_types = vec![];
-                            for node_id in argument_ids {
-                                let t = self.get(*node_id);
-                                if let Type::Tuple { fields } = &self.types[t] {
-                                    flat_argument_types.extend(fields);
-                                } else {
-                                    // If the argument is an integer literal.
-                                    if t == T::IntegerLiteral as TypeId {
-                                        self.set(*node_id, T::I64 as TypeId);
-                                        flat_argument_types.push(T::I64 as TypeId);
-                                        continue;
-                                    }
-                                    flat_argument_types.push(t);
-                                }
-                            }
-                            let type_parameters = self.tree.node(prototype.lhs);
-                            let parameters = self.tree.node(self.tree.node_extra(prototype, 0));
-                            let returns_id = self.tree.node_extra(prototype, 1);
-                            let returns = self.tree.node(returns_id);
-                            let mut type_arguments =
-                                vec![T::None as TypeId; self.tree.range(type_parameters).count()];
-                            for (pi, i) in self.tree.range(parameters).enumerate() {
-                                let ni = self.tree.node_index(i);
-                                let arg_type = flat_argument_types[pi];
-                                match *self.ty(ni) {
-                                    Type::TypeParameter { index, .. } => {
-                                        // Parameter is generic, set type arguments based on  argument type.
-                                        let param_type = type_arguments[index];
-                                        if param_type == T::None as TypeId {
-                                            type_arguments[index] = arg_type;
-                                        } else if arg_type != param_type {
-                                            return Err(Diagnostic::error().with_message(format!(
-                                                "mismatched types in function call: expected {:?} argument, got {:?}",
-                                                self.types[param_type],
-                                                self.types[arg_type])
-                                            ).with_labels(vec![self
-                                                .tree
-                                                .label(self.tree.node(callee_id).token)]));
-                                        }
-                                    }
-                                    Type::Pointer { typ, .. } => {
-                                        if let Type::TypeParameter { index, .. } = self.types[typ] {
-                                            let param_type = type_arguments[index];
-                                            if param_type == T::None as TypeId {
-                                                type_arguments[index] =
-                                                    self.types[arg_type].element_type();
-                                                // dbg!(type_arguments[index]);
-                                            } else if arg_type != param_type {
-                                                return Err(Diagnostic::error().with_message(format!(
-                                                "mismatched types in function call: expected {:?} argument, got {:?}",
-                                                self.types[param_type],
-                                                self.types[arg_type])
-                                            ).with_labels(vec![self
-                                                .tree
-                                                .label(self.tree.node(callee_id).token)]));
-                                            }
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            let mut return_type_ids = vec![];
-                            if returns_id != 0 {
-                                assert_eq!(returns.tag, Tag::Expressions);
-                                for i in self.tree.range(returns) {
-                                    let ni = self.tree.node_index(i);
-                                    let ti = self.get(ni);
-                                    let ti = match self.types[ti] {
-                                        Type::TypeParameter { index, .. } => type_arguments[index],
-                                        Type::Pointer { typ, .. } => {
-                                            if let Type::TypeParameter { index, .. } =
-                                                self.types[typ]
-                                            {
-                                                type_arguments[index]
-                                            } else {
-                                                ti
-                                            }
-                                        }
-                                        _ => ti,
-                                    };
-                                    return_type_ids.push(ti);
-                                }
-                            }
-                            if type_arguments.contains(&(T::None as TypeId)) {
-                                panic!("failed to set all type arguments in function call");
-                            }
-                            if let Err(mut occupied_err) = self.type_parameters.try_insert(
-                                definition_id,
-                                HashMap::from([(
-                                    flat_argument_types.clone(),
-                                    type_arguments.clone(),
-                                )]),
-                            ) {
-                                occupied_err
-                                    .entry
-                                    .get_mut()
-                                    .insert(flat_argument_types.clone(), type_arguments);
-                            }
-                            let callee_type_id = self.add_function_type(Type::Function {
-                                parameters: flat_argument_types.into(),
-                                returns: return_type_ids,
-                            });
-                            self.set(callee_id, callee_type_id);
+                        if prototype.lhs == 0 {
+                            // Non-parametric procedure: just type-check the arguments.
                             return Ok(());
                         }
+                        // Parametric procedure
 
-                        // Non-parametric procedure: just type-check the arguments.
-                        // let fn_t = self.get(fn_decl.lhs);
-                        // dbg!(&argument_ids);
-                        // dbg!(&self.types[fn_t]);
+                        let type_parameters = self.tree.node(prototype.lhs);
+                        let mut solution =
+                            vec![T::None as TypeId; self.tree.range(type_parameters).count()];
+                        let mut key = vec![];
+
+                        let callee = self.tree.node(callee_id);
+
+                        // Unify type arguments and parameters
+                        let type_argument_ids = if let Tag::Type = callee.tag {
+                            let mut ids = vec![];
+                            for i in self.tree.range(callee) {
+                                let ni = self.tree.node_index(i);
+                                ids.push(ni);
+                            }
+                            ids
+                        } else {
+                            vec![]
+                        };
+                        for (index, ni) in type_argument_ids.iter().enumerate() {
+                            let argument_t = self.get(*ni);
+                            key.push(argument_t);
+                            if is_none(solution[index]) {
+                                solution[index] = argument_t;
+                            }
+                        }
+
+                        // Unify value arguments and parameters
+                        let mut flat_argument_types = vec![];
+                        for node_id in argument_ids {
+                            let t = self.get(*node_id);
+                            if let Type::Tuple { fields } = &self.types[t] {
+                                flat_argument_types.extend(fields);
+                            } else {
+                                // If the argument is an integer literal.
+                                if t == T::IntegerLiteral as TypeId {
+                                    self.set(*node_id, T::I64 as TypeId);
+                                    flat_argument_types.push(T::I64 as TypeId);
+                                    continue;
+                                }
+                                flat_argument_types.push(t);
+                            }
+                        }
+                        let parameters = self.tree.node(self.tree.node_extra(prototype, 0));
+                        for (pi, i) in self.tree.range(parameters).enumerate() {
+                            // For each parameter, check if the type annotation references a type parameter.
+                            let ni = self.tree.node_index(i);
+                            let parameter_t = self.get(ni);
+                            let argument_t = flat_argument_types[pi];
+
+                            let substitutions = self.unify_parameter(parameter_t, argument_t);
+                            for (index, t) in substitutions {
+                                let parameter_t = solution[index];
+                                if is_none(parameter_t) {
+                                    solution[index] = t;
+                                } else if t != parameter_t {
+                                    return Err(Diagnostic::error().with_message(format!(
+                                            "mismatched types in function call: expected {:?} argument, got {:?}",
+                                            self.types[parameter_t],
+                                            self.types[t])
+                                        ).with_labels(vec![self
+                                            .tree
+                                            .label(self.tree.node(callee_id).token)]));
+                                }
+                            }
+                        }
+
+                        // Determine the concrete return types
+                        let returns_id = self.tree.node_extra(prototype, 1);
+                        let returns = self.tree.node(returns_id);
+                        let mut return_type_ids = vec![];
+                        if returns_id != 0 {
+                            assert_eq!(returns.tag, Tag::Expressions);
+                            for i in self.tree.range(returns) {
+                                let ni = self.tree.node_index(i);
+                                let ti = self.get(ni);
+                                let ti = match self.types[ti] {
+                                    Type::TypeParameter { index, .. } => solution[index],
+                                    Type::Pointer { typ, .. } => {
+                                        if let Type::TypeParameter { index, .. } = self.types[typ] {
+                                            solution[index]
+                                        } else {
+                                            ti
+                                        }
+                                    }
+                                    _ => ti,
+                                };
+                                return_type_ids.push(ti);
+                            }
+                        }
+                        if solution.contains(&(T::None as TypeId)) {
+                            panic!("failed to set all type arguments in function call");
+                        }
+
+                        if type_argument_ids.is_empty() {
+                            for t in &flat_argument_types {
+                                key.push(*t);
+                            }
+                        }
+
+                        // For an overload,
+                        if let Err(mut occupied_err) = self.type_parameters.try_insert(
+                            definition_id,
+                            HashMap::from([(key.clone(), solution.clone())]),
+                        ) {
+                            occupied_err.entry.get_mut().insert(key, solution);
+                        }
+
+                        // Set the callee's concrete function type
+                        let callee_type_id = self.add_function_type(Type::Function {
+                            parameters: flat_argument_types.into(),
+                            returns: return_type_ids,
+                        });
+                        self.set(callee_id, callee_type_id);
                         return Ok(());
-                        // return self
-                        //     .check_arguments(fn_type_id, argument_ids)
-                        //     .map_err(|err| {
-                        //         err.with_labels(vec![self
-                        //             .tree
-                        //             .label(self.tree.node(callee_id).token)])
-                        //     });
                     }
                     _ => {
                         panic!()
@@ -1861,10 +1890,50 @@ impl<'a> Typechecker<'a> {
                 });
             }
             Definition::Foreign(_) => {}
-            Definition::BuiltInType(built_in_t) => self.set(callee_id, built_in_t as TypeId),
+            Definition::BuiltInType(built_in_t) => {
+                if built_in_t == T::Pointer {
+                    let callee = self.tree.node(callee_id);
+                    if callee.tag == Tag::Type {
+                        let ni = self.tree.node_index(callee.lhs);
+                        let t = self.get(ni);
+                        let ptr_t = self.add_pointer_type(t);
+                        self.set(callee_id, ptr_t);
+                    } else {
+                        panic!()
+                    }
+                } else {
+                    self.set(callee_id, dbg!(built_in_t) as TypeId);
+                }
+            }
             _ => unreachable!("Definition not found: {}", self.tree.name(callee_id)),
         }
         Ok(())
+    }
+
+    ///
+    fn unify_parameter(&self, parameter_t: TypeId, argument_t: TypeId) -> Vec<(usize, TypeId)> {
+        match (
+            self.types[parameter_t].clone(),
+            self.types[argument_t].clone(),
+        ) {
+            (Type::TypeParameter { index, .. }, _) => vec![(index, argument_t)],
+            (Type::Pointer { typ: a, .. }, Type::Pointer { typ: b, .. }) => {
+                self.unify_parameter(a, b)
+            }
+            (
+                Type::Struct {
+                    fields: fields_a, ..
+                },
+                Type::Struct {
+                    fields: fields_b, ..
+                },
+            ) => fields_a
+                .iter()
+                .zip(fields_b.iter())
+                .flat_map(|(a, b)| self.unify_parameter(*a, *b))
+                .collect(),
+            _ => vec![],
+        }
     }
 
     ///  

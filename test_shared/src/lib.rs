@@ -1,5 +1,5 @@
-#[export_name = "hubbub-test-add"]
-fn add(left: i64, right: i64) -> i64 {
+#[export_name = "hubbub-test-addi64"]
+fn addi64(left: i64, right: i64) -> i64 {
     left + right
 }
 

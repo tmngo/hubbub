@@ -1,6 +1,7 @@
 use crate::{
     analyze::Definition,
     parse::{Node, NodeId, NodeInfo, Tag, Tree},
+    typecheck::TypeParameters,
     types::{Type as Typ, TypeId},
 };
 use std::{collections::HashMap, fmt::Write};
@@ -9,7 +10,7 @@ pub struct Input<'a> {
     pub tree: &'a Tree,
     pub definitions: &'a HashMap<u32, Definition>,
     pub types: &'a Vec<Typ>,
-    type_parameters: HashMap<NodeId, HashMap<Vec<TypeId>, Vec<TypeId>>>,
+    type_parameters: TypeParameters,
 }
 
 impl<'a> Input<'a> {
@@ -17,7 +18,7 @@ impl<'a> Input<'a> {
         tree: &'a Tree,
         definitions: &'a HashMap<u32, Definition>,
         types: &'a Vec<Typ>,
-        type_parameters: HashMap<NodeId, HashMap<Vec<TypeId>, Vec<TypeId>>>,
+        type_parameters: TypeParameters,
     ) -> Self {
         Self {
             tree,
@@ -32,8 +33,8 @@ pub struct Data<'a> {
     pub tree: &'a Tree,
     pub definitions: &'a HashMap<u32, Definition>,
     pub types: &'a Vec<Typ>,
-    pub type_parameters: &'a HashMap<NodeId, HashMap<Vec<TypeId>, Vec<TypeId>>>,
-    pub active_type_parameters: Option<&'a Vec<TypeId>>,
+    pub type_parameters: &'a TypeParameters,
+    pub active_type_parameters: Vec<&'a Vec<TypeId>>,
     pub layouts: Vec<Layout>,
 }
 
@@ -44,7 +45,7 @@ impl<'a> Data<'a> {
             definitions: input.definitions,
             types: input.types,
             type_parameters: &input.type_parameters,
-            active_type_parameters: None,
+            active_type_parameters: vec![],
             layouts,
         }
     }
@@ -68,15 +69,14 @@ impl<'a> Data<'a> {
         &self.layouts[self.type_id(node_id)]
     }
 
-    pub fn layout2(&self, node_id: NodeId) -> Layout {
-        let t = self.type_id(node_id);
-        match self.typ(node_id) {
+    pub fn layout2(&self, t: TypeId) -> Layout {
+        match self.types[t] {
             Typ::TypeParameter { index, .. } => {
-                let t = self.active_type_parameters.unwrap()[*index];
+                let t = self.active_type_parameters.last().unwrap()[index];
                 let ty = &self.types[t];
-                Layout::new(self.types, ty, self.sizeof(t))
+                Layout::new(self.types, t)
             }
-            _ => Layout::new(self.types, self.typ(node_id), self.sizeof(t)), // _ => self.layout(node_id).clone(), // _ => unreachable!("Invalid type: {typ:?} is not a primitive Cranelift type."),
+            _ => Layout::new(self.types, t), // _ => self.layout(node_id).clone(), // _ => unreachable!("Invalid type: {typ:?} is not a primitive Cranelift type."),
         }
     }
 
@@ -95,10 +95,64 @@ impl<'a> Data<'a> {
             Typ::Numeric { bytes, .. } => *bytes as u32,
             Typ::Boolean => 1,
             Typ::TypeParameter { index, .. } => {
-                self.sizeof(self.active_type_parameters.unwrap()[*index])
+                self.sizeof(self.active_type_parameters.last().unwrap()[*index])
             }
-            Typ::Parameter { .. } => panic!(),
+            Typ::Parameter { binding, .. } => self.sizeof(*binding),
             _ => 8,
+        }
+    }
+
+    pub fn alignof(&self, t: TypeId) -> u32 {
+        match &self.types[t] {
+            Typ::Array { typ, .. } => self.alignof(*typ),
+            Typ::Struct { fields, .. } => {
+                let mut align = 0;
+                for f in fields {
+                    let field_align = self.alignof(*f);
+                    if field_align > align {
+                        align = field_align
+                    }
+                }
+                align
+            }
+            _ => self.sizeof(t),
+        }
+    }
+
+    pub fn format_type(&self, t: TypeId) -> String {
+        match &self.types[t] {
+            Typ::Any => "Any".to_string(),
+            Typ::Numeric {
+                floating, bytes, ..
+            } => if *floating {
+                match *bytes {
+                    4 => "f32",
+                    8 => "f64",
+                    _ => unreachable!(),
+                }
+            } else {
+                match *bytes {
+                    1 => "i8",
+                    2 => "i16",
+                    4 => "i32",
+                    8 => "i64",
+                    _ => unreachable!(),
+                }
+            }
+            .to_string(),
+            Typ::Pointer { typ, .. } => format!("&{}", self.format_type(*typ)),
+            Typ::Void => "Void".to_string(),
+            Typ::Boolean => "Bool".to_string(),
+            Typ::Struct { fields, .. } => {
+                let field_list = fields
+                    .iter()
+                    .map(|t| self.format_type(*t))
+                    .collect::<Vec<String>>()
+                    .join(",");
+                format!("({})", field_list)
+            }
+            Typ::Array { typ, length, .. } => format!("[{length}]{}", self.format_type(*typ)),
+            _ => unreachable!(),
         }
     }
 
@@ -106,7 +160,8 @@ impl<'a> Data<'a> {
         &self,
         node_id: NodeId,
         includes_types: bool,
-        type_parameters: Option<&Vec<TypeId>>,
+        type_arguments: &[TypeId],
+        argument_types: Option<&Vec<TypeId>>,
     ) -> String {
         let node = self.node(node_id);
         let NodeInfo::Prototype {
@@ -125,11 +180,36 @@ impl<'a> Data<'a> {
         };
         let prototype = self.node(node.lhs);
         if includes_types && !full_name.starts_with("Base.") && !foreign {
-            let parameters = self.node(self.tree.node_extra(prototype, 0));
-            if parameters.rhs > parameters.lhs {
-                write!(full_name, "|").ok();
+            if !type_arguments.is_empty() {
+                // Type parameters
+                let type_params = self.node(prototype.lhs);
+                let has_parameters = type_params.rhs > type_params.lhs;
+                if has_parameters {
+                    let type_ids = self
+                        .tree
+                        .range(type_params)
+                        .map(|i| {
+                            let ni = self.node_index(i);
+                            match self.typ(ni) {
+                                Typ::TypeParameter { index, .. } => type_arguments[*index],
+                                _ => self.type_id(ni),
+                            }
+                            .to_string()
+                        })
+                        .collect::<Vec<String>>()
+                        .join(",");
+                    write!(full_name, "{{{type_ids}}}").ok();
+                }
+                return full_name;
             }
-            if let Some(type_parameters) = type_parameters {
+
+            // Value parameters
+            let parameters = self.node(self.tree.node_extra(prototype, 0));
+            let has_parameters = parameters.rhs > parameters.lhs;
+            if has_parameters {
+                write!(full_name, "(").ok();
+            }
+            if let Some(type_parameters) = argument_types {
                 for ti in type_parameters {
                     write!(full_name, "{},", ti).ok();
                 }
@@ -138,13 +218,16 @@ impl<'a> Data<'a> {
                     let ni = self.node_index(i);
                     let typ = self.typ(ni);
                     let ti = match typ {
-                        Typ::Parameter { index, .. } => {
-                            dbg!(type_parameters).as_ref().unwrap()[*index]
+                        Typ::TypeParameter { index, .. } => {
+                            dbg!(argument_types).as_ref().unwrap()[*index]
                         }
                         _ => self.type_id(ni),
                     };
                     write!(full_name, "{},", ti).ok();
                 }
+            }
+            if has_parameters {
+                write!(full_name, ")").ok();
             }
         }
         full_name
@@ -191,7 +274,8 @@ pub struct Layout {
 }
 
 impl Layout {
-    pub fn new(types: &Vec<Typ>, typ: &Typ, bytes: u32) -> Self {
+    pub fn new(types: &Vec<Typ>, t: TypeId) -> Self {
+        let typ = &types[t];
         match typ {
             Typ::Struct { fields, .. } => {
                 let mut size = 0;
@@ -202,15 +286,22 @@ impl Layout {
                     memory_index.push(i as u32);
                     size += sizeof(types, type_id);
                 }
-                Layout::new_struct(offsets, memory_index, size, bytes)
+                Layout::new_struct(offsets, memory_index, size)
             }
             Typ::Array { typ, length, .. } => {
                 Layout::new_array(sizeof(types, *typ), *length as u32)
             }
-            _ => Layout::new_scalar(bytes, bytes),
+            _ => Layout::new_scalar(sizeof(types, t)),
         }
     }
-    pub fn new_struct(offsets: Vec<i32>, memory_index: Vec<u32>, size: u32, align: u32) -> Self {
+    pub fn new_struct(offsets: Vec<i32>, memory_index: Vec<u32>, size: u32) -> Self {
+        let mut align = 1;
+        for i in 1..offsets.len() - 1 {
+            let field_align = (offsets[i] - offsets[i - 1]) as u32;
+            if field_align > align {
+                align = field_align
+            }
+        }
         Self {
             shape: Shape::Struct {
                 offsets,
@@ -220,11 +311,11 @@ impl Layout {
             align,
         }
     }
-    pub fn new_scalar(size: u32, align: u32) -> Self {
+    pub fn new_scalar(size: u32) -> Self {
         Layout {
             shape: Shape::Scalar,
             size,
-            align,
+            align: size,
         }
     }
     pub fn new_array(stride: u32, count: u32) -> Self {
