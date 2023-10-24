@@ -73,7 +73,6 @@ impl<'a> Data<'a> {
         match self.types[t] {
             Typ::TypeParameter { index, .. } => {
                 let t = self.active_type_parameters.last().unwrap()[index];
-                let ty = &self.types[t];
                 Layout::new(self.types, t)
             }
             _ => Layout::new(self.types, t), // _ => self.layout(node_id).clone(), // _ => unreachable!("Invalid type: {typ:?} is not a primitive Cranelift type."),
@@ -85,7 +84,7 @@ impl<'a> Data<'a> {
         match &self.types[t] {
             Typ::Void => 0,
             Typ::Array { typ, length, .. } => (self.sizeof(*typ) as usize * length) as u32,
-            Typ::Struct { fields, .. } => {
+            Typ::Struct { fields, .. } | Typ::Tuple { fields, .. } => {
                 let mut size = 0;
                 for f in fields {
                     size += self.sizeof(*f);

@@ -107,7 +107,7 @@ fn main() {
             Path::new(&format!("llvm{}", &obj_filename)),
         );
     } else {
-        let generator = translate::cranelift::Generator::new(
+        let generator = translate::cranelift::ModuleCompiler::new(
             &workspace,
             &input,
             "object_file".to_string(),

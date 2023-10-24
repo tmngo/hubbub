@@ -3,7 +3,7 @@ use crate::{
     builtin,
     parse::{Node, NodeId, NodeInfo, Tag},
     translate::input::{sizeof, Data, Input, Layout, Shape},
-    types::{Type as Typ, TypeId, T},
+    types::{Type as Typ, TypeId},
     workspace::Workspace,
 };
 use codespan_reporting::diagnostic::Diagnostic;
@@ -53,14 +53,12 @@ impl CraneliftModule for ObjectModule {
     }
 }
 
-pub struct FnContext<'a> {
-    b: FunctionBuilder<'a>,
-    data_ctx: &'a mut DataContext,
-    ptr_type: Type,
-    target_config: TargetFrontendConfig,
-}
-
-pub struct Generator<'a> {
+// ModuleCompiler: FunctionBuilderContext, Context, pointer_type
+// - create builder from context, function builder context
+// - compile function
+// - module.define_function()
+// - module.clear_context()
+pub struct ModuleCompiler<'a> {
     pub builder_ctx: FunctionBuilderContext,
     pub ctx: Context,
     data_ctx: DataContext,
@@ -68,7 +66,7 @@ pub struct Generator<'a> {
     pub state: State,
 }
 
-impl<'a> Generator<'a> {
+impl<'a> ModuleCompiler<'a> {
     pub fn new(
         workspace: &Workspace,
         input: &'a Input<'a>,
@@ -145,41 +143,6 @@ impl<'a> Generator<'a> {
     }
 
     ///
-    pub fn init_signature(
-        data: &Data,
-        signature: &mut Signature,
-        parameters: &Node,
-        returns_id: NodeId,
-        ptr_type: Type,
-    ) {
-        for i in parameters.lhs..parameters.rhs {
-            // Tag::Field
-            let ni = data.tree.node_index(i);
-            let size = sizeof(data.types, data.type_id(ni));
-            let param = if size <= 8 {
-                AbiParam::new(cl_type(data, ptr_type, data.typ(ni)))
-            } else {
-                AbiParam::special(ptr_type, ArgumentPurpose::StructArgument(size))
-            };
-            signature.params.push(param);
-        }
-        if returns_id != 0 {
-            let returns = data.node(returns_id);
-            assert_eq!(returns.tag, Tag::Expressions);
-            for i in returns.lhs..returns.rhs {
-                let ni = data.tree.node_index(i);
-                let size = sizeof(data.types, data.type_id(ni));
-                let t = if size <= 8 {
-                    cl_type(data, ptr_type, data.typ(ni))
-                } else {
-                    ptr_type
-                };
-                signature.returns.push(AbiParam::new(t));
-            }
-        }
-    }
-
-    ///
     pub fn compile_nodes(mut self, filename: &Path) -> Option<i64> {
         let tree = self.data.tree;
         let root = tree.node(0);
@@ -211,12 +174,7 @@ impl<'a> Generator<'a> {
                                 type_arguments,
                                 None,
                             );
-                            Self::compile_function_signature(
-                                &mut self.state,
-                                &self.data,
-                                ni,
-                                &name,
-                            );
+                            self.compile_function_signature(ni, &name);
                             self.data.active_type_parameters.pop();
                         }
                         continue;
@@ -225,7 +183,7 @@ impl<'a> Generator<'a> {
                         // continue;
                     }
                     let name = self.data.mangle_function_declaration(ni, true, &[], None);
-                    Self::compile_function_signature(&mut self.state, &self.data, ni, &name);
+                    self.compile_function_signature(ni, &name);
                 };
             }
         }
@@ -233,7 +191,7 @@ impl<'a> Generator<'a> {
         // Compile function bodies.
         for i in root.lhs..root.rhs {
             let module_index = self.data.node_index(i);
-            let module = self.data.node(module_index);
+            let module = *self.data.node(module_index);
             if module.tag != Tag::Module {
                 continue;
             }
@@ -257,15 +215,7 @@ impl<'a> Generator<'a> {
                                 type_arguments,
                                 None,
                             );
-                            Self::compile_function_decl(
-                                &self.data,
-                                &mut self.ctx,
-                                &mut self.builder_ctx,
-                                &mut self.data_ctx,
-                                &mut self.state,
-                                ni,
-                                name,
-                            );
+                            self.compile_function_decl(ni, name);
                             self.data.active_type_parameters.pop();
                         }
                         continue;
@@ -275,15 +225,7 @@ impl<'a> Generator<'a> {
                         continue;
                     }
                     let name = self.data.mangle_function_declaration(ni, true, &[], None);
-                    let fn_id = Self::compile_function_decl(
-                        &self.data,
-                        &mut self.ctx,
-                        &mut self.builder_ctx,
-                        &mut self.data_ctx,
-                        &mut self.state,
-                        ni,
-                        name,
-                    );
+                    let fn_id = self.compile_function_decl(ni, name);
                     let fn_name = self.data.tree.name(ni);
                     if fn_name == "main" {
                         fn_ids.push(fn_id);
@@ -300,175 +242,226 @@ impl<'a> Generator<'a> {
     }
 
     ///
-    pub fn compile_function_decl(
-        data: &Data,
-        ctx: &mut Context,
-        builder_ctx: &mut FunctionBuilderContext,
-        data_ctx: &mut DataContext,
-        state: &mut State,
-        node_id: NodeId,
-        name: String,
-    ) -> FuncId {
-        let target_config = state.module.target_config();
+    pub fn compile_function_decl(&mut self, node_id: NodeId, name: String) -> FuncId {
+        let target_config = self.state.module.target_config();
         let ptr_type = target_config.pointer_type();
-        let mut c = FnContext {
-            b: FunctionBuilder::new(&mut ctx.func, builder_ctx),
-            data_ctx,
+
+        let mut c = FunctionCompiler {
+            b: FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_ctx),
+            data_ctx: &mut self.data_ctx,
             ptr_type,
             target_config,
+            data: &self.data,
+            state: &mut self.state,
         };
 
         // Build signature
         // let node = data.node(node_id);
-        // let fn_id = Self::compile_function_signature(state, data, c.b.func, node.lhs, &name);
+        // let fn_id = Self::compile_function_signature(state, data, self.b.func, node.lhs, &name);
 
         // Get cached signature
-        let cached_func = state.signatures.get(&name).unwrap();
+        let cached_func = c.state.signatures.get(&name).unwrap().clone();
         let fn_id = cached_func.0;
-        c.b.func.signature = cached_func.1.clone();
+        c.b.func.signature = cached_func.1;
 
-        Self::compile_function_body(state, data, &mut c, node_id);
+        c.compile_function_body(node_id);
         c.b.finalize();
         // println!("{} :: {}", name, c.b.func.display());
 
         // Write CLIF to file
         // let mut s = String::new();
-        // cranelift::codegen::write_function(&mut s, c.b.func);
+        // cranelift::codegen::write_function(&mut s, self.b.func);
         // std::fs::write(
         //     format!("./fn-{}.clif", name.replace("|", "-").replace(",", "-"),),
         //     s,
         // );
 
-        state.module.define_function(fn_id, ctx).unwrap();
+        self.state
+            .module
+            .define_function(fn_id, &mut self.ctx)
+            .unwrap();
         // println!("{}", cranelift::codegen::timing::take_current());
-        state.module.clear_context(ctx);
-        state.filled_blocks.clear();
+        self.state.module.clear_context(&mut self.ctx);
+        self.state.filled_blocks.clear();
         fn_id
     }
 
-    fn compile_function_signature(
-        state: &mut State,
-        data: &Data,
-        node_id: NodeId,
-        name: &str,
-    ) -> FuncId {
-        let target_config = state.module.target_config();
-        let ptr_type = target_config.pointer_type();
-        let mut signature = state.module.make_signature();
-        let fn_decl = data.node(node_id);
-        let prototype = data.node(fn_decl.lhs);
-        let parameters = data.node(data.tree.node_extra(prototype, 0));
-        let returns_id = data.tree.node_extra(prototype, 1);
-        Self::init_signature(data, &mut signature, parameters, returns_id, ptr_type);
-        let linkage =
-            if let Some(NodeInfo::Prototype { foreign, .. }) = data.tree.info.get(&fn_decl.lhs) {
-                if *foreign || fn_decl.rhs == 0 {
-                    Linkage::Import
-                } else {
-                    Linkage::Export
-                }
+    fn compile_function_signature(&mut self, node_id: NodeId, name: &str) -> FuncId {
+        let fn_decl = self.data.node(node_id);
+        let signature_type = self.data.typ(fn_decl.lhs);
+        let signature =
+            self.create_cranelift_signature(signature_type.parameters(), signature_type.returns());
+        let linkage = if let Some(NodeInfo::Prototype { foreign, .. }) =
+            self.data.tree.info.get(&fn_decl.lhs)
+        {
+            if *foreign || fn_decl.rhs == 0 {
+                Linkage::Import
             } else {
                 Linkage::Export
-            };
-        let fn_id = state
+            }
+        } else {
+            Linkage::Export
+        };
+        let fn_id = self
+            .state
             .module
             .declare_function(name, linkage, &signature)
             .unwrap();
-        state
+        self.state
             .signatures
-            .insert(name.to_string(), (fn_id, signature.clone()));
+            .insert(name.to_string(), (fn_id, signature));
         fn_id
     }
 
-    fn compile_function_body(state: &mut State, data: &Data, c: &mut FnContext, node_id: NodeId) {
-        let fn_decl = data.node(node_id);
-        let prototype = data.node(fn_decl.lhs);
-        let parameters = data.node(data.tree.node_extra(prototype, 0));
-        let body = data.node(fn_decl.rhs);
-        assert_eq!(fn_decl.tag, Tag::FunctionDecl);
-        assert_eq!(body.tag, Tag::Block);
-
-        let entry_block = c.b.create_block();
-        c.b.append_block_params_for_function_params(entry_block);
-        c.b.switch_to_block(entry_block);
-        c.b.seal_block(entry_block);
-
-        // Define parameters as stack variables.
-        for i in parameters.lhs..parameters.rhs {
-            let ni = data.node_index(i);
-            let stack_slot = state.create_stack_slot(data, c, ni);
-            let location = Location::stack(stack_slot, 0);
-            state.locations.insert(ni, location);
-            let parameter_index = (i - parameters.lhs) as usize;
-            let value = c.b.block_params(entry_block)[parameter_index];
-            let layout = data.layout(ni);
-            location.store(c, value, MemFlags::new(), layout);
+    fn create_cranelift_signature(
+        &self,
+        param_types: &[TypeId],
+        return_types: &[TypeId],
+    ) -> Signature {
+        let ptr_type = self.state.module.target_config().pointer_type();
+        let mut signature = self.state.module.make_signature();
+        for ti in param_types.iter() {
+            signature.params.push(AbiParam::new(cl_type(
+                &self.data,
+                ptr_type,
+                &self.data.types[*ti],
+            )))
         }
-
-        for i in body.lhs..body.rhs {
-            let ni = data.node_index(i);
-            state.compile_stmt(data, c, ni);
+        let mut return_bytes = 0;
+        for ti in return_types.iter() {
+            let size = sizeof(self.data.types, *ti);
+            return_bytes += size;
         }
+        if return_bytes > 8 || return_types.len() > 1 {
+            signature
+                .params
+                .push(AbiParam::special(ptr_type, ArgumentPurpose::StructReturn))
+        } else {
+            for ti in return_types.iter() {
+                signature.returns.push(AbiParam::new(cl_type(
+                    &self.data,
+                    ptr_type,
+                    &self.data.types[*ti],
+                )))
+            }
+        }
+        signature
     }
 }
 
-pub struct State {
-    locations: HashMap<NodeId, Location>,
-    pub module: Box<dyn CraneliftModule>,
-    filled_blocks: HashSet<Block>,
-    pub signatures: HashMap<String, (FuncId, Signature)>,
-    // func_refs: HashMap<FuncId, FuncRef>,
+// FunctionCompiler: FunctionBuilder, pointer_type
+// - create blocks
+// - finalize
+pub struct FunctionCompiler<'a> {
+    b: FunctionBuilder<'a>,
+    data_ctx: &'a mut DataContext,
+    ptr_type: Type,
+    target_config: TargetFrontendConfig,
+    data: &'a Data<'a>,
+    state: &'a mut State,
 }
 
-impl State {
+impl FunctionCompiler<'_> {
+    fn compile_function_body(&mut self, node_id: NodeId) {
+        let fn_decl = *self.data.node(node_id);
+        let prototype = self.data.node(fn_decl.lhs);
+        let parameters = *self.data.node(self.data.tree.node_extra(prototype, 0));
+        let body = *self.data.node(fn_decl.rhs);
+        assert_eq!(fn_decl.tag, Tag::FunctionDecl);
+        assert_eq!(body.tag, Tag::Block);
+
+        let entry_block = self.b.create_block();
+        self.b.func.layout.append_block(entry_block);
+        self.b.append_block_params_for_function_params(entry_block);
+        self.b.switch_to_block(entry_block);
+        self.b.seal_block(entry_block);
+
+        // Define parameters as stack variables.
+        for i in parameters.lhs..parameters.rhs {
+            let ni = self.data.node_index(i);
+            let stack_slot = self.create_stack_slot(ni);
+            let location = Location::stack(stack_slot, 0);
+            self.state.locations.insert(ni, location);
+            let parameter_index = (i - parameters.lhs) as usize;
+            let value = self.b.block_params(entry_block)[parameter_index];
+            let layout = self.data.layout(ni);
+            self.store(&location, value, MemFlags::new(), layout);
+        }
+
+        for i in body.lhs..body.rhs {
+            let ni = self.data.node_index(i);
+            self.compile_stmt(ni);
+        }
+        // let last_inst = self.b.func.layout.last_inst(self.b.current_block().unwrap()).unwrap();
+        // let is_filled = self.b.func.dfg
+        if self.data.typ(fn_decl.lhs).returns().is_empty()
+            && !self
+                .state
+                .filled_blocks
+                .contains(&self.b.current_block().unwrap())
+        {
+            self.b.ins().return_(&[]);
+            self.state
+                .filled_blocks
+                .insert(self.b.current_block().unwrap());
+        }
+    }
     ///
-    pub fn compile_stmt(&mut self, data: &Data, c: &mut FnContext, node_id: NodeId) {
-        let node = data.node(node_id);
+    pub fn compile_stmt(&mut self, node_id: NodeId) {
+        let node = *self.data.node(node_id);
         match node.tag {
             Tag::Assign => {
                 // lhs: expr
                 // rhs: expr
-                let layout = data.layout(node.rhs);
-                let rvalue = self.compile_expr_value(data, c, node.rhs);
+                let layout = self.data.layout(node.rhs);
+                let rvalue = self.compile_expr_value(node.rhs);
                 let flags = MemFlags::new();
-                let lvalue = self.compile_lvalue(data, c, node.lhs);
-                lvalue.store(c, rvalue, flags, layout);
+                let lvalue = self.compile_lvalue(node.lhs);
+                self.store(&lvalue, rvalue, flags, layout);
             }
             Tag::If => {
                 // Each basic block must be filled
                 // i.e. end in a terminator: brtable, jump, return, or trap
                 // Conditional branch instructions must be followed by a terminator.
-                let condition_expr = self.compile_expr_value(data, c, node.lhs);
-                let then_block = c.b.create_block();
-                let merge_block = c.b.create_block();
-                c.b.ins().brz(condition_expr, merge_block, &[]);
-                c.b.ins().jump(then_block, &[]);
-                c.b.seal_block(then_block);
-                self.filled_blocks.insert(c.b.current_block().unwrap());
+                let condition_expr = self.compile_expr_value(node.lhs);
+                let then_block = self.b.create_block();
+                let merge_block = self.b.create_block();
+                self.b.ins().brz(condition_expr, merge_block, &[]);
+                self.b.ins().jump(then_block, &[]);
+                self.b.seal_block(then_block);
+                self.state
+                    .filled_blocks
+                    .insert(self.b.current_block().unwrap());
                 // then block
-                c.b.switch_to_block(then_block);
-                let body = data.node(node.rhs);
+                self.b.switch_to_block(then_block);
+                let body = self.data.node(node.rhs);
                 for i in body.lhs..body.rhs {
-                    let index = data.node_index(i);
-                    self.compile_stmt(data, c, index);
+                    let index = self.data.node_index(i);
+                    self.compile_stmt(index);
                 }
                 // Check if the last statement compiled was a terminator.
-                if !self.filled_blocks.contains(&c.b.current_block().unwrap()) {
-                    c.b.ins().jump(merge_block, &[]);
-                    self.filled_blocks.insert(c.b.current_block().unwrap());
+                if !self
+                    .state
+                    .filled_blocks
+                    .contains(&self.b.current_block().unwrap())
+                {
+                    self.b.ins().jump(merge_block, &[]);
+                    self.state
+                        .filled_blocks
+                        .insert(self.b.current_block().unwrap());
                 }
-                c.b.seal_block(merge_block);
+                self.b.seal_block(merge_block);
                 // merge block
-                c.b.switch_to_block(merge_block);
+                self.b.switch_to_block(merge_block);
             }
             Tag::IfElse => {
                 let mut if_nodes = Vec::new();
                 let mut then_blocks = Vec::new();
                 for i in node.lhs..node.rhs {
-                    let index = data.node_index(i);
-                    let if_node = data.node(index);
+                    let index = self.data.node_index(i);
+                    let if_node = self.data.node(index);
                     if_nodes.push(if_node);
-                    then_blocks.push(c.b.create_block());
+                    then_blocks.push(self.b.create_block());
                 }
                 // If the last else-if block has no condition, it's an else.
                 let has_else = if_nodes.last().unwrap().lhs == 0;
@@ -477,215 +470,352 @@ impl State {
                 } else {
                     if_nodes.len()
                 };
-                let merge_block = c.b.create_block();
+                let merge_block = self.b.create_block();
                 // Compile branches.
                 for i in 0..if_count {
-                    let condition_expr = self.compile_expr_value(data, c, if_nodes[i].lhs);
-                    c.b.ins().brnz(condition_expr, then_blocks[i], &[]);
-                    c.b.seal_block(then_blocks[i]);
+                    let condition_expr = self.compile_expr_value(if_nodes[i].lhs);
+                    self.b.ins().brnz(condition_expr, then_blocks[i], &[]);
+                    self.b.seal_block(then_blocks[i]);
                     if i < if_count - 1 {
                         // This is not the last else-if block.
-                        let block = c.b.create_block();
-                        c.b.ins().jump(block, &[]);
-                        c.b.seal_block(block);
-                        c.b.switch_to_block(block);
+                        let block = self.b.create_block();
+                        self.b.ins().jump(block, &[]);
+                        self.b.seal_block(block);
+                        self.b.switch_to_block(block);
                     } else if !has_else {
                         // This is the last else-if block and there's no else.
-                        c.b.ins().jump(merge_block, &[]);
+                        self.b.ins().jump(merge_block, &[]);
                     } else {
                         // This is the last else-if block and there's an else.
-                        c.b.ins().jump(then_blocks[if_count], &[]);
-                        c.b.seal_block(then_blocks[if_count]);
+                        self.b.ins().jump(then_blocks[if_count], &[]);
+                        self.b.seal_block(then_blocks[if_count]);
                     }
                 }
                 // Compile block statements.
                 for (i, if_node) in if_nodes.iter().enumerate() {
-                    c.b.switch_to_block(then_blocks[i]);
-                    let body = data.node(if_node.rhs);
+                    self.b.switch_to_block(then_blocks[i]);
+                    let body = self.data.node(if_node.rhs);
                     for j in body.lhs..body.rhs {
-                        let index = data.node_index(j);
-                        self.compile_stmt(data, c, index);
+                        let index = self.data.node_index(j);
+                        self.compile_stmt(index);
                     }
-                    if !self.filled_blocks.contains(&c.b.current_block().unwrap()) {
-                        c.b.ins().jump(merge_block, &[]);
+                    if !self
+                        .state
+                        .filled_blocks
+                        .contains(&self.b.current_block().unwrap())
+                    {
+                        self.b.ins().jump(merge_block, &[]);
                     }
                 }
-                c.b.seal_block(merge_block);
-                c.b.switch_to_block(merge_block);
+                self.b.seal_block(merge_block);
+                self.b.switch_to_block(merge_block);
             }
             Tag::VariableDecl => {
                 // lhs: expressions
                 // rhs: expressions
-                let identifiers = data.tree.node(node.lhs);
+                // There should be one stack slot per thing on the RHS.
+                let identifiers = self.data.tree.node(node.lhs);
+                let rvalues_id = self.data.tree.node_extra(&node, 1);
+
                 assert_eq!(identifiers.tag, Tag::Expressions);
                 let mut locs = vec![];
-                let mut ltypes = vec![];
-                for i in data.tree.range(identifiers) {
-                    let ni = data.tree.node_index(i);
-                    let slot = self.create_stack_slot(data, c, ni);
-                    ltypes.push(data.type_id(ni));
-                    let location = Location::stack(slot, 0);
-                    self.locations.insert(ni, location);
-                    locs.push(location);
-                }
-                let rvalues_id = data.tree.node_extra(node, 1);
+                let mut identifier_ids = vec![];
+
+                // If no rhs, create stack slots based on the identifier types.
                 if rvalues_id == 0 {
+                    // let mut ltypes = vec![];
+                    for i in self.data.tree.range(identifiers) {
+                        let ni = self.data.tree.node_index(i);
+                        identifier_ids.push(ni);
+                        // ltypes.push(self.data.type_id(ni));
+                        let slot = self.create_stack_slot(ni);
+                        let location = Location::stack(slot, 0);
+                        locs.push(location);
+
+                        // Associate the stack slots with the identifier locations.
+                        self.state.locations.insert(ni, location);
+                    }
                     return;
                 }
-                let rhs = data.tree.node(rvalues_id);
-                assert_eq!(rhs.tag, Tag::Expressions);
-                let mut location_index = 0;
-                if let Val::Multiple(values) = self.compile_expr(data, c, rvalues_id) {
-                    let type_ids = &[data.type_id(rvalues_id)];
-                    let type_ids = if let Typ::Tuple { fields } = data.typ(rvalues_id) {
-                        fields.as_slice()
-                    } else {
-                        type_ids
-                    };
-                    assert_eq!(type_ids.len(), values.len());
-                    for (i, value) in values.iter().enumerate() {
-                        let layout = &data.layouts[type_ids[i]];
-                        locs[location_index].store(c, *value, MemFlags::new(), layout);
-                        location_index += 1;
-                    }
-                } else {
-                    unreachable!("rhs of variable declaration must be multiple-valued")
+
+                for i in self.data.tree.range(identifiers) {
+                    let ni = self.data.tree.node_index(i);
+                    identifier_ids.push(ni);
                 }
+
+                // Otherwise, create stack slots based on the expression types.
+
+                let expressions = self.data.node(rvalues_id);
+                // let mut values = Vec::with_capacity(range.len());
+                let mut identifier_index = 0;
+                for i in self.data.tree.range(expressions) {
+                    let ni = self.data.tree.node_index(i);
+                    // let location = locs[location_index];
+
+                    let slot = self.create_stack_slot(ni);
+                    let location = Location::stack(slot, 0);
+                    // locs.push(location);
+
+                    let types_per_expr = match self.data.typ(ni) {
+                        Typ::Tuple { fields } => fields.len(),
+                        Typ::Void => 0,
+                        _ => 1,
+                    };
+
+                    // Get scalar values to store in identifiers
+                    let val = self.compile_expr(ni, Some(location));
+                    let expr_values = match val {
+                        // Function call
+                        Val::Multiple(xs) => xs,
+                        // Single value
+                        Val::Scalar(_) => {
+                            let value = self.cranelift_value(val, ni);
+                            vec![value]
+                        }
+                        Val::Reference { .. } => {
+                            vec![]
+                        }
+                    };
+
+                    let mut location_offset = 0;
+                    for (index, id) in identifier_ids
+                        .iter()
+                        .skip(identifier_index)
+                        .take(types_per_expr)
+                        .enumerate()
+                    {
+                        let identifier_location = Location::stack(slot, location_offset);
+                        self.state.locations.insert(*id, identifier_location);
+                        let layout = self.data.layout(*id);
+                        // Only store if not an out param that's already been written.
+                        if !expr_values.is_empty() {
+                            self.store(
+                                &identifier_location,
+                                expr_values[index],
+                                MemFlags::new(),
+                                layout,
+                            );
+                        }
+                        location_offset += self.data.sizeof(self.data.type_id(*id)) as i32;
+                    }
+                    identifier_index += types_per_expr;
+                }
+
+                let rhs = self.data.tree.node(rvalues_id);
+                assert_eq!(rhs.tag, Tag::Expressions);
+                // let mut location_index = 0;
+                // if let Val::Multiple(values) = self.compile_expr(rvalues_id, None) {
+                // let type_ids = &[self.data.type_id(rvalues_id)];
+                // let type_ids = if let Typ::Tuple { fields } = self.data.typ(rvalues_id) {
+                //     fields.as_slice()
+                // } else {
+                //     type_ids
+                // };
+                // assert_eq!(type_ids.len(), values.len());
+                // for (i, value) in values.iter().enumerate() {
+                //     let layout = &self.data.layouts[type_ids[i]];
+                //     self.store(&locs[i], *value, MemFlags::new(), layout);
+                // }
+                // } else {
+                //     unreachable!("rhs of variable declaration must be multiple-valued")
+                // }
             }
             Tag::Return => {
-                let return_values = if node.lhs == 0 {
-                    Vec::new()
-                } else {
-                    let expressions = data.tree.node(node.lhs);
-                    data.tree
-                        .range(expressions)
-                        .map(|i| {
-                            let ni = data.node_index(i);
-                            self.compile_expr_value(data, c, ni)
-                        })
-                        .collect()
+                let mut return_values = vec![];
+                let mut return_types = vec![];
+
+                if node.lhs != 0 {
+                    let expressions = self.data.tree.node(node.lhs);
+                    for i in self.data.tree.range(expressions) {
+                        let ni = self.data.node_index(i);
+                        // let value = self.compile_expr_value(ni);
+                        let ti = self.data.type_id(ni);
+                        // return_values.push(value);
+                        return_types.push(ti);
+                    }
                 };
-                c.b.ins().return_(&return_values[..]);
-                self.filled_blocks.insert(c.b.current_block().unwrap());
+                if node.lhs != 0 {
+                    let (is_struct_return, _) = is_struct_return(self.data, &return_types);
+                    if is_struct_return {
+                        let entry_block = self.b.func.layout.entry_block().unwrap();
+                        let dest = *self.b.block_params(entry_block).last().unwrap();
+
+                        // let stack_slot = self.b.create_sized_stack_slot(StackSlotData {
+                        //     kind: StackSlotKind::ExplicitSlot,
+                        //     size: return_bytes,
+                        // });
+                        // let stack_slot_addr = self.b.ins().stack_addr(self.ptr_type, stack_slot, 0);
+                        let expressions = self.data.tree.node(node.lhs);
+                        let mut offset = 0;
+                        for i in self.data.tree.range(expressions) {
+                            let ni = self.data.node_index(i);
+                            let layout = self.data.layout(ni);
+                            let location = Location::pointer(dest, offset);
+                            let value = self.compile_expr_value(ni);
+                            self.store(&location, value, MemFlags::new(), layout);
+                            offset += layout.size as i32;
+                        }
+
+                        // let aggregate_size = self.b.ins().iconst(self.ptr_type, return_bytes as i64);
+
+                        // self.b.call_memcpy(
+                        //     self.state.module.target_config(),
+                        //     dest,
+                        //     stack_slot_addr,
+                        //     aggregate_size,
+                        // );
+
+                        // self.b.ins().return_(&[]);
+                    } else {
+                        let expressions = self.data.tree.node(node.lhs);
+
+                        // let mut return_values = vec![];
+                        for i in self.data.tree.range(expressions) {
+                            let ni = self.data.node_index(i);
+                            let value = self.compile_expr_value(ni);
+                            return_values.push(value);
+                        }
+                    };
+                }
+
+                self.b.ins().return_(&return_values);
+                self.state
+                    .filled_blocks
+                    .insert(self.b.current_block().unwrap());
             }
             Tag::While => {
-                let condition = self.compile_expr_value(data, c, node.lhs);
-                let while_block = c.b.create_block();
-                let merge_block = c.b.create_block();
+                let condition = self.compile_expr_value(node.lhs);
+                let while_block = self.b.create_block();
+                let merge_block = self.b.create_block();
                 // check condition
                 // true? jump to loop body
-                c.b.ins().brnz(condition, while_block, &[]);
+                self.b.ins().brnz(condition, while_block, &[]);
                 // false? jump to after loop
-                c.b.ins().jump(merge_block, &[]);
-                self.filled_blocks.insert(c.b.current_block().unwrap());
+                self.b.ins().jump(merge_block, &[]);
+                self.state
+                    .filled_blocks
+                    .insert(self.b.current_block().unwrap());
                 // block_while:
-                c.b.switch_to_block(while_block);
-                let body = data.node(node.rhs);
+                self.b.switch_to_block(while_block);
+                let body = self.data.node(node.rhs);
                 for i in body.lhs..body.rhs {
-                    let ni = data.node_index(i);
-                    self.compile_stmt(data, c, ni);
+                    let ni = self.data.node_index(i);
+                    self.compile_stmt(ni);
                 }
-                let condition = self.compile_expr_value(data, c, node.lhs);
+                let condition = self.compile_expr_value(node.lhs);
                 // brnz block_while
-                c.b.ins().brnz(condition, while_block, &[]);
-                c.b.seal_block(while_block);
-                c.b.ins().jump(merge_block, &[]);
-                c.b.seal_block(merge_block);
-                self.filled_blocks.insert(c.b.current_block().unwrap());
+                self.b.ins().brnz(condition, while_block, &[]);
+                self.b.seal_block(while_block);
+                self.b.ins().jump(merge_block, &[]);
+                self.b.seal_block(merge_block);
+                self.state
+                    .filled_blocks
+                    .insert(self.b.current_block().unwrap());
                 // block_merge:
-                c.b.switch_to_block(merge_block);
+                self.b.switch_to_block(merge_block);
             }
+            Tag::Break => {}
             _ => {
-                self.compile_expr(data, c, node_id);
+                self.compile_expr(node_id, None);
             }
         }
     }
 
-    pub fn compile_expr_value(&mut self, data: &Data, c: &mut FnContext, node_id: NodeId) -> Value {
-        self.compile_expr(data, c, node_id)
-            .cranelift_value(data, c, node_id)
+    pub fn compile_expr_value(&mut self, node_id: NodeId) -> Value {
+        let val = self.compile_expr(node_id, None);
+        self.cranelift_value(val, node_id)
     }
 
     /// Returns a value. A value can be a scalar or an aggregate.
     /// NodeId -> Val
-    pub fn compile_expr(&mut self, data: &Data, c: &mut FnContext, node_id: NodeId) -> Val {
-        let ty = c.ptr_type;
-        let node = data.node(node_id);
+    pub fn compile_expr(&mut self, node_id: NodeId, dest: Option<Location>) -> Val {
+        let ty = self.ptr_type;
+        let node = self.data.node(node_id);
 
         macro_rules! compile_binary_expr {
             ($inst:ident) => {{
-                let (lhs, rhs) = self.compile_children(data, c, node);
-                Val::Scalar(c.b.ins().$inst(lhs, rhs))
+                let (lhs, rhs) = self.compile_children(node);
+                Val::Scalar(self.b.ins().$inst(lhs, rhs))
             }};
         }
         macro_rules! compile_int_compare {
             ($cond:expr) => {{
-                let (lhs, rhs) = self.compile_children(data, c, node);
-                let value = c.b.ins().icmp($cond, lhs, rhs);
-                Val::Scalar(c.b.ins().bint(I8, value))
+                let (lhs, rhs) = self.compile_children(node);
+                let value = self.b.ins().icmp($cond, lhs, rhs);
+                Val::Scalar(self.b.ins().bint(I8, value))
             }};
         }
 
         match node.tag {
             // Variables
-            Tag::Access => self.locate_field(data, c, node_id).to_val(data, c, node_id),
-            Tag::Address => Val::Scalar(self.locate(data, c, node.lhs).get_addr(c)),
+            Tag::Access => {
+                let loc = self.locate_field(node_id);
+                self.load_val(loc, node_id)
+            }
+            Tag::Address => {
+                let loc = self.locate(node.lhs);
+                Val::Scalar(self.get_addr(&loc))
+            }
             Tag::Dereference => {
                 let flags = MemFlags::new();
-                let ptr_layout = &data.layout2(data.type_id(node_id));
+                let ptr_layout = &self.data.layout2(self.data.type_id(node_id));
                 // Load pointer
-                let ptr = self.locate(data, c, node.lhs).load_value(
-                    data,
-                    c,
-                    flags,
-                    data.typ(node.lhs),
-                    ptr_layout,
-                );
+                let ptr = self.locate(node.lhs);
+                let ptr = self.load_value(&ptr, flags, self.data.typ(node.lhs), ptr_layout);
                 // Load value
-                Location::pointer(ptr, 0).to_val(data, c, node_id)
+                self.load_val(Location::pointer(ptr, 0), node_id)
             }
             Tag::Expressions => {
-                let range = data.tree.range(node);
+                let range = self.data.tree.range(node);
                 let mut values = Vec::with_capacity(range.len());
                 for i in range {
-                    let ni = data.tree.node_index(i);
-                    let val = self.compile_expr(data, c, ni);
+                    let ni = self.data.tree.node_index(i);
+                    let val = self.compile_expr(ni, None);
                     match val {
                         Val::Multiple(xs) => values.extend(xs),
-                        _ => values.push(val.cranelift_value(data, c, ni)),
+                        _ => {
+                            let value = self.cranelift_value(val, ni);
+                            values.push(value);
+                        }
                     }
                 }
                 Val::Multiple(values)
             }
-            Tag::Identifier => self.locate(data, c, node_id).to_val(data, c, node_id),
+            Tag::Identifier => {
+                let loc = self.locate(node_id);
+                self.load_val(loc, node_id)
+            }
             Tag::Subscript => {
-                let lvalue = self.compile_lvalue(data, c, node_id);
-                lvalue.to_val(data, c, node_id)
+                let lvalue = self.compile_lvalue(node_id);
+                self.load_val(lvalue, node_id)
             }
             Tag::Conversion => {
-                let x = self.compile_expr_value(data, c, node.lhs);
-                let from_type = cl_type(data, c.ptr_type, data.typ(node.lhs));
-                let to_type = cl_type(data, c.ptr_type, data.typ(node_id));
-                if to_type.bytes() < from_type.bytes() {
-                    Val::Scalar(c.b.ins().ireduce(to_type, x))
+                let x = self.compile_expr_value(node.lhs);
+                let data = &self.data;
+                let from_type = cl_type(data, self.ptr_type, data.typ(node.lhs));
+                let to_type = cl_type(data, self.ptr_type, data.typ(node_id));
+                if to_type.bytes() == from_type.bytes() {
+                    Val::Scalar(x)
+                } else if to_type.bytes() < from_type.bytes() {
+                    Val::Scalar(self.b.ins().ireduce(to_type, x))
                 } else if data.typ(node_id).is_signed() {
-                    Val::Scalar(c.b.ins().sextend(to_type, x))
+                    Val::Scalar(self.b.ins().sextend(to_type, x))
                 } else {
-                    Val::Scalar(c.b.ins().uextend(to_type, x))
+                    Val::Scalar(self.b.ins().uextend(to_type, x))
                 }
             }
             // Function calls
-            Tag::Add | Tag::Mul => self.compile_call(data, c, node_id, node_id, true),
-            Tag::Call => self.compile_call(data, c, node_id, node.lhs, false),
+            Tag::Add | Tag::Mul => self.compile_call(node_id, node_id, true, dest),
+            Tag::Call => self.compile_call(node_id, node.lhs, false, dest),
             // Arithmetic operators
             Tag::Div => compile_binary_expr!(sdiv),
             Tag::Sub => compile_binary_expr!(isub),
             Tag::Negation => {
-                if data.tree.node(node.lhs).tag == Tag::IntegerLiteral {
-                    return self.compile_integer_literal(data, c, node.lhs, true);
+                if self.data.tree.node(node.lhs).tag == Tag::IntegerLiteral {
+                    return self.compile_integer_literal(node.lhs, true);
                 }
-                let lhs = self.compile_expr_value(data, c, node.lhs);
-                Val::Scalar(c.b.ins().ineg(lhs))
+                let lhs = self.compile_expr_value(node.lhs);
+                Val::Scalar(self.b.ins().ineg(lhs))
             }
             // Bitwise operators
             Tag::BitwiseShiftL => compile_binary_expr!(ishl),
@@ -698,29 +828,29 @@ impl State {
             Tag::GreaterEqual => compile_int_compare!(IntCC::SignedGreaterThanOrEqual),
             Tag::Less => compile_int_compare!(IntCC::SignedLessThan),
             Tag::LessEqual => compile_int_compare!(IntCC::SignedLessThanOrEqual),
-            Tag::LogicalAnd => self.compile_short_circuit(data, c, node, true),
-            Tag::LogicalOr => self.compile_short_circuit(data, c, node, false),
+            Tag::LogicalAnd => self.compile_short_circuit(node, true),
+            Tag::LogicalOr => self.compile_short_circuit(node, false),
             Tag::Not => {
-                let value = self.compile_expr_value(data, c, node.lhs);
-                let value = c.b.ins().icmp_imm(IntCC::Equal, value, 0);
-                Val::Scalar(c.b.ins().bint(I8, value))
+                let value = self.compile_expr_value(node.lhs);
+                let value = self.b.ins().icmp_imm(IntCC::Equal, value, 0);
+                Val::Scalar(self.b.ins().bint(I8, value))
             }
             // Literal values
-            Tag::False => Val::Scalar(c.b.ins().iconst(I8, 0)),
-            Tag::True => Val::Scalar(c.b.ins().iconst(I8, 1)),
-            Tag::IntegerLiteral => self.compile_integer_literal(data, c, node_id, false),
+            Tag::False => Val::Scalar(self.b.ins().iconst(I8, 0)),
+            Tag::True => Val::Scalar(self.b.ins().iconst(I8, 1)),
+            Tag::IntegerLiteral => self.compile_integer_literal(node_id, false),
             Tag::FloatLiteral => {
-                let token_str = data.tree.node_lexeme(node_id);
+                let token_str = self.data.tree.node_lexeme(node_id);
                 // dbg!(token_str);
                 // dbg!(data.typ(node_id));
-                match data.typ(node_id) {
+                match self.data.typ(node_id) {
                     Typ::Numeric {
                         floating: true,
                         bytes: 4,
                         ..
                     } => {
                         let value = token_str.parse::<f32>().unwrap();
-                        Val::Scalar(c.b.ins().f32const(value))
+                        Val::Scalar(self.b.ins().f32const(value))
                     }
                     Typ::Numeric {
                         floating: true,
@@ -728,13 +858,14 @@ impl State {
                         ..
                     } => {
                         let value = token_str.parse::<f64>().unwrap();
-                        Val::Scalar(c.b.ins().f64const(value))
+                        Val::Scalar(self.b.ins().f64const(value))
                     }
                     _ => unreachable!(),
                 }
             }
             Tag::StringLiteral => {
-                let mut string = data
+                let mut string = self
+                    .data
                     .tree
                     .token_str(node.token)
                     .trim_matches('"')
@@ -743,71 +874,77 @@ impl State {
                 string.push('\0');
 
                 // Create pointer to stored data.
-                c.data_ctx.define(string.into_bytes().into_boxed_slice());
-                let data_id = self.module.declare_anonymous_data(true, false).unwrap();
-                self.module.define_data(data_id, c.data_ctx).unwrap();
-                c.data_ctx.clear();
-                let local_id = self.module.declare_data_in_func(data_id, c.b.func);
-                let data_ptr = c.b.ins().symbol_value(ty, local_id);
+                self.data_ctx.define(string.into_bytes().into_boxed_slice());
+                let data_id = self
+                    .state
+                    .module
+                    .declare_anonymous_data(true, false)
+                    .unwrap();
+                self.state
+                    .module
+                    .define_data(data_id, self.data_ctx)
+                    .unwrap();
+                self.data_ctx.clear();
+                let local_id = self.state.module.declare_data_in_func(data_id, self.b.func);
+                let data_ptr = self.b.ins().symbol_value(ty, local_id);
 
-                let slot = self.create_stack_slot(data, c, node_id);
+                let slot = if let Some(location) = dest {
+                    location.stack_slot()
+                } else {
+                    self.create_stack_slot(node_id)
+                };
 
                 // Build string struct on stack.
-                let length_value = c.b.ins().iconst(ty, length as i64);
+                let length_value = self.b.ins().iconst(ty, length as i64);
                 let layout = &Layout::new_scalar(8);
-                Location::stack(slot, 0).store(c, data_ptr, MemFlags::new(), layout);
-                Location::stack(slot, 8).store(c, length_value, MemFlags::new(), layout);
+                self.store(&Location::stack(slot, 0), data_ptr, MemFlags::new(), layout);
+                self.store(
+                    &Location::stack(slot, 8),
+                    length_value,
+                    MemFlags::new(),
+                    layout,
+                );
 
-                Location::stack(slot, 0).to_val(data, c, node_id)
+                self.load_val(Location::stack(slot, 0), node_id)
             }
             _ => unreachable!("Invalid expression tag: {:?}", node.tag),
         }
     }
 
-    fn compile_children(&mut self, data: &Data, c: &mut FnContext, node: &Node) -> (Value, Value) {
-        let lhs = self.compile_expr_value(data, c, node.lhs);
-        let rhs = self.compile_expr_value(data, c, node.rhs);
+    fn compile_children(&mut self, node: &Node) -> (Value, Value) {
+        let lhs = self.compile_expr_value(node.lhs);
+        let rhs = self.compile_expr_value(node.rhs);
         (lhs, rhs)
     }
 
-    fn compile_lvalue(&mut self, data: &Data, c: &mut FnContext, node_id: NodeId) -> Location {
-        let node = data.tree.node(node_id);
+    fn compile_lvalue(&mut self, node_id: NodeId) -> Location {
+        let node = self.data.tree.node(node_id);
         let flags = MemFlags::new();
         match node.tag {
             // a.x = b
-            Tag::Access => self.locate_field(data, c, node_id),
+            Tag::Access => self.locate_field(node_id),
             // @a = b
             Tag::Dereference => {
                 // Layout of referenced variable
-                let ptr_layout = &data.layout2(data.type_id(node.lhs));
-                let ptr = self.locate(data, c, node.lhs).load_value(
-                    data,
-                    c,
-                    flags,
-                    data.typ(node.lhs),
-                    ptr_layout,
-                );
+                let ptr_layout = &self.data.layout2(self.data.type_id(node.lhs));
+                let loc = self.locate(node.lhs);
+                let ptr = self.load_value(&loc, flags, self.data.typ(node.lhs), ptr_layout);
                 Location::pointer(ptr, 0)
             }
             // a = b
-            Tag::Identifier => self.locate_variable(data, node_id),
+            Tag::Identifier => self.locate_variable(node_id),
             Tag::Subscript => {
-                let arr_layout = data.layout(node.lhs);
+                let arr_layout = self.data.layout(node.lhs);
                 let stride = if let Shape::Array { stride, .. } = arr_layout.shape {
                     stride
                 } else {
                     unreachable!();
                 };
-                let base = self.locate(data, c, node.lhs).load_value(
-                    data,
-                    c,
-                    flags,
-                    data.typ(node.lhs),
-                    arr_layout,
-                );
-                let index = self.compile_expr_value(data, c, node.rhs);
-                let offset = c.b.ins().imul_imm(index, stride as i64);
-                let addr = c.b.ins().iadd(base, offset);
+                let loc = self.locate(node.lhs);
+                let base = self.load_value(&loc, flags, self.data.typ(node.lhs), arr_layout);
+                let index = self.compile_expr_value(node.rhs);
+                let offset = self.b.ins().imul_imm(index, stride as i64);
+                let addr = self.b.ins().iadd(base, offset);
                 // Offset for 1-based indexing.
                 Location::pointer(addr, -(stride as i32))
             }
@@ -820,21 +957,20 @@ impl State {
     /// site, we know the base name and the arguments.
     fn compile_call(
         &mut self,
-        data: &Data,
-        c: &mut FnContext,
         node_id: NodeId,
         callee_id: NodeId,
         binary: bool,
+        dest: Option<Location>,
     ) -> Val {
-        let ty = c.ptr_type;
-
-        let node = data.tree.node(node_id);
+        let ty = self.ptr_type;
+        let node = self.data.tree.node(node_id);
         let arg_ids = if binary {
             vec![node.lhs, node.rhs]
         } else {
-            data.tree
-                .range(data.node(node.rhs))
-                .map(|i| data.node_index(i))
+            self.data
+                .tree
+                .range(self.data.node(node.rhs))
+                .map(|i| self.data.node_index(i))
                 .collect()
         };
 
@@ -843,116 +979,123 @@ impl State {
         // let mut type_arg_type_ids = vec![];
 
         if !binary {
-            let callee = data.node(node.lhs);
-            for i in data.tree.range(callee) {
-                let ni = data.tree.node_index(i);
-                type_arguments.push(data.type_id(ni));
+            let callee = self.data.node(node.lhs);
+            for i in self.data.tree.range(callee) {
+                let ni = self.data.tree.node_index(i);
+                type_arguments.push(self.data.type_id(ni));
             }
         }
 
         for ni in &arg_ids {
-            arg_type_ids.push(data.type_id(*ni));
+            arg_type_ids.push(self.data.type_id(*ni));
         }
 
-        let definition = data.definitions.get(&callee_id).unwrap_or_else(|| {
+        let definition = self.data.definitions.get(&callee_id).unwrap_or_else(|| {
             panic!("Definition not found: {}", "failed to get function decl id")
         });
 
         let name = match definition {
             Definition::BuiltInFunction(id) => {
-                return self.compile_built_in_function(data, c, *id, node_id);
+                return self.compile_built_in_function(*id, node_id);
             }
             Definition::User(id) | Definition::Overload(id) => {
                 // assert_eq!(&arg_type_ids, data.typ(callee_id).parameters());
-                if let Some(map) = data.type_parameters.get(id) {
+                if let Some(map) = self.data.type_parameters.get(id) {
                     let key = if !type_arguments.is_empty() {
                         &type_arguments
                     } else {
                         &arg_type_ids
                     };
                     let solution = map.get(key).unwrap();
-                    data.mangle_function_declaration(*id, true, solution, None)
+                    self.data
+                        .mangle_function_declaration(*id, true, solution, None)
                 } else {
-                    data.mangle_function_declaration(*id, true, &[], Some(&arg_type_ids))
+                    self.data
+                        .mangle_function_declaration(*id, true, &[], Some(&arg_type_ids))
                 }
             }
-            Definition::Foreign(_) => data.tree.name(callee_id).to_string(),
-            Definition::Resolved(id) => data.mangle_function_declaration(*id, true, &[], None),
+            Definition::Foreign(_) => self.data.tree.name(callee_id).to_string(),
+            Definition::Resolved(id) => self.data.mangle_function_declaration(*id, true, &[], None),
             Definition::BuiltInType(built_in_type) => {
-                let args = data.node(node.rhs);
-                let ni = data.node_index(args.lhs);
-                let arg = self.compile_expr_value(data, c, ni);
+                let args = self.data.node(node.rhs);
+                let ni = self.data.node_index(args.lhs);
+                let arg = self.compile_expr_value(ni);
                 let ti = *built_in_type as TypeId;
-                let from_type = cl_type(data, c.ptr_type, data.typ(ni));
-                let to_typ = &data.types[ti];
-                let to_type = cl_type(data, c.ptr_type, to_typ);
+                let from_type = cl_type(self.data, self.ptr_type, self.data.typ(ni));
+                let to_typ = &self.data.types[ti];
+                let to_type = cl_type(self.data, self.ptr_type, to_typ);
                 return if to_type.bytes() < from_type.bytes() {
-                    Val::Scalar(c.b.ins().ireduce(to_type, arg))
-                } else if ti == data.type_id(ni) {
+                    Val::Scalar(self.b.ins().ireduce(to_type, arg))
+                } else if ti == self.data.type_id(ni) {
                     Val::Scalar(arg)
                 } else if to_typ.is_signed() {
-                    Val::Scalar(c.b.ins().sextend(to_type, arg))
+                    Val::Scalar(self.b.ins().sextend(to_type, arg))
                 } else {
-                    Val::Scalar(c.b.ins().uextend(to_type, arg))
+                    Val::Scalar(self.b.ins().uextend(to_type, arg))
                 };
             }
             _ => unreachable!("Definition not found: {}", "failed to get function decl id"),
         };
 
-        let args: Vec<Value> = arg_ids
+        let mut args: Vec<Value> = arg_ids
             .iter()
-            .map(|ni| self.compile_expr_value(data, c, *ni))
+            .map(|ni| self.compile_expr_value(*ni))
             .collect();
 
-        let mut sig = self.module.make_signature();
+        // let arg_types = arg_ids
+        //     .iter()
+        //     .map(|ni| self.data.type_id(*ni))
+        //     .collect::<Vec<TypeId>>();
+        let mut sig = self.state.module.make_signature();
         for ni in arg_ids {
-            let t = cl_type(data, c.ptr_type, data.typ(ni));
+            let t = cl_type(self.data, self.ptr_type, self.data.typ(ni));
             sig.params.push(AbiParam::new(t));
         }
+        let type_id_slice = &[self.data.type_id(node_id)];
+        let return_types = match self.data.typ(node_id) {
+            Typ::Tuple { fields } => fields.as_slice(),
+            Typ::Void => &[],
+            _ => type_id_slice,
+        };
+        let mut return_bytes = 0;
+        for ti in return_types.iter() {
+            let size = sizeof(self.data.types, *ti);
+            return_bytes += size;
+        }
+        let out_param = if return_bytes > 8 || return_types.len() > 1 {
+            let location = dest.unwrap();
 
-        // Assume one return value.
-        // If the called function is generic, we need to get the return type based on the
-        // arguments, not the call expression.
-        let return_type = match data.typ(node_id) {
-            Typ::Tuple { fields } => {
-                let mut return_type_id = fields[0];
-                for ti in fields {
-                    let typ = &data.types[*ti];
+            let addr = if let LocationBase::Stack(slot) = location.base {
+                self.b
+                    .ins()
+                    .stack_addr(self.ptr_type, slot, location.offset)
+            } else {
+                panic!();
+            };
 
-                    let typ = if let Typ::Parameter { index, .. } = typ {
-                        let type_arguments = data
-                            .type_parameters
-                            .get(&definition.id())
-                            .unwrap()
-                            .get(&arg_type_ids)
-                            .unwrap();
-                        let ti = type_arguments[*index];
-                        return_type_id = ti;
-                        &data.types[ti]
-                    } else {
-                        typ
-                    };
-                    let t = cl_type(data, c.ptr_type, typ);
-                    sig.returns.push(AbiParam::new(t));
-                }
-                // dbg!(&data.types[return_type_id]);
-                return_type_id
+            args.push(addr);
+            sig.params.push(AbiParam::special(
+                self.ptr_type,
+                ArgumentPurpose::StructReturn,
+            ));
+            Some(Val::Reference(location, Some(addr)))
+        } else {
+            for ti in return_types.iter() {
+                sig.returns.push(AbiParam::new(cl_type(
+                    self.data,
+                    self.ptr_type,
+                    &self.data.types[*ti],
+                )))
             }
-            _ => {
-                let t = data.type_id(node_id);
-                if t > T::Void as TypeId {
-                    let ty = cl_type_with(data, c.ptr_type, &data.types[t], Some(&&type_arguments));
-                    sig.returns.push(AbiParam::new(ty));
-                }
-                t
-            }
+            None
         };
 
         let callee = self
+            .state
             .module
             .declare_function(&name, Linkage::Import, &sig)
             .unwrap();
-        let local_callee = self.module.declare_func_in_func(callee, c.b.func);
+        let local_callee = self.state.module.declare_func_in_func(callee, self.b.func);
 
         // let cached_func = self.signatures.get(&name).unwrap();
         // assert!(sig == cached_func.1);
@@ -962,120 +1105,121 @@ impl State {
         //     .func_refs
         //     .get(&callee)
         //     .cloned()
-        //     .unwrap_or_else(|| self.module.declare_func_in_func(callee, c.b.func));
+        //     .unwrap_or_else(|| self.module.declare_func_in_func(callee, self.b.func));
 
-        let call = c.b.ins().call(local_callee, &args);
-        if return_type > T::Void as TypeId {
-            let return_values = c.b.inst_results(call);
+        let call = self.b.ins().call(local_callee, &args);
+        if let Some(ref_val) = out_param {
+            return ref_val;
+        }
+        if !return_types.is_empty() {
+            let return_values = self.b.inst_results(call);
             if return_values.len() == 1 {
                 Val::Scalar(return_values[0])
             } else {
                 Val::Multiple(return_values.into())
             }
         } else {
-            Val::Scalar(c.b.ins().iconst(ty, 0))
+            Val::Scalar(self.b.ins().iconst(ty, 0))
         }
     }
 
     fn compile_built_in_function(
         &mut self,
-        data: &Data,
-        c: &mut FnContext,
         built_in_function: BuiltInFunction,
         node_id: NodeId,
     ) -> Val {
+        let data = &self.data;
         let node = data.tree.node(node_id);
         match built_in_function {
             BuiltInFunction::Add | BuiltInFunction::AddI8 => {
-                let a = self.compile_expr_value(data, c, node.lhs);
-                let b = self.compile_expr_value(data, c, node.rhs);
-                Val::Scalar(c.b.ins().iadd(a, b))
+                let a = self.compile_expr_value(node.lhs);
+                let b = self.compile_expr_value(node.rhs);
+                Val::Scalar(self.b.ins().iadd(a, b))
             }
             BuiltInFunction::Mul => {
-                let a = self.compile_expr_value(data, c, node.lhs);
-                let b = self.compile_expr_value(data, c, node.rhs);
-                Val::Scalar(c.b.ins().imul(a, b))
+                let a = self.compile_expr_value(node.lhs);
+                let b = self.compile_expr_value(node.rhs);
+                Val::Scalar(self.b.ins().imul(a, b))
             }
             BuiltInFunction::SizeOf => {
                 let args = data.tree.node(node.rhs);
                 let first_arg_id = data.tree.node_index(args.lhs);
                 let type_id = data.type_id(first_arg_id);
                 let value = sizeof(data.types, type_id) as i64;
-                Val::Scalar(c.b.ins().iconst(c.ptr_type, value))
+                Val::Scalar(self.b.ins().iconst(self.ptr_type, value))
             }
             BuiltInFunction::SubI64 => {
-                let a = self.compile_expr_value(data, c, node.lhs);
-                let b = self.compile_expr_value(data, c, node.rhs);
-                Val::Scalar(c.b.ins().isub(a, b))
+                let a = self.compile_expr_value(node.lhs);
+                let b = self.compile_expr_value(node.rhs);
+                Val::Scalar(self.b.ins().isub(a, b))
             }
         }
     }
 
-    fn compile_short_circuit(
-        &mut self,
-        data: &Data,
-        c: &mut FnContext,
-        node: &Node,
-        is_and: bool,
-    ) -> Val {
-        let right_block = c.b.create_block();
-        let merge_block = c.b.create_block();
-        c.b.append_block_param(merge_block, I8);
-        let lhs = self.compile_expr_value(data, c, node.lhs);
+    fn compile_short_circuit(&mut self, node: &Node, is_and: bool) -> Val {
+        let right_block = self.b.create_block();
+        let merge_block = self.b.create_block();
+        self.b.append_block_param(merge_block, I8);
+        let lhs = self.compile_expr_value(node.lhs);
         if is_and {
             // If lhs is true, evaluate the rhs. Otherwise, short-circuit and jump to the merge block.
-            c.b.ins().brnz(lhs, right_block, &[]);
+            self.b.ins().brnz(lhs, right_block, &[]);
         } else {
             // If lhs is false, evaluate the rhs. Otherwise, short-circuit and jump to the merge block.
-            c.b.ins().brz(lhs, right_block, &[]);
+            self.b.ins().brz(lhs, right_block, &[]);
         }
-        c.b.ins().jump(merge_block, &[lhs]);
-        c.b.seal_block(right_block);
-        c.b.switch_to_block(right_block);
-        let rhs = self.compile_expr_value(data, c, node.rhs);
-        c.b.ins().jump(merge_block, &[rhs]);
-        c.b.seal_block(merge_block);
-        c.b.switch_to_block(merge_block);
-        let value = c.b.block_params(merge_block)[0];
-        let value = c.b.ins().raw_bitcast(I8, value);
+        self.b.ins().jump(merge_block, &[lhs]);
+        self.b.seal_block(right_block);
+        self.b.switch_to_block(right_block);
+        let rhs = self.compile_expr_value(node.rhs);
+        self.b.ins().jump(merge_block, &[rhs]);
+        self.b.seal_block(merge_block);
+        self.b.switch_to_block(merge_block);
+        let value = self.b.block_params(merge_block)[0];
+        let value = self.b.ins().raw_bitcast(I8, value);
         Val::Scalar(value)
     }
 
-    fn compile_integer_literal(
-        &mut self,
-        data: &Data,
-        c: &mut FnContext,
-        node_id: NodeId,
-        negative: bool,
-    ) -> Val {
-        let ty = cl_type(data, c.ptr_type, data.typ(node_id));
-        let token_str = data.tree.node_lexeme(node_id);
+    fn compile_integer_literal(&mut self, node_id: NodeId, negative: bool) -> Val {
+        let ty = cl_type(self.data, self.ptr_type, self.data.typ(node_id));
+        let token_str = self.data.tree.node_lexeme(node_id);
         let value = token_str.parse::<i64>().unwrap();
-        Val::Scalar(c.b.ins().iconst(ty, if negative { -value } else { value }))
+        Val::Scalar(
+            self.b
+                .ins()
+                .iconst(ty, if negative { -value } else { value }),
+        )
     }
 
-    fn locate(&self, data: &Data, c: &mut FnContext, node_id: NodeId) -> Location {
-        let node = data.node(node_id);
+    fn locate(&mut self, node_id: NodeId) -> Location {
+        let node = self.data.node(node_id);
         match node.tag {
-            Tag::Access => self.locate_field(data, c, node_id),
-            Tag::Identifier => self.locate_variable(data, node_id),
+            Tag::Access => self.locate_field(node_id),
+            Tag::Identifier => self.locate_variable(node_id),
             _ => unreachable!("Cannot locate node with tag {:?}", node.tag),
         }
     }
 
-    fn locate_variable(&self, data: &Data, node_id: NodeId) -> Location {
-        let def_id = data
+    fn locate_variable(&self, node_id: NodeId) -> Location {
+        let def_id = self
+            .data
             .definitions
             .get_definition_id(node_id, Diagnostic::error())
             .expect("failed to lookup variable declaration");
-        *self.locations.get(&def_id).expect("failed to get location")
+        *self
+            .state
+            .locations
+            .get(&def_id)
+            .expect("failed to get location")
     }
 
-    fn locate_field(&self, data: &Data, c: &mut FnContext, node_id: NodeId) -> Location {
+    fn locate_field(&mut self, node_id: NodeId) -> Location {
         let mut indices = Vec::new();
         let mut type_ids = Vec::new();
         let mut parent_id = node_id;
-        let mut parent = data.node(parent_id);
+        let mut parent = self.data.node(parent_id);
+
+        let data = &self.data;
 
         while parent.tag == Tag::Access {
             let field_index = data
@@ -1098,12 +1242,11 @@ impl State {
             offset += layout.shape.offset(indices[i]);
         }
 
-        let mut location = self.locate_variable(data, parent_id);
+        let mut location = self.locate_variable(parent_id);
         // Dereference pointer values.
         if let Typ::Pointer { .. } = &data.typ(parent_id) {
-            let ptr_value = location.load_value(
-                data,
-                c,
+            let ptr_value = self.load_value(
+                &location,
                 MemFlags::new(),
                 data.typ(parent_id),
                 data.layout(parent_id),
@@ -1113,15 +1256,227 @@ impl State {
         location.offset(offset)
     }
 
-    fn create_stack_slot(&mut self, data: &Data, c: &mut FnContext, node_id: u32) -> StackSlot {
+    fn create_stack_slot(&mut self, node_id: u32) -> StackSlot {
+        let data = &self.data;
         let type_id = if let Typ::Parameter { binding, .. } = data.typ(node_id) {
             *binding
         } else {
             data.type_id(node_id)
         };
         let size = data.sizeof(type_id);
-        c.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, size))
+        let size = next_power_of_16(size);
+        self.b
+            .create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, size))
     }
+
+    fn get_addr(&mut self, location: &Location) -> Value {
+        let ins = self.b.ins();
+        match location.base {
+            LocationBase::Pointer(base_addr) => {
+                let offset = location.offset as i64;
+                if offset == 0 {
+                    base_addr
+                } else {
+                    ins.iadd_imm(base_addr, offset)
+                }
+            }
+            LocationBase::Stack(stack_slot) => {
+                ins.stack_addr(self.ptr_type, stack_slot, location.offset)
+            }
+            LocationBase::Register(_) => unreachable!("cannot get address of register"),
+        }
+    }
+
+    fn load_scalar(&mut self, location: &Location, flags: MemFlags, typ: &Typ) -> Value {
+        let ins = self.b.ins();
+        let ty = cl_type(self.data, self.ptr_type, typ);
+        match location.base {
+            LocationBase::Pointer(base_addr) => ins.load(ty, flags, base_addr, location.offset),
+            LocationBase::Register(variable) => self.b.use_var(variable),
+            LocationBase::Stack(stack_slot) => ins.stack_load(ty, stack_slot, location.offset),
+        }
+    }
+
+    fn load_value(
+        &mut self,
+        location: &Location,
+        flags: MemFlags,
+        typ: &Typ,
+        layout: &Layout,
+    ) -> Value {
+        let (ins, ty) = (self.b.ins(), self.ptr_type);
+        match location.base {
+            LocationBase::Pointer(_) | LocationBase::Register(_) => {
+                self.load_scalar(location, flags, typ)
+            }
+            LocationBase::Stack(stack_slot) => {
+                if layout.size <= 8 {
+                    self.load_scalar(location, flags, typ)
+                } else {
+                    ins.stack_addr(ty, stack_slot, location.offset)
+                }
+            }
+        }
+    }
+
+    fn load_val(&mut self, location: Location, node_id: NodeId) -> Val {
+        let ins = self.b.ins();
+        let typ = self.data.typ(node_id);
+        let layout = self.data.layout(node_id);
+        match location.base {
+            LocationBase::Register(variable) => Val::Scalar(self.b.use_var(variable)),
+            LocationBase::Pointer(_) => Val::Reference(location, None),
+            LocationBase::Stack(stack_slot) => {
+                if layout.size <= 8 {
+                    let ty = cl_type(self.data, self.ptr_type, typ);
+                    Val::Scalar(ins.stack_load(ty, stack_slot, location.offset))
+                } else {
+                    Val::Reference(location, None)
+                }
+            }
+        }
+    }
+
+    fn store(&mut self, location: &Location, value: Value, flags: MemFlags, layout: &Layout) {
+        let (ins, ty) = (self.b.ins(), self.ptr_type);
+        match location.base {
+            // lvalue is a pointer, store in address, rvalue is scalar/aggregate
+            LocationBase::Pointer(base_addr) => {
+                if layout.size <= 8 {
+                    ins.store(flags, value, base_addr, location.offset);
+                } else {
+                    let size = next_power_of_16(layout.size) as u64;
+                    let align = layout.align as u8;
+                    let src_addr = value;
+                    let offset = self.b.ins().iconst(self.ptr_type, location.offset as i64);
+                    let dest_addr = self.b.ins().iadd(base_addr, offset);
+                    dbg!(align, layout.size);
+                    self.b.emit_small_memory_copy(
+                        self.target_config,
+                        dest_addr,
+                        src_addr,
+                        size,
+                        align,
+                        align,
+                        true,
+                        MemFlags::new(),
+                    );
+                }
+            }
+            // lvalue is a register variable, rvalue must be a scalar
+            LocationBase::Register(variable) => self.b.def_var(variable, value),
+            // lvalue is a stack variable, rvalue is scalar/aggregate
+            LocationBase::Stack(stack_slot) => {
+                if layout.size <= 8 {
+                    ins.stack_store(value, stack_slot, location.offset);
+                } else {
+                    let size = next_power_of_16(layout.size) as u64;
+                    let align = layout.align as u8;
+                    // let align = dbg!((layout.size as i64 & -(layout.size as i64)) as u8);
+                    let src_addr = value;
+                    let dest_addr = ins.stack_addr(ty, stack_slot, location.offset);
+                    self.b.emit_small_memory_copy(
+                        self.target_config,
+                        dest_addr,
+                        src_addr,
+                        size,
+                        align,
+                        align,
+                        true,
+                        MemFlags::new(),
+                    );
+                }
+            }
+        };
+    }
+
+    // fn store_expr_in_memory(
+    //     &mut self,
+    //     node_id: NodeId,
+    //     type_id: TypeId,
+    //     stack_slot: StackSlot,
+    //     stack_addr: Value,
+    //     offset: u32,
+    // ) {
+    //     if struct_info.is_none() {
+    //         if let Some(fields) = expr_ty.as_struct() {
+    //             let fields = fields.into_iter().map(|(_, ty)| ty).collect::<Vec<_>>();
+    //             let struct_mem = StructMemory::new(fields.clone(), self.pointer_ty);
+    //             struct_info.replace((fields, struct_mem));
+    //         }
+    //     }
+    //     let node = self.data.node(node_id);
+
+    //     match node. {
+    //         hir::Expr::Array {
+    //             items: Some(items), ..
+    //         } => self.store_array_items(items.clone(), stack_slot, stack_addr, offset),
+    //         hir::Expr::StructLiteral {
+    //             fields: field_values,
+    //             ..
+    //         } => {
+    //             let field_tys = struct_info.as_ref().unwrap().0.clone();
+    //             let struct_mem = &struct_info.as_ref().unwrap().1;
+
+    //             self.store_struct_fields(
+    //                 struct_mem,
+    //                 field_tys,
+    //                 field_values.iter().map(|(_, val)| *val).collect(),
+    //                 stack_slot,
+    //                 stack_addr,
+    //                 offset,
+    //             )
+    //         }
+    //         _ if expr_ty.is_aggregate() => {
+    //             let far_off_thing = self.compile_expr(expr).unwrap();
+
+    //             let offset = self.builder.ins().iconst(self.pointer_ty, offset as i64);
+
+    //             let actual_addr = self.builder.ins().iadd(stack_addr, offset);
+
+    //             let size = self.builder.ins().iconst(self.pointer_ty, expr_size as i64);
+
+    //             self.builder.call_memcpy(
+    //                 self.module.target_config(),
+    //                 actual_addr,
+    //                 far_off_thing,
+    //                 size,
+    //             )
+    //         }
+    //         _ => {
+    //             if let Some(item) = self.compile_expr(expr) {
+    //                 self.builder
+    //                     .ins()
+    //                     .stack_store(item, stack_slot, offset as i32);
+    //             }
+    //         }
+    //     }
+    // }
+
+    fn cranelift_value(&mut self, val: Val, node_id: NodeId) -> Value {
+        let typ = self.data.typ(node_id);
+        let layout = self.data.layout(node_id);
+        match &val {
+            Val::Scalar(value) => *value,
+            // location is a pointer or stack slot
+            Val::Reference(location, _) => {
+                if layout.size <= 8 {
+                    self.load_scalar(location, MemFlags::new(), typ)
+                } else {
+                    self.get_addr(location)
+                }
+            }
+            _ => unreachable!("cannot get cranelift_value for multiple"),
+        }
+    }
+}
+
+pub struct State {
+    locations: HashMap<NodeId, Location>,
+    pub module: Box<dyn CraneliftModule>,
+    filled_blocks: HashSet<Block>,
+    pub signatures: HashMap<String, (FuncId, Signature)>,
+    // func_refs: HashMap<FuncId, FuncRef>,
 }
 
 pub fn cl_type(data: &Data, ptr_type: Type, typ: &Typ) -> Type {
@@ -1189,106 +1544,19 @@ impl Location {
         let base = LocationBase::Stack(stack_slot);
         Self { base, offset }
     }
-    fn get_addr(&self, c: &mut FnContext) -> Value {
-        let ty = c.ptr_type;
-        let ins = c.b.ins();
-        match self.base {
-            LocationBase::Pointer(base_addr) => {
-                let offset = self.offset as i64;
-                if offset == 0 {
-                    base_addr
-                } else {
-                    ins.iadd_imm(base_addr, offset)
-                }
-            }
-            LocationBase::Stack(stack_slot) => ins.stack_addr(ty, stack_slot, self.offset),
-            LocationBase::Register(_) => unreachable!("cannot get address of register"),
-        }
-    }
+
     fn offset(self, extra_offset: i32) -> Self {
         Location {
             base: self.base,
             offset: self.offset + extra_offset,
         }
     }
-    fn load_scalar(&self, data: &Data, c: &mut FnContext, flags: MemFlags, typ: &Typ) -> Value {
-        let ins = c.b.ins();
-        let ty = cl_type(data, c.ptr_type, typ);
-        match self.base {
-            LocationBase::Pointer(base_addr) => ins.load(ty, flags, base_addr, self.offset),
-            LocationBase::Register(variable) => c.b.use_var(variable),
-            LocationBase::Stack(stack_slot) => ins.stack_load(ty, stack_slot, self.offset),
-        }
-    }
-    fn load_value(
-        &self,
-        data: &Data,
-        c: &mut FnContext,
-        flags: MemFlags,
-        typ: &Typ,
-        layout: &Layout,
-    ) -> Value {
-        let (ins, ty) = (c.b.ins(), c.ptr_type);
-        match self.base {
-            LocationBase::Pointer(_) | LocationBase::Register(_) => {
-                self.load_scalar(data, c, flags, typ)
-            }
-            LocationBase::Stack(stack_slot) => {
-                if layout.size <= 8 {
-                    self.load_scalar(data, c, flags, typ)
-                } else {
-                    ins.stack_addr(ty, stack_slot, self.offset)
-                }
-            }
-        }
-    }
-    fn store(&self, c: &mut FnContext, value: Value, flags: MemFlags, layout: &Layout) {
-        let (ins, ty) = (c.b.ins(), c.ptr_type);
-        match self.base {
-            // lvalue is a pointer, store in address, rvalue is scalar/aggregate
-            LocationBase::Pointer(base_addr) => {
-                ins.store(flags, value, base_addr, self.offset);
-            }
-            // lvalue is a register variable, rvalue must be a scalar
-            LocationBase::Register(variable) => c.b.def_var(variable, value),
-            // lvalue is a stack variable, rvalue is scalar/aggregate
-            LocationBase::Stack(stack_slot) => {
-                if layout.size <= 8 {
-                    ins.stack_store(value, stack_slot, self.offset);
-                } else {
-                    let align = layout.align as u8;
-                    // let align = dbg!((layout.size as i64 & -(layout.size as i64)) as u8);
-                    let src_addr = value;
-                    let dest_addr = ins.stack_addr(ty, stack_slot, self.offset);
-                    c.b.emit_small_memory_copy(
-                        c.target_config,
-                        dest_addr,
-                        src_addr,
-                        layout.size as u64,
-                        align,
-                        align,
-                        true,
-                        MemFlags::new(),
-                    );
-                }
-            }
-        };
-    }
-    fn to_val(self, data: &Data, c: &mut FnContext, node_id: NodeId) -> Val {
-        let ins = c.b.ins();
-        let typ = data.typ(node_id);
-        let layout = data.layout(node_id);
-        match self.base {
-            LocationBase::Register(variable) => Val::Scalar(c.b.use_var(variable)),
-            LocationBase::Pointer(_) => Val::Reference(self, None),
-            LocationBase::Stack(stack_slot) => {
-                if layout.size <= 8 {
-                    let ty = cl_type(data, c.ptr_type, typ);
-                    Val::Scalar(ins.stack_load(ty, stack_slot, self.offset))
-                } else {
-                    Val::Reference(self, None)
-                }
-            }
+
+    fn stack_slot(self) -> StackSlot {
+        if let LocationBase::Stack(stack_slot) = self.base {
+            stack_slot
+        } else {
+            unreachable!("can only get the stack slot for a stack location");
         }
     }
 }
@@ -1300,21 +1568,15 @@ pub enum Val {
     Multiple(Vec<Value>),
 }
 
-impl Val {
-    fn cranelift_value(self, data: &Data, c: &mut FnContext, node_id: NodeId) -> Value {
-        let typ = data.typ(node_id);
-        let layout = data.layout(node_id);
-        match &self {
-            Val::Scalar(value) => *value,
-            // location is a pointer or stack slot
-            Val::Reference(location, _) => {
-                if layout.size <= 8 {
-                    location.load_scalar(data, c, MemFlags::new(), typ)
-                } else {
-                    location.get_addr(c)
-                }
-            }
-            _ => unreachable!("cannot get cranelift_value for multiple"),
-        }
+fn is_struct_return(data: &Data, return_types: &[TypeId]) -> (bool, u32) {
+    let mut return_bytes = 0;
+    for ti in return_types.iter() {
+        let size = sizeof(data.types, *ti);
+        return_bytes += size;
     }
+    (return_types.len() > 1 || return_bytes > 8, return_bytes)
+}
+
+fn next_power_of_16(x: u32) -> u32 {
+    (x + 15) & (!16 + 1)
 }

@@ -2,7 +2,7 @@ use crate::{
     analyze::Analyzer,
     link::{get_module_dir, link},
     parse::{self, Parser},
-    translate::{cranelift::Generator, input::Input, llvm},
+    translate::{cranelift::ModuleCompiler, input::Input, llvm},
     typecheck::Typechecker,
     workspace::Workspace,
 };
@@ -121,7 +121,7 @@ pub fn test_backend(
     let obj_path = Path::new(&obj_filename);
     if use_jit {
         if let Backend::Cranelift = backend {
-            let generator = Generator::new(workspace, input, "".to_string(), use_jit);
+            let generator = ModuleCompiler::new(workspace, input, "".to_string(), use_jit);
 
             let result = generator.compile_nodes(obj_path);
             assert!(
@@ -133,7 +133,7 @@ pub fn test_backend(
         }
     } else {
         if let Backend::Cranelift = backend {
-            let generator = Generator::new(workspace, input, "".to_string(), use_jit);
+            let generator = ModuleCompiler::new(workspace, input, "".to_string(), use_jit);
             generator.compile_nodes(obj_path);
         } else {
             llvm::compile(input, use_jit, obj_path);
