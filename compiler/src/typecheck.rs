@@ -542,11 +542,12 @@ impl<'a> Typechecker<'a> {
                     self.narrow(expr_type, return_t);
 
                     if let Type::Tuple { .. } = &self.types[return_t] {
+                        // Do nothing?
                     } else {
                         let expressions = self.tree.node(node.lhs);
                         let ni = self.tree.node_index(expressions.lhs);
                         self.narrow(self.get(ni), return_t);
-                        self.set(ni, return_t);
+                        // self.set(ni, return_t);
                     }
 
                     // Coerce
@@ -585,6 +586,7 @@ impl<'a> Typechecker<'a> {
                 }
             }
             Tag::Call => {
+                // If the callee is determined, we can narrow the arguments and the return value.
                 // Type arguments
                 let callee = self.tree.node(node.lhs);
                 if let Tag::Type = callee.tag {
@@ -595,7 +597,7 @@ impl<'a> Typechecker<'a> {
                 }
                 // Argument expressions
                 self.infer(node.rhs)?;
-                // Use a type variable since we can't figure out the type yet
+                // Use a type variable since we can't figure out the type yet, or the number of arguments.
                 let var = self.new_type_variable();
                 self.set(node_id, var);
                 // If the callee is unambiguous, narrow the argument types according to the parameter types.
@@ -619,7 +621,8 @@ impl<'a> Typechecker<'a> {
 
                             // Narrow return types
                             let return_t = self.add_tuple_type(self.types[fn_t].returns().clone());
-                            self.narrow(self.get(node_id), return_t);
+                            self.set(node_id, return_t);
+                            // self.narrow(self.get(node_id), return_t);
                             // dbg!(return_t);
                         }
                     }
@@ -634,7 +637,8 @@ impl<'a> Typechecker<'a> {
 
                         // Narrow return types
                         let returns_ti = self.add_tuple_type(self.types[fn_t].returns().clone());
-                        self.narrow(self.get(node_id), returns_ti);
+                        // self.narrow(self.get(node_id), returns_ti);
+                        self.set(node_id, returns_ti);
                     }
                     Definition::BuiltInType(built_in_t) => {
                         // dbg!(&self.types[built_in_t as TypeId]);
@@ -926,11 +930,12 @@ impl<'a> Typechecker<'a> {
 
                     // let annotation_id = self.tree.node_extra(node, 0);
 
-                    let identifiers = self.tree.node(node.lhs);
+                    let identifiers = *self.tree.node(node.lhs);
                     let expressions = self.tree.node(init_expr);
 
                     let rtypes = self.tree.range(expressions).fold(vec![], |mut v, i| {
-                        let ti = self.get(self.tree.node_index(i));
+                        let ni = self.tree.node_index(i);
+                        let ti = self.get(ni);
                         let ti = self.flatten_var_type(ti);
                         match &self.types[ti] {
                             Type::Tuple { fields } => v.extend(fields),
@@ -941,11 +946,11 @@ impl<'a> Typechecker<'a> {
 
                     // dbg!(&rtypes);
 
-                    if self.tree.range(identifiers).len() != rtypes.len() {
+                    if self.tree.range(&identifiers).len() != rtypes.len() {
                         return Err(Diagnostic::error()
                             .with_message(format!(
                                 "Expected {} initial values, got {}.",
-                                self.tree.range(identifiers).len(),
+                                self.tree.range(&identifiers).len(),
                                 rtypes.len()
                             ))
                             .with_labels(vec![self.tree.label(node.token)]));
@@ -953,21 +958,40 @@ impl<'a> Typechecker<'a> {
 
                     let annotation_id = self.tree.node_extra(node, 0);
 
+                    assert_eq!(self.tree.range(&identifiers).len(), rtypes.len());
+
+                    for i in self.tree.range(expressions) {
+                        let ni = self.tree.node_index(i);
+                        self.make_concrete(ni);
+                    }
+
                     // Concretize rhs
-                    for (id_i, expr_i) in self
-                        .tree
-                        .range(identifiers)
-                        .zip(self.tree.range(expressions))
-                    {
+                    for (index, id_i) in self.tree.range(&identifiers).enumerate() {
                         // lhs
                         let id_id = self.tree.node_index(id_i);
-                        let expr_id = self.tree.node_index(expr_i);
+                        // let expr_id = self.tree.node_index(expr_i);
 
                         // dbg!(self.get(id_id), self.get(expr_id));
-                        self.narrow(self.get(id_id), self.get(expr_id));
+                        let expr_t = rtypes[index];
+                        self.narrow(self.get(id_id), expr_t);
+                        // self.set(id_id, self.get(expr_id));
+                        self.set_variable(self.get(id_id), expr_t);
+                        // if self.tree.node(expr_id).tag == Tag::Call {
+                        //     let expr_t = self.get(expr_id);
+                        //     if let Type::Tuple { .. } = self.ty(expr_id) {
+                        //         break;
+                        //     }
+                        //     if let Type::Parameter {
+                        //         ref mut binding, ..
+                        //     } = self.types[self.tree.node(id_id).ty]
+                        //     {
+                        //         dbg!(&binding, expr_t);
+                        //         *binding = expr_t;
+                        //     }
+                        // }
 
                         self.make_concrete(id_id);
-                        self.make_concrete(expr_id);
+                        // self.make_concrete(expr_t);
                         // dbg!(self.get(id_id), self.get(expr_id));
 
                         // Coerce init expr into identifier type
@@ -980,12 +1004,12 @@ impl<'a> Typechecker<'a> {
 
                         if annotation_id != 0 {
                             let annotation_t = self.get(annotation_id);
-                            if annotation_t != self.get(expr_id) {
+                            if annotation_t != expr_t {
                                 return Err(Diagnostic::error()
                                 .with_message(format!(
                                     "mismatched types in variable declaration: expected {:?}, got {:?}",
                                     self.types[annotation_t],
-                                    self.types[self.get(expr_id)],
+                                    self.types[expr_t],
                                 ))
                                 .with_labels(vec![self.tree.label(node.token)]));
                             }
@@ -1018,33 +1042,33 @@ impl<'a> Typechecker<'a> {
 
                     let return_ts = self.type_ids(return_t);
 
-                    let mut is_generic = false;
+                    let mut _is_generic = false;
                     for t in &return_ts {
                         if let Type::TypeParameter { .. } = self.types[*t] {
-                            is_generic = true;
+                            _is_generic = true;
                         }
                     }
 
                     // Coerce return values if not generic
-                    if !is_generic {
-                        self.check(node.lhs)?;
-                        let expressions = self.tree.node(node.lhs);
+                    // if !is_generic {
+                    self.check(node.lhs)?;
+                    let expressions = self.tree.node(node.lhs);
 
-                        for (index, i) in self.tree.range(expressions).enumerate() {
-                            let ni = self.tree.node_index(i);
-                            if let Some(coerced) = self.coerce(ni, return_ts[index]) {
-                                self.tree.indices[i as usize] = coerced;
-                            } else {
-                                return Err(Diagnostic::error()
-                                    .with_message(format!(
-                                        "mismatched types in return: expected {:?}, got {:?}",
-                                        self.types[return_ts[index]],
-                                        self.types[self.get(ni)]
-                                    ))
-                                    .with_labels(vec![self.tree.label(node.token)]));
-                            }
+                    for (index, i) in self.tree.range(expressions).enumerate() {
+                        let ni = self.tree.node_index(i);
+                        if let Some(coerced) = self.coerce(ni, return_ts[index]) {
+                            self.tree.indices[i as usize] = coerced;
+                        } else {
+                            return Err(Diagnostic::error()
+                                .with_message(format!(
+                                    "mismatched types in return: expected {:?}, got {:?}",
+                                    self.types[return_ts[index]],
+                                    self.types[self.get(ni)]
+                                ))
+                                .with_labels(vec![self.tree.label(node.token)]));
                         }
                     }
+                    // }
                     self.set(node.lhs, return_t);
                 }
             }
@@ -1514,6 +1538,11 @@ impl<'a> Typechecker<'a> {
     //     Some(conversion_node_id as NodeId)
     // }
 
+    // check Assign
+    // check Add/Mul
+    // check Return
+    // check Call
+    // check Subscript
     fn coerce(&mut self, node_id: NodeId, t: TypeId) -> Option<NodeId> {
         let concrete = self.make_concrete(node_id);
         // println!(
@@ -1524,6 +1553,10 @@ impl<'a> Typechecker<'a> {
             return None;
         }
         if let Type::TypeParameter { .. } = self.ty(node_id) {
+            return Some(node_id);
+        }
+        if let Type::TypeParameter { .. } = self.types[t] {
+            self.set(node_id, t);
             return Some(node_id);
         }
         if concrete == self.concretize(t) {
@@ -1622,6 +1655,15 @@ impl<'a> Typechecker<'a> {
         }
     }
 
+    // infer VariableDecl
+    // infer Assign
+    // infer Address
+    // infer Call
+    // infer Return
+    // infer Dereference
+    // check VariableDecl
+    // check Dereference
+    // check Subscript
     fn narrow(&mut self, a: TypeId, b: TypeId) -> Option<TypeId> {
         // println!("narrow(a: {a}, b:{b})");
         if is_none(a) || is_none(b) {
@@ -1640,6 +1682,23 @@ impl<'a> Typechecker<'a> {
                     *max = b
                 }
             }
+            (
+                Type::NumericLiteral { min, max, .. },
+                Type::NumericLiteral {
+                    min: b_min,
+                    max: b_max,
+                    ..
+                },
+            ) => {
+                if b_max < max && b_max >= min {
+                    let (_, max) = self.types[a].min_max_mut();
+                    *max = b_max
+                }
+                if b_min > min && b_min <= max {
+                    let (min, _) = self.types[a].min_max_mut();
+                    *min = b_min
+                }
+            }
             (Type::Parameter { binding, .. }, _) if self.is_subtype(binding, b) => {
                 // dbg!("binding <: b");
                 if let Some(x) = self.narrow(binding, b_concrete) {
@@ -1648,7 +1707,9 @@ impl<'a> Typechecker<'a> {
                     *binding = x;
                 } else {
                     let binding = self.types[a].binding_mut();
-                    *binding = b_concrete;
+                    if is(*binding, T::Never) {
+                        *binding = b_concrete;
+                    }
                 }
             }
             (Type::Tuple { fields: aa }, Type::Tuple { fields: bb }) => {
@@ -1667,6 +1728,18 @@ impl<'a> Typechecker<'a> {
         Some(a)
     }
 
+    fn set_variable(&mut self, a: TypeId, b: TypeId) -> Option<TypeId> {
+        if let Type::Parameter {
+            ref mut binding, ..
+        } = self.types[a]
+        {
+            *binding = b;
+            Some(b)
+        } else {
+            None
+        }
+    }
+
     fn is_subtype(&self, a: TypeId, b: TypeId) -> bool {
         if is_none(a) || is_none(b) {
             return false;
@@ -1683,6 +1756,14 @@ impl<'a> Typechecker<'a> {
                 bytes_a <= bytes_b
             }
             (Type::NumericLiteral { max, min, .. }, Type::Numeric { .. }) => b <= max && b >= min,
+            (
+                Type::NumericLiteral { max, min, .. },
+                Type::NumericLiteral {
+                    max: b_max,
+                    min: b_min,
+                    ..
+                },
+            ) => b_max <= max && b_min >= min,
             (Type::Pointer { typ: a, .. }, Type::Pointer { typ: b, .. }) => self.is_subtype(a, b),
             (Type::Tuple { fields: a }, Type::Tuple { fields: b }) => a
                 .iter()
