@@ -25,11 +25,12 @@ use std::{collections::HashMap, path::Path};
 struct Generator<'ctx> {
     context: &'ctx Context,
     module: Module<'ctx>,
-    builder: Builder<'ctx>,
+    b: Builder<'ctx>,
     execution_engine: ExecutionEngine<'ctx>,
     ptr_sized_int_type: IntType<'ctx>,
     pass_manager: PassManager<FunctionValue<'ctx>>,
     data: Data<'ctx>,
+    state: State<'ctx>,
 }
 
 struct State<'a> {
@@ -74,18 +75,17 @@ pub fn compile(input: &Input, use_jit: bool, obj_filename: &Path) {
     let mut codegen = Generator {
         context: &context,
         module,
-        builder,
+        b: builder,
         execution_engine,
         data,
         pass_manager,
         ptr_sized_int_type,
+        state: State {
+            locations: HashMap::new(),
+            function: None,
+        },
     };
-
-    let mut state = State {
-        locations: HashMap::new(),
-        function: None,
-    };
-    codegen.compile_nodes(&mut state);
+    codegen.compile_nodes();
 
     let triple = TargetTriple::create(&target_lexicon::HOST.to_string());
     let target = Target::from_triple(&triple).unwrap();
@@ -117,7 +117,7 @@ pub fn compile(input: &Input, use_jit: bool, obj_filename: &Path) {
 }
 
 impl<'ctx> Generator<'ctx> {
-    pub fn compile_nodes(&mut self, state: &mut State<'ctx>) -> Option<i64> {
+    pub fn compile_nodes(&mut self) -> Option<i64> {
         let root = self.data.tree.node(0);
         let mut fn_values = Vec::new();
         let mut main_fn = None;
@@ -184,7 +184,7 @@ impl<'ctx> Generator<'ctx> {
                                 type_arguments,
                                 None,
                             );
-                            if let Err(err) = self.compile_function_decl(state, ni, name.clone()) {
+                            if let Err(err) = self.compile_function_decl(ni, name.clone()) {
                                 panic!("Error compiling function declaration '{}': {}", name, err)
                             }
                             self.data.active_type_parameters.pop();
@@ -196,7 +196,7 @@ impl<'ctx> Generator<'ctx> {
                         continue;
                     }
                     let name = self.data.mangle_function_declaration(ni, true, &[], None);
-                    let fn_value = match self.compile_function_decl(state, ni, name.clone()) {
+                    let fn_value = match self.compile_function_decl(ni, name.clone()) {
                         Ok(value) => value,
                         Err(err) => {
                             panic!("Error compiling function declaration '{}': {}", name, err)
@@ -217,24 +217,23 @@ impl<'ctx> Generator<'ctx> {
     }
 
     pub fn compile_function_decl(
-        &self,
-        state: &mut State<'ctx>,
+        &mut self,
         node_id: NodeId,
         name: String,
     ) -> Result<FunctionValue<'ctx>, BuilderError> {
-        let node = self.data.node(node_id);
+        let node = *self.data.node(node_id);
         // let is_overloaded = self.data.definitions.contains_key(&node_id);
 
         let fn_value = self.module.get_function(&name).unwrap();
 
         let entry_block = self.context.append_basic_block(fn_value, "entry");
-        self.builder.position_at_end(entry_block);
+        self.b.position_at_end(entry_block);
         let prototype = self.data.node(node.lhs);
 
         let parameters_id = self.data.tree.node_extra(prototype, 0);
-        self.compile_function_parameters(state, parameters_id, fn_value)?;
-        state.function = Some(fn_value);
-        self.compile_function_body(state, node.rhs)?;
+        self.compile_function_parameters(parameters_id, fn_value)?;
+        self.state.function = Some(fn_value);
+        self.compile_function_body(node.rhs)?;
 
         if fn_value.verify(true) {
             self.pass_manager.run_on(&fn_value);
@@ -293,12 +292,11 @@ impl<'ctx> Generator<'ctx> {
     }
 
     fn compile_function_parameters(
-        &self,
-        state: &mut State<'ctx>,
+        &mut self,
         node_id: NodeId,
         fn_value: FunctionValue<'ctx>,
     ) -> Result<(), BuilderError> {
-        let (data, builder) = (&self.data, &self.builder);
+        let (data, builder) = (&self.data, &self.b);
         let parameters = data.node(node_id);
 
         // Define parameters as stack variables.
@@ -308,93 +306,86 @@ impl<'ctx> Generator<'ctx> {
             let llvm_type = llvm_type(self.context, data, type_id);
             let stack_addr = builder.build_alloca(llvm_type, "alloca_param")?;
             let location = Location::new(stack_addr, 0);
-            state.locations.insert(ni, location);
+            self.state.locations.insert(ni, location);
             let parameter_index = i - parameters.lhs;
             let value = fn_value.get_nth_param(parameter_index).unwrap();
-            self.builder.build_store(stack_addr, value)?;
+            self.b.build_store(stack_addr, value)?;
         }
         Ok(())
     }
 
-    fn compile_function_body(
-        &self,
-        state: &mut State<'ctx>,
-        node_id: NodeId,
-    ) -> Result<(), BuilderError> {
-        let data = &self.data;
-        let body = data.node(node_id);
+    fn compile_function_body(&mut self, node_id: NodeId) -> Result<(), BuilderError> {
+        let body = self.data.node(node_id);
         for i in body.lhs..body.rhs {
-            let ni = data.node_index(i);
-            self.compile_stmt(state, ni)?;
+            let ni = self.data.node_index(i);
+            self.compile_stmt(ni)?;
         }
         if self
-            .builder
+            .b
             .get_insert_block()
             .unwrap()
             .get_terminator()
             .is_none()
         {
-            let ret_type = state
+            let ret_type = self
+                .state
                 .function
                 .unwrap()
                 .get_type()
                 .get_return_type()
                 .unwrap();
-            self.builder.build_return(Some(&ret_type.const_zero()))?;
+            self.b.build_return(Some(&ret_type.const_zero()))?;
         }
         Ok(())
     }
 
-    pub fn compile_stmt(
-        &self,
-        state: &mut State<'ctx>,
-        node_id: NodeId,
-    ) -> Result<(), BuilderError> {
-        let (data, builder) = (&self.data, &self.builder);
-        let node = data.node(node_id);
+    pub fn compile_stmt(&mut self, node_id: NodeId) -> Result<(), BuilderError> {
+        let node = *self.data.node(node_id);
         match node.tag {
             Tag::Assign => {
-                let rvalue = self.compile_expr(state, node.rhs)?;
-                let lvalue = self.compile_lvalue(state, node.lhs)?;
-                let lvalue = self.builder.build_pointer_cast(
+                let rvalue = self.compile_expr(node.rhs)?;
+                let lvalue = self.compile_lvalue(node.lhs)?;
+                let lvalue = self.b.build_pointer_cast(
                     lvalue,
                     rvalue.get_type().ptr_type(AddressSpace::default()),
                     "ptr_cast",
                 )?;
-                self.builder.build_store(lvalue, rvalue)?;
+                self.b.build_store(lvalue, rvalue)?;
             }
             Tag::If => {
-                let parent_fn = state.function.unwrap();
-                let condition_expr = self.compile_expr(state, node.lhs)?.into_int_value();
+                let parent_fn = self.state.function.unwrap();
+                let condition_expr = self.compile_expr(node.lhs)?.into_int_value();
                 let then_block = self.context.append_basic_block(parent_fn, "then");
                 let merge_block = self.context.append_basic_block(parent_fn, "merge");
-                let body = data.node(node.rhs);
+                let body = self.data.node(node.rhs);
 
-                builder.build_conditional_branch(condition_expr, then_block, merge_block)?;
+                self.b
+                    .build_conditional_branch(condition_expr, then_block, merge_block)?;
                 // then block
-                builder.position_at_end(then_block);
+                self.b.position_at_end(then_block);
                 for i in body.lhs..body.rhs {
-                    let ni = data.node_index(i);
-                    self.compile_stmt(state, ni)?;
+                    let ni = self.data.node_index(i);
+                    self.compile_stmt(ni)?;
                 }
-                if builder
+                if self
+                    .b
                     .get_insert_block()
                     .unwrap()
                     .get_terminator()
                     .is_none()
                 {
-                    builder.build_unconditional_branch(merge_block)?;
+                    self.b.build_unconditional_branch(merge_block)?;
                 }
                 // merge block
-                builder.position_at_end(merge_block);
+                self.b.position_at_end(merge_block);
             }
             Tag::IfElse => {
-                let parent_fn = state.function.unwrap();
+                let parent_fn = self.state.function.unwrap();
                 let mut if_nodes = Vec::new();
                 let mut then_blocks = Vec::new();
                 for i in node.lhs..node.rhs {
-                    let index = data.node_index(i);
-                    let if_node = data.node(index);
+                    let index = self.data.node_index(i);
+                    let if_node = *self.data.node(index);
                     assert_eq!(if_node.tag, Tag::If);
                     if_nodes.push(if_node);
                     then_blocks.push(self.context.append_basic_block(parent_fn, "then"));
@@ -409,23 +400,23 @@ impl<'ctx> Generator<'ctx> {
                 let merge_block = self.context.append_basic_block(parent_fn, "merge");
                 // Compile branches.
                 for i in 0..if_count {
-                    let condition_expr =
-                        self.compile_expr(state, if_nodes[i].lhs)?.into_int_value();
+                    let condition_expr = self.compile_expr(if_nodes[i].lhs)?.into_int_value();
                     if i < if_count - 1 {
                         // This is not the last else-if block.
                         let block = self.context.append_basic_block(parent_fn, "block");
-                        builder.build_conditional_branch(condition_expr, then_blocks[i], block)?;
-                        builder.position_at_end(block);
+                        self.b
+                            .build_conditional_branch(condition_expr, then_blocks[i], block)?;
+                        self.b.position_at_end(block);
                     } else if !has_else {
                         // This is the last else-if block and there's no else.
-                        builder.build_conditional_branch(
+                        self.b.build_conditional_branch(
                             condition_expr,
                             then_blocks[i],
                             merge_block,
                         )?;
                     } else {
                         // This is the last else-if block and there's an else.
-                        builder.build_conditional_branch(
+                        self.b.build_conditional_branch(
                             condition_expr,
                             then_blocks[i],
                             then_blocks[if_count],
@@ -434,108 +425,109 @@ impl<'ctx> Generator<'ctx> {
                 }
                 // Compile block statements.
                 for (i, if_node) in if_nodes.iter().enumerate() {
-                    builder.position_at_end(then_blocks[i]);
-                    let body = data.node(if_node.rhs);
+                    self.b.position_at_end(then_blocks[i]);
+                    let body = self.data.node(if_node.rhs);
                     for j in body.lhs..body.rhs {
-                        let index = data.node_index(j);
-                        self.compile_stmt(state, index)?;
+                        let index = self.data.node_index(j);
+                        self.compile_stmt(index)?;
                     }
-                    if builder
+                    if self
+                        .b
                         .get_insert_block()
                         .unwrap()
                         .get_terminator()
                         .is_none()
                     {
-                        builder.build_unconditional_branch(merge_block)?;
+                        self.b.build_unconditional_branch(merge_block)?;
                     }
                 }
-                builder.position_at_end(merge_block);
+                self.b.position_at_end(merge_block);
             }
             Tag::VariableDecl => {
                 // lhs: expressions
                 // rhs: expressions
-                let identifiers = data.tree.node(node.lhs);
+                let identifiers = self.data.tree.node(node.lhs);
                 let mut locs = vec![];
-                for i in data.tree.range(identifiers) {
-                    let ni = data.tree.node_index(i);
-                    let type_id = data.type_id(ni);
-                    let llvm_type = llvm_type(self.context, data, type_id);
-                    let stack_addr = builder.build_alloca(llvm_type, "alloca_local").unwrap();
+                for i in self.data.tree.range(identifiers) {
+                    let ni = self.data.tree.node_index(i);
+                    let type_id = self.data.type_id(ni);
+                    let llvm_type = llvm_type(self.context, &self.data, type_id);
+                    let stack_addr = self.b.build_alloca(llvm_type, "alloca_local").unwrap();
                     let location = Location::new(stack_addr, 0);
-                    state.locations.insert(ni, location);
+                    self.state.locations.insert(ni, location);
                     locs.push(location);
                 }
-                let rvalues_id = data.tree.node_extra(node, 1);
+                let rvalues_id = self.data.tree.node_extra(&node, 1);
                 if rvalues_id == 0 {
                     return Ok(());
                 }
-                let _rhs = data.tree.node(rvalues_id);
-                for (i, value) in self.compile_exprs(state, rvalues_id)?.iter().enumerate() {
-                    builder.build_store(locs[i].base, *value)?;
+                let _rhs = self.data.tree.node(rvalues_id);
+                for (i, value) in self.compile_exprs(rvalues_id)?.iter().enumerate() {
+                    self.b.build_store(locs[i].base, *value)?;
                 }
             }
             Tag::Return => {
                 if node.lhs == 0 {
                     let unit_value = self.context.const_struct(&[], false).as_basic_value_enum();
-                    builder.build_return(Some(&unit_value))?;
+                    self.b.build_return(Some(&unit_value))?;
                 } else {
                     let mut return_values = Vec::new();
-                    let expressions = data.tree.node(node.lhs);
-                    for i in data.tree.range(expressions) {
-                        let val = self.compile_expr(state, data.node_index(i))?;
+                    let expressions = self.data.tree.node(node.lhs);
+                    for i in self.data.tree.range(expressions) {
+                        let val = self.compile_expr(self.data.node_index(i))?;
                         return_values.push(val);
                     }
                     if return_values.len() == 1 {
-                        builder.build_return(Some(&return_values[0]))?;
+                        self.b.build_return(Some(&return_values[0]))?;
                     } else {
-                        builder.build_aggregate_return(&return_values)?;
+                        self.b.build_aggregate_return(&return_values)?;
                     };
                 }
             }
             Tag::While => {
-                let parent_fn = state.function.unwrap();
-                let condition_expr = self.compile_expr(state, node.lhs)?.into_int_value();
+                let parent_fn = self.state.function.unwrap();
+                let condition_expr = self.compile_expr(node.lhs)?.into_int_value();
                 let while_block = self.context.append_basic_block(parent_fn, "while_block");
                 let merge_block = self.context.append_basic_block(parent_fn, "merge_block");
                 // check condition
                 // true? jump to loop body
                 // false? jump to after loop
-                builder.build_conditional_branch(condition_expr, while_block, merge_block)?;
+                self.b
+                    .build_conditional_branch(condition_expr, while_block, merge_block)?;
                 // block_while:
-                builder.position_at_end(while_block);
-                let body = data.node(node.rhs);
+                self.b.position_at_end(while_block);
+                let body = self.data.node(node.rhs);
                 for i in body.lhs..body.rhs {
-                    let ni = data.node_index(i);
-                    self.compile_stmt(state, ni)?;
+                    let ni = self.data.node_index(i);
+                    self.compile_stmt(ni)?;
                 }
-                let condition_expr = self.compile_expr(state, node.lhs)?.into_int_value();
+                let condition_expr = self.compile_expr(node.lhs)?.into_int_value();
                 // brnz block_while
-                builder.build_conditional_branch(condition_expr, while_block, merge_block)?;
+                self.b
+                    .build_conditional_branch(condition_expr, while_block, merge_block)?;
                 // block_merge:
-                builder.position_at_end(merge_block);
+                self.b.position_at_end(merge_block);
             }
             _ => {
-                self.compile_expr(state, node_id)?;
+                self.compile_expr(node_id)?;
             }
         }
         Ok(())
     }
 
     pub fn compile_exprs(
-        &self,
-        state: &mut State<'ctx>,
+        &mut self,
         node_id: NodeId,
     ) -> Result<Vec<BasicValueEnum<'ctx>>, BuilderError> {
-        let (data, builder) = (&self.data, &self.builder);
-        let node = data.tree.node(node_id);
+        let node = self.data.tree.node(node_id);
         assert_eq!(node.tag, Tag::Expressions);
-        let range = data.tree.range(node);
+        let range = self.data.tree.range(node);
         let mut values = Vec::with_capacity(range.len());
         for i in range {
-            let ni = data.tree.node_index(i);
-            let value = self.compile_expr(state, ni)?;
-            let type_ids = &[data.type_id(ni)];
-            let type_ids = if let Typ::Tuple { fields } = data.typ(ni) {
+            let ni = self.data.tree.node_index(i);
+            let value = self.compile_expr(ni)?;
+            let type_ids = &[self.data.type_id(ni)];
+            let type_ids = if let Typ::Tuple { fields } = self.data.typ(ni) {
                 fields.as_slice()
             } else {
                 type_ids
@@ -544,7 +536,7 @@ impl<'ctx> Generator<'ctx> {
                 values.push(value);
             } else {
                 for i in 0..type_ids.len() {
-                    let value = builder.build_extract_value::<StructValue>(
+                    let value = self.b.build_extract_value::<StructValue>(
                         value.into_struct_value(),
                         i as u32,
                         "extract_value",
@@ -556,26 +548,22 @@ impl<'ctx> Generator<'ctx> {
         Ok(values)
     }
 
-    pub fn compile_expr(
-        &self,
-        state: &mut State<'ctx>,
-        node_id: NodeId,
-    ) -> Result<BasicValueEnum<'ctx>, BuilderError> {
-        let (data, builder) = (&self.data, &self.builder);
-        let node = data.node(node_id);
+    pub fn compile_expr(&mut self, node_id: NodeId) -> Result<BasicValueEnum<'ctx>, BuilderError> {
+        let node = *self.data.node(node_id);
 
-        let value_type = llvm_type(self.context, data, data.type_id(node_id));
+        let value_type = llvm_type(self.context, &self.data, self.data.type_id(node_id));
 
         macro_rules! compile_binary_expr {
             ($inst:ident, $name:literal) => {{
-                let (lhs, rhs) = self.compile_children(state, node)?;
-                Ok(builder.$inst(lhs, rhs, $name).unwrap().into())
+                let (lhs, rhs) = self.compile_children(&node)?;
+                Ok(self.b.$inst(lhs, rhs, $name).unwrap().into())
             }};
         }
         macro_rules! compile_int_compare {
             ($predicate:expr, $name:literal) => {{
-                let (lhs, rhs) = self.compile_children(state, node)?;
-                Ok(builder
+                let (lhs, rhs) = self.compile_children(&node)?;
+                Ok(self
+                    .b
                     .build_int_compare($predicate, lhs, rhs, $name)
                     .unwrap()
                     .into())
@@ -585,20 +573,25 @@ impl<'ctx> Generator<'ctx> {
         match node.tag {
             // Variables
             Tag::Access => {
-                let container = self.compile_expr(state, node.lhs)?;
-                let field_id = data
+                let container = self.compile_expr(node.lhs)?;
+                let field_id = self
+                    .data
                     .definitions
                     .get_definition_id(node_id, Diagnostic::error())
                     .expect("failed to lookup field definition");
-                let field = data.node(field_id);
-                let field_index = data.tree.node_extra(field, 1);
+                let field = self.data.node(field_id);
+                let field_index = self.data.tree.node_extra(field, 1);
                 match container {
                     BasicValueEnum::PointerValue(pointer) => {
                         // Automatically deref.
-                        let struct_type =
-                            llvm_type(self.context, data, data.typ(node.lhs).element_type());
+                        let struct_type = llvm_type(
+                            self.context,
+                            &self.data,
+                            self.data.typ(node.lhs).element_type(),
+                        );
                         // Returns the pointer to the struct field.
-                        let gep = builder
+                        let gep = self
+                            .b
                             .build_struct_gep(
                                 struct_type.as_basic_type_enum(),
                                 pointer,
@@ -606,64 +599,71 @@ impl<'ctx> Generator<'ctx> {
                                 "",
                             )
                             .unwrap();
-                        self.builder.build_load(value_type, gep, "")
+                        self.b.build_load(value_type, gep, "")
                     }
                     BasicValueEnum::StructValue(value) => {
-                        builder.build_extract_value(value, field_index, "")
+                        self.b.build_extract_value(value, field_index, "")
                     }
                     _ => unreachable!("cannot gep_struct for non-struct value"),
                 }
             }
-            Tag::Address => Ok(self.locate(state, node.lhs).base.into()),
+            Tag::Address => Ok(self.locate(node.lhs).base.into()),
             Tag::Dereference => {
-                let location = self.compile_lvalue(state, node.lhs)?;
-                let ptr_type = llvm_type(self.context, data, data.type_id(node.lhs));
-                let ptr = builder
+                let location = self.compile_lvalue(node.lhs)?;
+                let ptr_type = llvm_type(self.context, &self.data, self.data.type_id(node.lhs));
+                let ptr = self
+                    .b
                     .build_load(ptr_type, location, "pointer_value")?
                     .into_pointer_value();
-                builder.build_load(value_type, ptr, "deref")
+                self.b.build_load(value_type, ptr, "deref")
             }
             Tag::Identifier => {
-                let name = data.tree.name(node_id);
-                let location = self.locate(state, node_id);
-                builder.build_load(value_type, location.base, name)
+                let name = self.data.tree.name(node_id);
+                let location = self.locate(node_id);
+                self.b.build_load(value_type, location.base, name)
             }
             Tag::Subscript => {
-                let lvalue = self.compile_lvalue(state, node_id)?;
-                builder.build_load(value_type, lvalue, "subscript")
+                let lvalue = self.compile_lvalue(node_id)?;
+                self.b.build_load(value_type, lvalue, "subscript")
             }
             Tag::Conversion => {
-                let x = self.compile_expr(state, node.lhs).unwrap().into_int_value();
-                let from_type =
-                    llvm_type(self.context, data, data.type_id(node.lhs)).into_int_type();
-                let to_type = llvm_type(self.context, data, data.type_id(node_id)).into_int_type();
+                let x = self.compile_expr(node.lhs).unwrap().into_int_value();
+                let from_type = llvm_type(self.context, &self.data, self.data.type_id(node.lhs))
+                    .into_int_type();
+                let to_type =
+                    llvm_type(self.context, &self.data, self.data.type_id(node_id)).into_int_type();
                 let value = if to_type.get_bit_width() < from_type.get_bit_width() {
-                    builder.build_int_truncate(x, to_type, "trunc")
-                } else if data.typ(node_id).is_signed() {
-                    builder.build_int_s_extend(x, to_type, "sext")
+                    self.b.build_int_truncate(x, to_type, "trunc")
+                } else if self.data.typ(node_id).is_signed() {
+                    self.b.build_int_s_extend(x, to_type, "sext")
                 } else {
-                    builder.build_int_z_extend(x, to_type, "zext")
+                    self.b.build_int_z_extend(x, to_type, "zext")
                 }?;
                 Ok(value.as_basic_value_enum())
             }
             // Function calls
-            Tag::Add | Tag::Mul => self.compile_call(state, node_id, node_id, true),
-            Tag::Call => self.compile_call(state, node_id, node.lhs, false),
+            Tag::Add | Tag::Mul => self.compile_call(node_id, node_id, true),
+            Tag::Call => self.compile_call(node_id, node.lhs, false),
             // Arithmetic operators
             Tag::Div => compile_binary_expr!(build_int_signed_div, "int_signed_div"),
             Tag::Sub => compile_binary_expr!(build_int_sub, "int_sub"),
             Tag::Negation => {
-                if data.tree.node(node.lhs).tag == Tag::IntegerLiteral {
-                    return Ok(self.compile_integer_literal(node.lhs, data.type_id(node_id), true));
+                if self.data.tree.node(node.lhs).tag == Tag::IntegerLiteral {
+                    return Ok(self.compile_integer_literal(
+                        node.lhs,
+                        self.data.type_id(node_id),
+                        true,
+                    ));
                 }
-                let value = self.compile_expr(state, node.lhs)?.into_int_value();
-                Ok(builder.build_int_neg(value, "int_neg")?.into())
+                let value = self.compile_expr(node.lhs)?.into_int_value();
+                Ok(self.b.build_int_neg(value, "int_neg")?.into())
             }
             // Bitwise operators
             Tag::BitwiseShiftL => compile_binary_expr!(build_left_shift, "left_shift"),
             Tag::BitwiseShiftR => {
-                let (lhs, rhs) = self.compile_children(state, node)?;
-                Ok(builder
+                let (lhs, rhs) = self.compile_children(&node)?;
+                Ok(self
+                    .b
                     .build_right_shift(lhs, rhs, true, "right_shift")?
                     .into())
             }
@@ -675,17 +675,17 @@ impl<'ctx> Generator<'ctx> {
             Tag::GreaterEqual => compile_int_compare!(IntPredicate::SGE, "int_compare_sge"),
             Tag::Less => compile_int_compare!(IntPredicate::SLT, "int_compare_slt"),
             Tag::LessEqual => compile_int_compare!(IntPredicate::SLE, "int_compare_sle"),
-            Tag::LogicalAnd => self.compile_short_circuit(state, node, true),
-            Tag::LogicalOr => self.compile_short_circuit(state, node, false),
+            Tag::LogicalAnd => self.compile_short_circuit(&node, true),
+            Tag::LogicalOr => self.compile_short_circuit(&node, false),
             Tag::Not => {
-                let value = self.compile_expr(state, node.lhs)?.into_int_value();
-                Ok(builder.build_not(value, "not")?.into())
+                let value = self.compile_expr(node.lhs)?.into_int_value();
+                Ok(self.b.build_not(value, "not")?.into())
             }
             // Literal values
             Tag::False => Ok(self.context.bool_type().const_int(0, false).into()),
             Tag::True => Ok(self.context.bool_type().const_int(1, false).into()),
             Tag::FloatLiteral => {
-                let token_str = data.tree.node_lexeme(node_id);
+                let token_str = self.data.tree.node_lexeme(node_id);
                 // dbg!(token_str);
                 let value = token_str.parse::<f32>().unwrap();
                 // dbg!(value);
@@ -696,10 +696,11 @@ impl<'ctx> Generator<'ctx> {
                     .as_basic_value_enum())
             }
             Tag::IntegerLiteral => {
-                Ok(self.compile_integer_literal(node_id, data.type_id(node_id), false))
+                Ok(self.compile_integer_literal(node_id, self.data.type_id(node_id), false))
             }
             Tag::StringLiteral => {
-                let mut string = data
+                let mut string = self
+                    .data
                     .tree
                     .token_str(node.token)
                     .trim_matches('"')
@@ -707,7 +708,7 @@ impl<'ctx> Generator<'ctx> {
                 let length = string.len();
                 string.push('\0');
                 let ptr = self
-                    .builder
+                    .b
                     .build_global_string_ptr(&string, "string_data")
                     .unwrap();
                 let len = self.context.i64_type().const_int(length as u64, true);
@@ -723,70 +724,71 @@ impl<'ctx> Generator<'ctx> {
         }
     }
 
-    fn compile_lvalue(
-        &self,
-        state: &mut State<'ctx>,
-        node_id: NodeId,
-    ) -> Result<PointerValue<'ctx>, BuilderError> {
-        let (data, builder) = (&self.data, &self.builder);
-        let node = data.node(node_id);
+    fn compile_lvalue(&mut self, node_id: NodeId) -> Result<PointerValue<'ctx>, BuilderError> {
+        let node = *self.data.node(node_id);
         match node.tag {
             // a.x = b
             Tag::Access => {
                 // Return the location of the struct field.
-                let field_id = data
+                let field_id = self
+                    .data
                     .definitions
                     .get_definition_id(node_id, Diagnostic::error())
                     .expect("failed to lookup field definition");
-                let field = data.node(field_id);
-                let field_index = data.tree.node_extra(field, 1);
-                let mut struct_ptr = self.compile_lvalue(state, node.lhs)?;
-                let a_type = llvm_type(self.context, data, data.type_id(node.lhs));
-                let struct_ty = if let Typ::Pointer { typ, .. } = data.typ(node.lhs) {
+                let field = self.data.node(field_id);
+                let field_index = self.data.tree.node_extra(field, 1);
+                let mut struct_ptr = self.compile_lvalue(node.lhs)?;
+                let a_type = llvm_type(self.context, &self.data, self.data.type_id(node.lhs));
+                let struct_ty = if let Typ::Pointer { typ, .. } = self.data.typ(node.lhs) {
                     // Dereference pointer values.
-                    let load = builder.build_load(a_type, struct_ptr, "deref")?;
+                    let load = self.b.build_load(a_type, struct_ptr, "deref")?;
                     struct_ptr = load.into_pointer_value();
-                    llvm_type(self.context, data, *typ)
+                    llvm_type(self.context, &self.data, *typ)
                 } else {
                     a_type
                 };
-                builder.build_struct_gep(struct_ty, struct_ptr, field_index, "")
+                self.b
+                    .build_struct_gep(struct_ty, struct_ptr, field_index, "")
             }
             // @a = b
             Tag::Dereference => {
                 // Return the pointer location.
-                let location = self.compile_lvalue(state, node.lhs)?;
-                let a_type = llvm_type(self.context, data, data.type_id(node.lhs));
-                Ok(builder
+                let location = self.compile_lvalue(node.lhs)?;
+                let a_type = llvm_type(self.context, &self.data, self.data.type_id(node.lhs));
+                Ok(self
+                    .b
                     .build_load(a_type, location, "deref_lvalue")?
                     .into_pointer_value())
             }
             // a = b
-            Tag::Identifier => Ok(self.locate(state, node_id).base),
+            Tag::Identifier => Ok(self.locate(node_id).base),
             // a[i] = b
             Tag::Subscript => {
                 // Return the location of the array element.
-                let array_ptr = self.compile_lvalue(state, node.lhs)?;
-                let index_value = self.compile_expr(state, node.rhs)?.into_int_value();
+                let array_ptr = self.compile_lvalue(node.lhs)?;
+                let index_value = self.compile_expr(node.rhs)?.into_int_value();
                 // Offset for 1-based indexing.
                 let base_offset = self.context.i64_type().const_int(1, false);
-                let index_value = builder
+                let index_value = self
+                    .b
                     .build_int_sub(index_value, base_offset, "int_sub")
                     .unwrap();
-                let element_type = llvm_type(self.context, data, data.type_id(node_id));
-                unsafe { builder.build_gep(element_type, array_ptr, &[index_value], "gep") }
+                let element_type = llvm_type(self.context, &self.data, self.data.type_id(node_id));
+                unsafe {
+                    self.b
+                        .build_gep(element_type, array_ptr, &[index_value], "gep")
+                }
             }
             _ => unreachable!("Invalid lvalue {:?} for assignment", node.tag),
         }
     }
 
     fn compile_children(
-        &self,
-        state: &mut State<'ctx>,
+        &mut self,
         node: &Node,
     ) -> Result<(IntValue<'ctx>, IntValue<'ctx>), BuilderError> {
-        let lhs = self.compile_expr(state, node.lhs)?.into_int_value();
-        let rhs = self.compile_expr(state, node.rhs)?.into_int_value();
+        let lhs = self.compile_expr(node.lhs)?.into_int_value();
+        let rhs = self.compile_expr(node.rhs)?.into_int_value();
         Ok((lhs, rhs))
     }
 
@@ -796,88 +798,88 @@ impl<'ctx> Generator<'ctx> {
     /// 3. Call function.
     /// 3.
     fn compile_call(
-        &self,
-        state: &mut State<'ctx>,
+        &mut self,
         node_id: NodeId,
         callee_id: NodeId,
         binary: bool,
     ) -> Result<BasicValueEnum<'ctx>, BuilderError> {
-        let (data, builder) = (&self.data, &self.builder);
-
-        let node = data.tree.node(node_id);
+        let node = self.data.tree.node(node_id);
         let mut type_arguments = vec![];
         if !binary {
-            let callee = data.node(node.lhs);
-            for i in data.tree.range(callee) {
-                let ni = data.tree.node_index(i);
-                type_arguments.push(data.type_id(ni));
+            let callee = self.data.node(node.lhs);
+            for i in self.data.tree.range(callee) {
+                let ni = self.data.tree.node_index(i);
+                type_arguments.push(self.data.type_id(ni));
             }
         }
         let arg_ids = if binary {
             vec![node.lhs, node.rhs]
         } else {
-            data.tree
-                .range(data.node(node.rhs))
-                .map(|i| data.node_index(i))
+            self.data
+                .tree
+                .range(self.data.node(node.rhs))
+                .map(|i| self.data.node_index(i))
                 .collect()
         };
 
-        let definition = data.definitions.get(&callee_id).unwrap_or_else(|| {
+        let definition = self.data.definitions.get(&callee_id).unwrap_or_else(|| {
             panic!("Definition not found: {}", "failed to get function decl id")
         });
 
         let name = match &definition {
             Definition::BuiltInFunction(id) => {
-                return self.compile_built_in_function(state, *id, node_id);
+                return self.compile_built_in_function(*id, node_id);
             }
             Definition::User(id) | Definition::Foreign(id) | Definition::Overload(id) => {
                 let arg_type_ids: Vec<TypeId> =
-                    arg_ids.iter().map(|ni| data.type_id(*ni)).collect();
-                if let Some(map) = data.type_parameters.get(id) {
+                    arg_ids.iter().map(|ni| self.data.type_id(*ni)).collect();
+                if let Some(map) = self.data.type_parameters.get(id) {
                     let key = if !type_arguments.is_empty() {
                         &type_arguments
                     } else {
                         &arg_type_ids
                     };
                     let solution = map.get(key).unwrap();
-                    data.mangle_function_declaration(*id, true, solution, None)
+                    self.data
+                        .mangle_function_declaration(*id, true, solution, None)
                 } else {
-                    data.mangle_function_declaration(*id, true, &[], Some(&arg_type_ids))
+                    self.data
+                        .mangle_function_declaration(*id, true, &[], Some(&arg_type_ids))
                 }
             }
-            Definition::Resolved(id) => data.mangle_function_declaration(*id, true, &[], None),
+            Definition::Resolved(id) => self.data.mangle_function_declaration(*id, true, &[], None),
             Definition::BuiltInType(built_in_type) => {
-                let node = data.tree.node(node_id);
-                let args = data.node(node.rhs);
-                let ni = data.node_index(args.lhs);
-                let arg = self.compile_expr(state, ni)?;
+                let node = self.data.tree.node(node_id);
+                let args = self.data.node(node.rhs);
+                let ni = self.data.node_index(args.lhs);
+                let arg = self.compile_expr(ni)?;
 
-                let from_type_enum = llvm_type(self.context, data, data.type_id(ni));
+                let from_type_enum = llvm_type(self.context, &self.data, self.data.type_id(ni));
                 let from_bits = from_type_enum.into_int_type().get_bit_width();
 
                 let ti = *built_in_type as TypeId;
-                let to_typ = &data.types[ti];
-                let to_type_enum = llvm_type(self.context, data, ti);
+                let to_typ = &self.data.types[ti];
+                let to_type_enum = llvm_type(self.context, &self.data, ti);
                 let to_bits = to_type_enum.into_int_type().get_bit_width();
 
                 return if arg.get_type().is_float_type() {
                     let value = arg.into_float_value();
                     let to_type = to_type_enum.into_float_type();
                     Ok(if to_bits < from_bits {
-                        builder.build_float_trunc(value, to_type, "trunc")
+                        self.b.build_float_trunc(value, to_type, "trunc")
                     } else {
-                        builder.build_float_ext(value, to_type, "ext")
+                        self.b.build_float_ext(value, to_type, "ext")
                     }?
                     .as_basic_value_enum())
                 } else {
                     let value = arg.into_int_value();
                     let to_type = to_type_enum.into_int_type();
                     Ok(if to_bits < from_bits {
-                        builder.build_int_truncate(value, to_type, "trunc")
+                        self.b.build_int_truncate(value, to_type, "trunc")
                     } else if to_typ.is_signed() {
-                        builder.build_int_s_extend(value, to_type, "sext")
+                        self.b.build_int_s_extend(value, to_type, "sext")
                     } else {
-                        builder.build_int_z_extend(value, to_type, "sext")
+                        self.b.build_int_z_extend(value, to_type, "sext")
                     }?
                     .as_basic_value_enum())
                 };
@@ -891,13 +893,11 @@ impl<'ctx> Generator<'ctx> {
             .unwrap_or_else(|| panic!("failed to get module function \"{}\"", &name));
 
         // Assume one return value.
-        let return_type = data.type_id(node_id);
+        let return_type = self.data.type_id(node_id);
 
         let results: Result<Vec<BasicValueEnum>, BuilderError> = arg_ids
             .iter()
-            .map(|ni| -> Result<BasicValueEnum<'ctx>, BuilderError> {
-                self.compile_expr(state, *ni)
-            })
+            .map(|ni| -> Result<BasicValueEnum<'ctx>, BuilderError> { self.compile_expr(*ni) })
             .collect();
         let args = results?;
 
@@ -907,7 +907,7 @@ impl<'ctx> Generator<'ctx> {
             .map(|&val| val.into())
             .collect::<Vec<BasicMetadataValueEnum>>();
         let argslice = argslice.as_slice();
-        let call_site_value = builder.build_call(callee, argslice, &name)?;
+        let call_site_value = self.b.build_call(callee, argslice, &name)?;
         if return_type != T::Void as TypeId {
             Ok(call_site_value
                 .try_as_basic_value()
@@ -919,65 +919,62 @@ impl<'ctx> Generator<'ctx> {
     }
 
     fn compile_built_in_function(
-        &self,
-        state: &mut State<'ctx>,
+        &mut self,
         built_in_function: BuiltInFunction,
         node_id: NodeId,
     ) -> Result<BasicValueEnum<'ctx>, BuilderError> {
-        let data = &self.data;
-        let node = data.tree.node(node_id);
+        let node = self.data.tree.node(node_id);
         match built_in_function {
             BuiltInFunction::Add | BuiltInFunction::AddI8 | BuiltInFunction::AddI32 => {
-                let a = self.compile_expr(state, node.lhs)?.into_int_value();
-                let b = self.compile_expr(state, node.rhs)?.into_int_value();
-                Ok(self.builder.build_int_add(a, b, "int_add")?.into())
+                let a = self.compile_expr(node.lhs)?.into_int_value();
+                let b = self.compile_expr(node.rhs)?.into_int_value();
+                Ok(self.b.build_int_add(a, b, "int_add")?.into())
             }
             BuiltInFunction::Mul => {
-                let a = self.compile_expr(state, node.lhs)?.into_int_value();
-                let b = self.compile_expr(state, node.rhs)?.into_int_value();
-                Ok(self.builder.build_int_mul(a, b, "int_mul")?.into())
+                let a = self.compile_expr(node.lhs)?.into_int_value();
+                let b = self.compile_expr(node.rhs)?.into_int_value();
+                Ok(self.b.build_int_mul(a, b, "int_mul")?.into())
             }
             BuiltInFunction::SizeOf => {
-                let args = data.tree.node(node.rhs);
-                let first_arg_id = data.tree.node_index(args.lhs);
-                let type_id = data.type_id(first_arg_id);
-                let value = sizeof(data.types, type_id) as u64;
+                let args = self.data.tree.node(node.rhs);
+                let first_arg_id = self.data.tree.node_index(args.lhs);
+                let type_id = self.data.type_id(first_arg_id);
+                let value = sizeof(self.data.types, type_id) as u64;
                 Ok(self.context.i64_type().const_int(value, false).into())
             }
             BuiltInFunction::SubI64 => {
-                let a = self.compile_expr(state, node.lhs)?.into_int_value();
-                let b = self.compile_expr(state, node.rhs)?.into_int_value();
-                Ok(self.builder.build_int_sub(a, b, "int_sub")?.into())
+                let a = self.compile_expr(node.lhs)?.into_int_value();
+                let b = self.compile_expr(node.rhs)?.into_int_value();
+                Ok(self.b.build_int_sub(a, b, "int_sub")?.into())
             }
         }
     }
 
     fn compile_short_circuit(
-        &self,
-        state: &mut State<'ctx>,
+        &mut self,
         node: &Node,
         is_and: bool,
     ) -> Result<BasicValueEnum<'ctx>, BuilderError> {
-        let parent_fn = state.function.unwrap();
-        let lhs = self.compile_expr(state, node.lhs)?.into_int_value();
+        let parent_fn = self.state.function.unwrap();
+        let lhs = self.compile_expr(node.lhs)?.into_int_value();
         // Record the first predecessor block after compiling the lhs.
-        let lhs_block = self.builder.get_insert_block().unwrap();
+        let lhs_block = self.b.get_insert_block().unwrap();
         let right_block = self.context.append_basic_block(parent_fn, "right_block");
         let merge_block = self.context.append_basic_block(parent_fn, "merge_block");
         if is_and {
-            self.builder
+            self.b
                 .build_conditional_branch(lhs, right_block, merge_block)?;
         } else {
-            self.builder
+            self.b
                 .build_conditional_branch(lhs, merge_block, right_block)?;
         }
-        self.builder.position_at_end(right_block);
-        let rhs = self.compile_expr(state, node.rhs)?;
+        self.b.position_at_end(right_block);
+        let rhs = self.compile_expr(node.rhs)?;
         // Record the second predecessor block after compiling the lhs.
-        let rhs_block = self.builder.get_insert_block().unwrap();
-        self.builder.build_unconditional_branch(merge_block)?;
-        self.builder.position_at_end(merge_block);
-        let phi = self.builder.build_phi(self.context.bool_type(), "phi")?;
+        let rhs_block = self.b.get_insert_block().unwrap();
+        self.b.build_unconditional_branch(merge_block)?;
+        self.b.position_at_end(merge_block);
+        let phi = self.b.build_phi(self.context.bool_type(), "phi")?;
         phi.add_incoming(&[(&lhs, lhs_block), (&rhs.into_int_value(), rhs_block)]);
         Ok(phi.as_basic_value())
     }
@@ -988,18 +985,16 @@ impl<'ctx> Generator<'ctx> {
         type_id: TypeId,
         negative: bool,
     ) -> BasicValueEnum<'ctx> {
-        let data = &self.data;
-        let token_str = data.tree.node_lexeme(node_id);
-        // dbg!(token_str);
+        let token_str = self.data.tree.node_lexeme(node_id);
         let value = token_str.parse::<i64>().unwrap();
-        let llvm_type = llvm_type(self.context, data, type_id);
+        let llvm_type = llvm_type(self.context, &self.data, type_id);
         llvm_type
             .into_int_type()
             .const_int(if negative { -value } else { value } as u64, true)
             .into()
     }
 
-    fn locate(&self, state: &mut State<'ctx>, node_id: NodeId) -> Location<'ctx> {
+    fn locate(&self, node_id: NodeId) -> Location<'ctx> {
         let node = self.data.node(node_id);
         match node.tag {
             Tag::Identifier => {
@@ -1008,7 +1003,8 @@ impl<'ctx> Generator<'ctx> {
                     .definitions
                     .get_definition_id(node_id, Diagnostic::error())
                     .expect("failed to lookup variable definition");
-                *state
+                *self
+                    .state
                     .locations
                     .get(&def_id)
                     .expect("failed to get identifier location")
