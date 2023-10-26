@@ -43,6 +43,7 @@ pub struct Typechecker<'a> {
     current_struct_id: NodeId,
 
     fn_id_stack: Vec<NodeId>,
+    previous_branch_types: Vec<TypeId>,
 
     next_variable_id: usize,
 
@@ -149,6 +150,7 @@ impl<'a> Typechecker<'a> {
             current_fn_type_id: None,
             current_struct_id: 0,
             fn_id_stack: vec![],
+            previous_branch_types: vec![],
             next_variable_id: 0,
             types,
         }
@@ -294,6 +296,16 @@ impl<'a> Typechecker<'a> {
                     let ni = self.tree.node_index(i);
                     self.infer(ni)?;
                 }
+            }
+            Tag::IfxElse => {
+                let var = self.new_type_variable();
+                self.set(node_id, var);
+                self.previous_branch_types.push(var);
+                for i in self.tree.range(node) {
+                    let ni = self.tree.node_index(i);
+                    self.infer(ni)?;
+                }
+                self.previous_branch_types.pop();
             }
             Tag::Import => {
                 self.set(node_id, T::Void as TypeId);
@@ -560,6 +572,26 @@ impl<'a> Typechecker<'a> {
                     //     }
                     // }
                     // self.set(node.lhs, fn_return_type);
+                }
+            }
+            Tag::Yield => {
+                self.infer(node.lhs)?;
+                let previous = self.previous_branch_types.last().copied().unwrap();
+                let narrowed = self.narrow(previous, self.get(node.lhs));
+                if narrowed.is_none() {
+                    return Err(Diagnostic::error()
+                        .with_message(format!(
+                            "mismatched types in ifx branch: expected {:?}, got {:?}",
+                            self.types[previous],
+                            self.types[self.get(node.lhs)]
+                        ))
+                        .with_labels(vec![self.tree.label(self.tree.node(node.lhs).token)]));
+                }
+                self.set(node.lhs, previous);
+                let expressions = self.tree.node(node.lhs);
+                for i in self.tree.range(expressions) {
+                    let ni = self.tree.node_index(i);
+                    self.set(ni, previous);
                 }
             }
             // Operator expressions
@@ -899,6 +931,19 @@ impl<'a> Typechecker<'a> {
                     self.check(self.tree.node_index(i))?;
                 }
             }
+            Tag::IfxElse => {
+                self.previous_branch_types.push(self.get(node_id));
+                for i in self.tree.range(node) {
+                    self.check(self.tree.node_index(i))?;
+                }
+                if !self.will_have_value(node_id) {
+                    return Err(Diagnostic::error()
+                        .with_message("missing expression value")
+                        .with_labels(vec![self.tree.label(node.token)]));
+                }
+                self.set(node_id, *self.previous_branch_types.last().unwrap());
+                self.previous_branch_types.pop();
+            }
             Tag::Expressions => {
                 let mut ts = vec![];
                 for i in self.tree.range(node) {
@@ -1070,6 +1115,28 @@ impl<'a> Typechecker<'a> {
                     }
                     // }
                     self.set(node.lhs, return_t);
+                }
+            }
+            Tag::Yield => {
+                self.check(node.lhs)?;
+                let previous = self.previous_branch_types.last().copied();
+                if let Some(prev) = previous {
+                    let ti = self.get(node.lhs);
+                    if is(prev, T::None) {
+                        *self.previous_branch_types.last_mut().unwrap() = ti;
+                    } else if ti != prev {
+                        let narrowed = self.narrow(prev, ti);
+                        if narrowed.is_none() {
+                            return Err(Diagnostic::error()
+                                .with_message(format!(
+                                    "mismatched types in ifx branch: expected {:?}, got {:?}",
+                                    self.types[prev], self.types[ti]
+                                ))
+                                .with_labels(vec![self
+                                    .tree
+                                    .label(self.tree.node(node.lhs).token)]));
+                        }
+                    }
                 }
             }
             Tag::If => {
@@ -2249,6 +2316,44 @@ impl<'a> Typechecker<'a> {
                 }
             }
             _ => format!("{:?}", typ),
+        }
+    }
+
+    fn will_have_value(&self, node_id: NodeId) -> bool {
+        let node = self.tree.node(node_id);
+        dbg!(node.tag);
+        match node.tag {
+            // A block will return if any of its statements returns.
+            Tag::Block => {
+                for i in self.tree.range(node) {
+                    let ni = self.tree.node_index(i);
+                    let stmt = self.tree.node(ni);
+                    if matches!(stmt.tag, Tag::Break | Tag::Continue) {
+                        return false;
+                    }
+                    if self.will_have_value(ni) {
+                        return true;
+                    }
+                }
+                false
+            }
+            // Each block must return.
+            Tag::IfxElse => {
+                for i in self.tree.range(node) {
+                    let ni = self.tree.node_index(i);
+                    let if_node = self.tree.node(ni);
+                    if !self.will_have_value(if_node.rhs) {
+                        return false;
+                    }
+                    if i == node.rhs - 1 && if_node.lhs != 0 {
+                        // last block is not an else
+                        return false;
+                    }
+                }
+                true
+            }
+            Tag::Yield | Tag::Return => true,
+            _ => false,
         }
     }
 }

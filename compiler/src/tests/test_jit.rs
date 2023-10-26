@@ -185,6 +185,10 @@ fn ifelse() {
     test("ifelse", Test::AotAndJit, 0, 61);
 }
 #[test]
+fn ifx() {
+    test("ifx", Test::AotAndJit, 0, 1);
+}
+#[test]
 fn multiple() {
     test("multiple", Test::AotAndJit, 0, 10);
 }

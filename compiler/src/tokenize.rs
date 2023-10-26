@@ -45,6 +45,7 @@ pub enum Tag {
     Hash,
     Identifier,
     If,
+    Ifx,
     Import,
     IntegerLiteral,
     Invalid,
@@ -96,6 +97,7 @@ pub enum Tag {
 
 static KEYWORDS: phf::Map<&'static str, Tag> = phf_map! {
     "if" => Tag::If,
+    "ifx" => Tag::Ifx,
     "end" => Tag::End,
     "else" => Tag::Else,
     "enum" => Tag::Enum,

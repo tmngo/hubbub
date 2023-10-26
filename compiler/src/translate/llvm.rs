@@ -6,6 +6,7 @@ use crate::{
 };
 use codespan_reporting::diagnostic::Diagnostic;
 use inkwell::{
+    basic_block::BasicBlock,
     builder::{Builder, BuilderError},
     context::Context,
     execution_engine::ExecutionEngine,
@@ -36,6 +37,8 @@ struct Generator<'ctx> {
 struct State<'a> {
     locations: HashMap<NodeId, Location<'a>>,
     function: Option<FunctionValue<'a>>,
+    block_expr_stack: Vec<BasicBlock<'a>>,
+    block_yields: Vec<Vec<(BasicValueEnum<'a>, BasicBlock<'a>)>>,
 }
 
 pub fn compile(input: &Input, use_jit: bool, obj_filename: &Path) {
@@ -83,6 +86,8 @@ pub fn compile(input: &Input, use_jit: bool, obj_filename: &Path) {
         state: State {
             locations: HashMap::new(),
             function: None,
+            block_expr_stack: Vec::new(),
+            block_yields: Vec::new(),
         },
     };
     codegen.compile_nodes();
@@ -484,6 +489,26 @@ impl<'ctx> Generator<'ctx> {
                     };
                 }
             }
+            Tag::Yield => {
+                let values = if node.lhs == 0 {
+                    Vec::new()
+                } else {
+                    let expressions = self.data.tree.node(node.lhs);
+                    self.data
+                        .tree
+                        .range(expressions)
+                        .map(|i| {
+                            let ni = self.data.node_index(i);
+                            self.compile_expr(ni).unwrap()
+                        })
+                        .collect()
+                };
+                if let Some(merge_block) = self.state.block_expr_stack.last() {
+                    let yields = self.state.block_yields.last_mut().unwrap();
+                    yields.push((values[0], self.b.get_insert_block().unwrap()));
+                    self.b.build_unconditional_branch(*merge_block)?;
+                }
+            }
             Tag::While => {
                 let parent_fn = self.state.function.unwrap();
                 let condition_expr = self.compile_expr(node.lhs)?.into_int_value();
@@ -640,6 +665,84 @@ impl<'ctx> Generator<'ctx> {
                     self.b.build_int_z_extend(x, to_type, "zext")
                 }?;
                 Ok(value.as_basic_value_enum())
+            }
+            Tag::IfxElse => {
+                let parent_fn = self.state.function.unwrap();
+                let mut if_nodes = Vec::new();
+                let mut then_blocks = Vec::new();
+                for i in node.lhs..node.rhs {
+                    let index = self.data.node_index(i);
+                    let if_node = *self.data.node(index);
+                    assert_eq!(if_node.tag, Tag::If);
+                    if_nodes.push(if_node);
+                    then_blocks.push(self.context.append_basic_block(parent_fn, "then"));
+                }
+                // If the last else-if block has no condition, it's an else.
+                let has_else = if_nodes.last().unwrap().lhs == 0;
+                let if_count = if has_else {
+                    if_nodes.len() - 1
+                } else {
+                    if_nodes.len()
+                };
+                let merge_block = self.context.append_basic_block(parent_fn, "merge");
+                self.state.block_expr_stack.push(merge_block);
+                self.state.block_yields.push(vec![]);
+                // Compile branches.
+                for i in 0..if_count {
+                    let condition_expr = self.compile_expr(if_nodes[i].lhs)?.into_int_value();
+                    if i < if_count - 1 {
+                        // This is not the last else-if block.
+                        let block = self.context.append_basic_block(parent_fn, "block");
+                        self.b
+                            .build_conditional_branch(condition_expr, then_blocks[i], block)?;
+                        self.b.position_at_end(block);
+                    } else if !has_else {
+                        // This is the last else-if block and there's no else.
+                        self.b.build_conditional_branch(
+                            condition_expr,
+                            then_blocks[i],
+                            merge_block,
+                        )?;
+                    } else {
+                        // This is the last else-if block and there's an else.
+                        self.b.build_conditional_branch(
+                            condition_expr,
+                            then_blocks[i],
+                            then_blocks[if_count],
+                        )?;
+                    }
+                }
+                // Compile block statements.
+                for (i, if_node) in if_nodes.iter().enumerate() {
+                    self.b.position_at_end(then_blocks[i]);
+                    let body = self.data.node(if_node.rhs);
+                    for j in body.lhs..body.rhs {
+                        let index = self.data.node_index(j);
+                        self.compile_stmt(index)?;
+                    }
+                    if self
+                        .b
+                        .get_insert_block()
+                        .unwrap()
+                        .get_terminator()
+                        .is_none()
+                    {
+                        self.b.build_unconditional_branch(merge_block)?;
+                    }
+                }
+                self.b.position_at_end(merge_block);
+                let phi = self.b.build_phi(value_type, "phi")?;
+                let mut block_yields = Vec::<(&dyn BasicValue, BasicBlock)>::new();
+                for i in self.state.block_yields.last().unwrap() {
+                    let (value, block) = i;
+                    block_yields.push((value, *block));
+                }
+                // phi.add_incoming(&[(&lhs, lhs_block), (&rhs.into_int_value(), rhs_block)]);
+                phi.add_incoming(&block_yields);
+                self.state.block_expr_stack.pop();
+                // println!("{}", self.module.print_to_string().to_string_lossy());
+                self.state.block_yields.pop();
+                Ok(phi.as_basic_value())
             }
             // Function calls
             Tag::Add | Tag::Mul => self.compile_call(node_id, node_id, true),

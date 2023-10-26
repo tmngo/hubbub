@@ -442,17 +442,24 @@ impl<'a> Analyzer<'a> {
             Tag::Expressions | Tag::IfElse => {
                 self.resolve_range(node)?;
             }
+            Tag::IfxElse => {
+                self.parent_expr_ids.push(id);
+                self.resolve_range(node)?;
+                self.parent_expr_ids.pop();
+            }
             Tag::Field => {
                 // Resolve type_expr
                 self.resolve_node(self.tree.node_extra(node, 0))?;
             }
             Tag::FunctionDecl => {
                 self.enter_scope();
+                self.parent_expr_ids.push(id);
                 self.resolve_node(node.lhs)?; // Prototype
                 if node.rhs != 0 {
                     let body = &self.tree.node(node.rhs);
                     self.resolve_range(body)?;
                 }
+                self.parent_expr_ids.pop();
                 self.exit_scope();
             }
             Tag::Identifier => {

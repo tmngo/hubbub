@@ -133,6 +133,7 @@ pub enum Tag {
     If,
     /// start..end [If]
     IfElse,
+    IfxElse,
     /// lhs?: alias, rhs: module name
     Import,
     Inequality,     // lhs, rhs
@@ -150,6 +151,7 @@ pub enum Tag {
     Prototype,
     /// lhs: expressions
     Return,
+    Yield,
     /// start..end [Decl]
     Root,
     StringLiteral, //
@@ -799,7 +801,18 @@ impl<'w> Parser<'w> {
                 let token = self.shift_token();
                 self.add_leaf(Tag::Continue, token)
             }
-            TokenTag::If => self.parse_stmt_if(),
+            TokenTag::DoubleArrow => {
+                let token = self.shift_token();
+                let expr_list = self.parse_expr_list()?;
+                let node = self.add_node(Tag::Yield, token, expr_list, 0);
+                self.expect_tokens(&[TokenTag::Newline, TokenTag::Semicolon])?;
+                node
+            }
+            TokenTag::If | TokenTag::Ifx => {
+                let node = self.parse_stmt_if();
+                self.match_token(TokenTag::Newline);
+                node
+            }
             TokenTag::Return => {
                 let token = self.shift_token();
                 let expr_list = self.parse_expr_list()?;
@@ -910,12 +923,24 @@ impl<'w> Parser<'w> {
             self.add_node(Tag::If, else_if_token, condition, block)?
         });
 
-        self.expect_token_and_newline(TokenTag::End)?;
+        self.expect_token(TokenTag::End)?;
+        // self.match_token(TokenTag::Newline);
+        // self.expect_token_and_newline(TokenTag::End)?;
 
+        // Just return single If
         if range.end - range.start == 1 {
             return Ok(self.tree.node_index(range.start));
         }
-        self.add_node(Tag::IfElse, if_token, range.start, range.end)
+        self.add_node(
+            if self.tree.token(if_token).tag == TokenTag::If {
+                Tag::IfElse
+            } else {
+                Tag::IfxElse
+            },
+            if_token,
+            range.start,
+            range.end,
+        )
     }
 
     /// stmt-while =
@@ -1089,6 +1114,12 @@ impl<'w> Parser<'w> {
                 self.expect_token(TokenTag::ParenR)?;
                 Ok(expr)
             }
+            TokenTag::Ifx => {
+                self.unshift_token();
+                let node = self.parse_stmt_if();
+                println!("after if: {:?}", self.current_token());
+                node
+            }
             TokenTag::True => self.add_leaf(Tag::True, token),
             TokenTag::False => self.add_leaf(Tag::False, token),
             TokenTag::IntegerLiteral => self.add_leaf(Tag::IntegerLiteral, token),
@@ -1188,6 +1219,12 @@ impl<'w> Parser<'w> {
     fn shift_token(&mut self) -> TokenId {
         let result = self.index;
         self.index += 1;
+        result as TokenId
+    }
+
+    fn unshift_token(&mut self) -> TokenId {
+        let result = self.index;
+        self.index -= 1;
         result as TokenId
     }
 
@@ -1556,7 +1593,12 @@ impl Tree {
                     self.pretty_print_node(f, self.node_index(i), indentation, include_ids)?;
                 }
             }
-            Tag::Block | Tag::Expressions | Tag::IfElse | Tag::Parameters | Tag::TypeParameters => {
+            Tag::Block
+            | Tag::Expressions
+            | Tag::IfElse
+            | Tag::IfxElse
+            | Tag::Parameters
+            | Tag::TypeParameters => {
                 for i in self.range(node) {
                     self.pretty_print_node(f, self.node_index(i), indentation, include_ids)?;
                 }

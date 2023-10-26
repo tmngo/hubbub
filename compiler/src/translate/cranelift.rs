@@ -136,6 +136,7 @@ impl<'a> ModuleCompiler<'a> {
                 module,
                 locations: HashMap::new(),
                 filled_blocks: HashSet::new(),
+                block_expr_stack: vec![],
                 signatures: HashMap::new(),
                 // func_refs: HashMap::new(),
             },
@@ -683,6 +684,27 @@ impl FunctionCompiler<'_> {
                     .filled_blocks
                     .insert(self.b.current_block().unwrap());
             }
+            Tag::Yield => {
+                let values = if node.lhs == 0 {
+                    Vec::new()
+                } else {
+                    let expressions = self.data.tree.node(node.lhs);
+                    self.data
+                        .tree
+                        .range(expressions)
+                        .map(|i| {
+                            let ni = self.data.node_index(i);
+                            self.compile_expr_value(ni)
+                        })
+                        .collect()
+                };
+                if let Some(block) = self.state.block_expr_stack.last() {
+                    self.b.ins().jump(*block, &values);
+                    self.state
+                        .filled_blocks
+                        .insert(self.b.current_block().unwrap());
+                }
+            }
             Tag::While => {
                 let condition = self.compile_expr_value(node.lhs);
                 let while_block = self.b.create_block();
@@ -780,6 +802,69 @@ impl FunctionCompiler<'_> {
                     }
                 }
                 Val::Multiple(values)
+            }
+            Tag::IfxElse => {
+                let mut if_nodes = Vec::new();
+                let mut then_blocks = Vec::new();
+                for i in node.lhs..node.rhs {
+                    let index = self.data.node_index(i);
+                    let if_node = self.data.node(index);
+                    if_nodes.push(if_node);
+                    then_blocks.push(self.b.create_block());
+                }
+                // If the last else-if block has no condition, it's an else.
+                let has_else = if_nodes.last().unwrap().lhs == 0;
+                let if_count = if has_else {
+                    if_nodes.len() - 1
+                } else {
+                    if_nodes.len()
+                };
+                let merge_block = self.b.create_block();
+                self.b.append_block_param(
+                    merge_block,
+                    cl_type(self.data, self.ptr_type, self.data.typ(node_id)),
+                );
+                self.state.block_expr_stack.push(merge_block);
+                // Compile branches.
+                for i in 0..if_count {
+                    let condition_expr = self.compile_expr_value(if_nodes[i].lhs);
+                    self.b.ins().brnz(condition_expr, then_blocks[i], &[]);
+                    self.b.seal_block(then_blocks[i]);
+                    if i < if_count - 1 {
+                        // This is not the last else-if block.
+                        let block = self.b.create_block();
+                        self.b.ins().jump(block, &[]);
+                        self.b.seal_block(block);
+                        self.b.switch_to_block(block);
+                    } else if !has_else {
+                        // This is the last else-if block and there's no else.
+                        self.b.ins().jump(merge_block, &[]);
+                    } else {
+                        // This is the last else-if block and there's an else.
+                        self.b.ins().jump(then_blocks[if_count], &[]);
+                        self.b.seal_block(then_blocks[if_count]);
+                    }
+                }
+                // Compile block statements.
+                for (i, if_node) in if_nodes.iter().enumerate() {
+                    self.b.switch_to_block(then_blocks[i]);
+                    let body = self.data.node(if_node.rhs);
+                    for j in body.lhs..body.rhs {
+                        let index = self.data.node_index(j);
+                        self.compile_stmt(index);
+                    }
+                    if !self
+                        .state
+                        .filled_blocks
+                        .contains(&self.b.current_block().unwrap())
+                    {
+                        self.b.ins().jump(merge_block, &[]);
+                    }
+                }
+                self.b.seal_block(merge_block);
+                self.b.switch_to_block(merge_block);
+                self.state.block_expr_stack.pop();
+                Val::Scalar(self.b.block_params(merge_block)[0])
             }
             Tag::Identifier => {
                 let loc = self.locate(node_id);
@@ -1475,6 +1560,7 @@ pub struct State {
     locations: HashMap<NodeId, Location>,
     pub module: Box<dyn CraneliftModule>,
     filled_blocks: HashSet<Block>,
+    block_expr_stack: Vec<Block>,
     pub signatures: HashMap<String, (FuncId, Signature)>,
     // func_refs: HashMap<FuncId, FuncRef>,
 }
